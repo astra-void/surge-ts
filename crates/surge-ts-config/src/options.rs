@@ -283,6 +283,11 @@ static TS_CONFIG_OPTION_DEFINITIONS: &[TsConfigOptionDefinition] = &[
         support: TsConfigOptionSupport::KnownNoop,
     },
     TsConfigOptionDefinition {
+        name: "strictBuiltinIteratorReturn",
+        value_kind: TsConfigOptionValueKind::Boolean,
+        support: TsConfigOptionSupport::Supported,
+    },
+    TsConfigOptionDefinition {
         name: "strictPropertyInitialization",
         value_kind: TsConfigOptionValueKind::Boolean,
         support: TsConfigOptionSupport::KnownNoop,

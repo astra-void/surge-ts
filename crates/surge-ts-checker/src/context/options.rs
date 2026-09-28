@@ -144,6 +144,9 @@ pub struct CheckerOptions {
     /// call or construct signatures are the lib's `CallableFunction` /
     /// `NewableFunction` members, typed by the value's own parameters.
     pub strict_bind_call_apply: bool,
+    /// `strictBuiltinIteratorReturn`: the lib's intrinsic
+    /// `BuiltinIteratorReturn` is `undefined`, else `any`.
+    pub strict_builtin_iterator_return: bool,
     /// `strictPropertyInitialization`: an instance property with no initializer
     /// must be definitely assigned in the constructor.
     pub strict_property_initialization: bool,
@@ -305,6 +308,7 @@ impl Default for CheckerOptions {
             esm_module_files: Default::default(),
             strict_null_checks: true,
             strict_bind_call_apply: false,
+            strict_builtin_iterator_return: false,
             strict_property_initialization: false,
             use_unknown_in_catch_variables: false,
             no_implicit_returns: false,

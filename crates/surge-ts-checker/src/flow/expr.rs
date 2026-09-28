@@ -201,6 +201,9 @@ pub(crate) fn check_expression_flow_impl(
         ParsedExpression::ObjectRest { source, .. } => {
             check_expression_flow_impl(source, fallback_span, flow_state, statement_index, ctx)
         }
+        ParsedExpression::ArrayPatternElement { read, .. } => {
+            check_expression_flow_impl(read, fallback_span, flow_state, statement_index, ctx)
+        }
         ParsedExpression::ImportCall {
             specifier,
             specifier_span,

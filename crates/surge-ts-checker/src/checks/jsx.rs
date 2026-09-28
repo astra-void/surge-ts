@@ -1080,7 +1080,7 @@ fn instantiate_jsx_signature(
     if info.type_parameters.is_empty() || info.overloaded {
         return Some(signature.clone());
     }
-    let argument = jsx_attributes_argument(site);
+    let argument = lone_type_variable_spread(site, symbols, ctx).unwrap_or_else(|| jsx_attributes_argument(site));
     match crate::checks::call::instantiate_function_type(
         signature,
         Some(&info),
@@ -1129,6 +1129,32 @@ fn mentions_type_parameter(ty: &Type) -> bool {
 
 /// The attributes object as an object literal argument: each attribute a
 /// property, each spread a spread, and a lone child as the children.
+/// `createJsxAttributesTypeFromAttributesProperty`: attributes that are one
+/// spread of a type variable, with no children, are that type itself
+/// (`getSpreadType` keeps a generic object type), which inference reads as is.
+fn lone_type_variable_spread(
+    site: &JsxCallSite<'_>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<surge_ts_syntax::ParsedCallArgument> {
+    let [attribute] = site.attributes else {
+        return None;
+    };
+    if !attribute.name.is_empty() || site.children.iter().any(is_semantic_child) {
+        return None;
+    }
+    let value = attribute.value.as_ref()?;
+    let reported = ctx.diagnostics().len();
+    let ty = crate::infer::infer_expression(value, symbols, ctx);
+    ctx.truncate_diagnostics(reported);
+    matches!(&ty, InferredExpression::Known(ty) if ty.is_type_variable()).then(|| surge_ts_syntax::ParsedCallArgument {
+        expression: value.clone(),
+        span: attribute.value_span,
+        spread: false,
+        expression_span: attribute.value_span,
+    })
+}
+
 fn jsx_attributes_argument(site: &JsxCallSite<'_>) -> surge_ts_syntax::ParsedCallArgument {
     let property = |name: &str, name_span, value: ParsedExpression, value_span, is_spread| {
         surge_ts_syntax::ParsedObjectProperty {
@@ -1588,6 +1614,8 @@ struct EvaluatedAttributes<'a> {
     /// A spread whose members surge cannot enumerate: the attributes object
     /// may have any property, so none can be reported missing.
     opaque_spread: bool,
+    /// Every spread's type, in order.
+    spread_types: Vec<Type>,
 }
 
 /// The element's body as tsc's `elaborateJsxComponents` relates it.
@@ -1667,6 +1695,9 @@ fn evaluate_attributes<'a>(
                 .map(|value| (value.attribute.name.as_str(), value.attribute.name_span))
                 .collect();
             super::expr::report_overwritten_properties(&spread, &written, ctx);
+            if let InferredExpression::Known(ty) = &spread {
+                evaluated.spread_types.push(ty.clone());
+            }
             match spread {
                 InferredExpression::Known(ty) => match ty.peeled() {
                     Type::Any | Type::ErrorType => evaluated.any_spread = true,
@@ -2197,6 +2228,9 @@ fn relate_attributes(
     ctx: &CheckerContext,
 ) -> Vec<(Diagnostic, Option<SyntaxTextSpan>)> {
     let target = props.target.peeled();
+    if let Some(failure) = type_variable_attributes_failure(evaluated, body, &target, site.tag_name_span, ctx) {
+        return vec![failure];
+    }
     if evaluated.any_spread || target.is_unknown() || matches!(target, Type::Any) {
         return Vec::new();
     }
@@ -2232,6 +2266,38 @@ fn relate_attributes(
         Some(failure) => vec![body_diagnostic.unwrap_or(failure)],
         None => Vec::new(),
     }
+}
+
+/// The attributes relation where a type variable of the body being checked
+/// is involved: a lone `{...obj}` of type `T` makes the attributes object `T`
+/// itself (`getSpreadType`), which relates through its constraint, and props
+/// of type `P` take nothing but `P`.
+fn type_variable_attributes_failure(
+    evaluated: &EvaluatedAttributes<'_>,
+    body: Option<&JsxBody>,
+    target: &Type,
+    tag_name_span: Option<SyntaxTextSpan>,
+    ctx: &CheckerContext,
+) -> Option<(Diagnostic, Option<SyntaxTextSpan>)> {
+    if evaluated.any_spread {
+        return None;
+    }
+    let lone_spread = match (evaluated.explicit.is_empty(), body.is_some_and(|body| body.in_attributes), evaluated.spread_types.as_slice()) {
+        (true, false, [spread]) => Some(spread),
+        _ => None,
+    };
+    let source = match lone_spread {
+        Some(spread) if spread.is_type_variable() => spread.clone(),
+        _ if target.is_type_variable() && evaluated.spread_types.is_empty() => {
+            Type::Object(crate::metrics::alloc_object_type(Default::default(), None))
+        }
+        _ => return None,
+    };
+    if target.is_unmodelled() || matches!(target, Type::Any) || is_assignable_to(&source, target) {
+        return None;
+    }
+    let source_name = if source.is_type_variable() { source.name() } else { attributes_object_name(evaluated, body) };
+    Some((Diagnostic::ts2322(source_name, target.name(), ctx.file_name.clone()), tag_name_span))
 }
 
 /// tsc's `checkJsxReturnAssignableToAppropriateBound` for a namespace that

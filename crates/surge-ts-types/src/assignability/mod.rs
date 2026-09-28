@@ -117,8 +117,14 @@ struct RelationKey {
 /// shared-`Arc` identity return `None` and are simply not memoized.
 fn relation_key(ty: &Type) -> Option<RelationKey> {
     match ty {
+        // Property maps are interned, so every memberless object shares one:
+        // an intersection's operands (`T & object`, `T & 1`) and `object`'s
+        // non-primitive marker are what tell such types apart.
+        Type::Object(object) if object.intersection_operands.as_deref().is_some_and(|operands| !operands.is_empty()) => {
+            None
+        }
         Type::Object(object) => Some(RelationKey {
-            tag: 1,
+            tag: if object.non_primitive { 7 } else { 1 },
             parts: [
                 Arc::as_ptr(&object.properties) as usize,
                 object
@@ -132,9 +138,11 @@ fn relation_key(ty: &Type) -> Option<RelationKey> {
                 object
                     .call_signature()
                     .map_or(0, |signature| signature.payload_address() ^ written_shape_address(signature)),
-                object
-                    .construct_signature()
-                    .map_or(0, |signature| signature.payload_address() ^ written_shape_address(signature)),
+                object.construct_signature().map_or(0, |signature| {
+                    signature.payload_address()
+                        ^ written_shape_address(signature)
+                        ^ usize::from(signature.construct_modifiers().bits())
+                }),
                 object
                     .alias_id
                     .as_ref()
@@ -147,7 +155,16 @@ fn relation_key(ty: &Type) -> Option<RelationKey> {
         }),
         Type::Function(function) => Some(RelationKey {
             tag: 3,
-            parts: [function.payload_address(), written_shape_address(function), 0, 0, 0, 0],
+            parts: [
+                function.payload_address(),
+                written_shape_address(function),
+                function
+                    .type_predicate()
+                    .map_or(0, |predicate| predicate as *const crate::TypePredicate as usize),
+                usize::from(function.is_method_declaration()),
+                0,
+                0,
+            ],
         }),
         _ => None,
     }
@@ -398,7 +415,13 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         return related;
     }
 
-    if from == to
+    // Two signatures differing only in their predicate share a payload, which
+    // is all `==` compares.
+    let same_predicates = match (from, to) {
+        (Type::Function(source), Type::Function(target)) => source.type_predicate() == target.type_predicate(),
+        _ => true,
+    };
+    if (from == to && same_predicates)
         || matches!(from, Type::Any)
         || matches!(from, Type::Never)
         || matches!(to, Type::Any)
@@ -563,7 +586,11 @@ fn current_relation_admits_anything(to: &Type) -> bool {
     crate::strict_null_checks()
         && union.types().iter().any(|member| matches!(member, Type::Undefined))
         && union.types().iter().any(|member| matches!(member, Type::Null))
-        && union.types().iter().any(is_empty_anonymous_object)
+        && union.types().iter().any(|member| match member {
+            // A type alias of `{}` names the anonymous empty object type.
+            Type::Reference(_) => is_empty_anonymous_object(&member.peeled()),
+            other => is_empty_anonymous_object(other),
+        })
 }
 
 /// relater.go `isSimpleTypeRelatedTo` for the assignable and comparable
@@ -774,37 +801,302 @@ fn is_narrowed_type_variable(ty: &Type) -> bool {
     matches!(ty, Type::Object(object) if object.properties.is_empty() && object.string_index_type.is_none())
 }
 
-/// The variable operands' constraints cut down by the other operands: a union
-/// constraint loses the members an operand rules out — `{}` rules out the
-/// nullish ones (`NonNullable<T>` over `T extends string | undefined` is
-/// `string`), a primitive operand every member not of it. `None` when no
-/// variable operand has a constraint to combine.
-fn effective_intersection_constraint(operands: &[Type]) -> Option<Type> {
-    let constraints: Vec<Type> = operands
-        .iter()
-        .filter_map(|operand| match operand {
-            Type::TypeParameter(parameter) => crate::type_variable::active_constraint(parameter).flatten(),
-            _ => None,
-        })
-        .collect();
-    let mut members: Vec<Type> = constraints
-        .iter()
-        .flat_map(|constraint| match constraint {
-            Type::Union(union) => union.types().to_vec(),
-            other => vec![other.clone()],
-        })
-        .collect();
-    if members.is_empty() {
-        return None;
+/// relater.go `getEffectiveConstraintOfIntersection`: the intersection of the
+/// variable operands' constraints, examined only against a union target or
+/// when an operand belongs to a disjoint domain (`V & number`, `T & {}`), and
+/// then cut down by those operands too. `Some(None)` when there is none to
+/// examine, `None` when surge cannot compute it.
+fn effective_intersection_constraint(operands: &[Type], target_is_union: bool) -> Option<Option<Type>> {
+    let mut constraints = Vec::new();
+    // Without a union target or a disjoint-domain operand there is no
+    // combined constraint to relate, whatever the operands' constraints.
+    let has_disjoint_domain_type = operands.iter().any(|operand| {
+        !matches!(operand, Type::TypeParameter(_))
+            && (disjoint_domain(operand).is_some() || is_empty_anonymous_object(operand))
+    });
+    if !(target_is_union || has_disjoint_domain_type) {
+        return Some(None);
     }
-    for operand in operands.iter().filter(|operand| !matches!(operand, Type::TypeParameter(_))) {
-        if is_empty_anonymous_object(operand) {
-            members.retain(|member| !matches!(member, Type::Null | Type::Undefined | Type::Void));
-        } else if operand.base_primitive().is_some() && !matches!(operand, Type::Object(_)) {
-            members.retain(|member| is_assignable_to(member, operand));
+    for operand in operands {
+        if let Type::TypeParameter(parameter) = operand {
+            let mut constraint = crate::type_variable::active_constraint(parameter)?;
+            let mut steps = 0;
+            // `getConstraintOfType` is followed through type parameters,
+            // index types and conditional types.
+            while let Some(Type::TypeParameter(next)) = &constraint {
+                if crate::type_variable::deferred_type(next).is_some_and(|kind| {
+                    !matches!(
+                        kind,
+                        crate::type_variable::DeferredType::Keyof(_) | crate::type_variable::DeferredType::Conditional(_)
+                    )
+                }) || steps > 32
+                {
+                    return None;
+                }
+                constraint = crate::type_variable::active_constraint(next)?;
+                steps += 1;
+            }
+            if let Some(constraint) = constraint {
+                constraints.push(constraint);
+                if target_is_union {
+                    constraints.push(operand.clone());
+                }
+            }
         }
     }
-    Some(if members.is_empty() { Type::Never } else { crate::union_type(members) })
+    if constraints.is_empty() {
+        return Some(None);
+    }
+    if has_disjoint_domain_type {
+        constraints.extend(
+            operands
+                .iter()
+                .filter(|operand| disjoint_domain(operand).is_some() || is_empty_anonymous_object(operand))
+                .cloned(),
+        );
+    }
+    intersect_constraint_types(&constraints).map(Some)
+}
+
+/// relater.go's `propertiesRelatedTo` for an intersection source and an object
+/// target: failing its constituents one by one, the intersection relates
+/// through the members they aggregate, a type variable contributing those of
+/// its apparent type (its base constraint; none unconstrained). `None` where
+/// the target's shape or an operand's apparent members are beyond what this
+/// reads.
+fn intersection_members_related(operands: &[Type], to: &Type) -> Option<bool> {
+    let Type::Object(target) = to.peeled() else {
+        return None;
+    };
+    if target.string_index_type.is_some()
+        || target.number_index_type.is_some()
+        || target.call_signature().is_some()
+        || target.construct_signature().is_some()
+        || target.is_intersection
+    {
+        return None;
+    }
+    let mut members = Vec::with_capacity(operands.len());
+    for operand in operands {
+        let apparent = match operand {
+            Type::TypeParameter(parameter) => match crate::type_variable::base_constraint_or_type(operand) {
+                Type::TypeParameter(_) if crate::type_variable::active_constraint(parameter) == Some(None) => continue,
+                Type::TypeParameter(_) => return None,
+                constraint => constraint,
+            },
+            other => other.clone(),
+        };
+        match apparent.peeled() {
+            Type::Object(object) if !object.synthetic_open_index => members.push(object),
+            Type::GenuineUnknown => {}
+            _ => return None,
+        }
+    }
+    for (name, property) in target.properties.iter() {
+        let sources: Vec<&crate::ObjectProperty> = members.iter().filter_map(|object| object.properties.get(name)).collect();
+        if sources.is_empty() {
+            if property.optional {
+                continue;
+            }
+            return Some(false);
+        }
+        if !property.optional && sources.iter().all(|source| source.optional) {
+            return Some(false);
+        }
+        if !sources.iter().any(|source| is_assignable_to(&source.ty, &property.ty)) {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
+/// tsc's `TypeFlagsDisjointDomains` partition for the types surge models as
+/// primitives, plus `object` (`NonPrimitive`).
+fn disjoint_domain(ty: &Type) -> Option<u8> {
+    Some(match ty {
+        Type::String | Type::StringLiteral(_) => 0,
+        Type::Number | Type::NumberLiteral(_) => 1,
+        Type::BigInt => 2,
+        Type::Boolean | Type::BooleanLiteral(_) => 3,
+        Type::Symbol => 4,
+        Type::Undefined | Type::Void => 5,
+        Type::Null => 6,
+        Type::Object(object)
+            if object.non_primitive && object.properties.is_empty() && !object.is_intersection =>
+        {
+            7
+        }
+        _ => return None,
+    })
+}
+
+/// `getIntersectionType` over constraint types, distributed over their union
+/// members. `None` when some pair of members has an intersection surge does
+/// not represent.
+pub(crate) fn intersect_constraint_types(types: &[Type]) -> Option<Type> {
+    fn members(ty: &Type) -> Vec<Type> {
+        match ty {
+            Type::Union(union) => union.types().to_vec(),
+            other => vec![other.clone()],
+        }
+    }
+    let (first, rest) = types.split_first()?;
+    let mut result = members(first);
+    for ty in rest {
+        let mut next = Vec::new();
+        for left in &result {
+            for right in members(ty) {
+                let pair = intersect_constraint_pair(left, &right)?;
+                if pair != Type::Never {
+                    next.push(pair);
+                }
+            }
+        }
+        result = next;
+    }
+    Some(if result.is_empty() { Type::Never } else { crate::union_type(result) })
+}
+
+fn intersect_constraint_pair(left: &Type, right: &Type) -> Option<Type> {
+    if left == right {
+        return Some(left.clone());
+    }
+    if matches!(left, Type::Never) || matches!(right, Type::Never) {
+        return Some(Type::Never);
+    }
+    if matches!(left, Type::Any) || matches!(right, Type::Any) {
+        return Some(Type::Any);
+    }
+    if matches!(left, Type::GenuineUnknown) {
+        return Some(right.clone());
+    }
+    if matches!(right, Type::GenuineUnknown) {
+        return Some(left.clone());
+    }
+    if generic_intersection_operands(left).is_some() || generic_intersection_operands(right).is_some() {
+        return intersect_with_type_variables(left, right);
+    }
+    if left.is_unknown() || right.is_unknown() {
+        return None;
+    }
+    if let (Some(left_domain), Some(right_domain)) = (disjoint_domain(left), disjoint_domain(right))
+        && left_domain != right_domain
+        && !(left_domain == 5 && right_domain == 5)
+    {
+        return Some(Type::Never);
+    }
+    let nullable = |ty: &Type| matches!(ty, Type::Null | Type::Undefined);
+    if crate::strict_null_checks()
+        && ((nullable(left) && is_object_type(right)) || (nullable(right) && is_object_type(left)))
+    {
+        return Some(Type::Never);
+    }
+    if is_assignable_to(left, right) {
+        return Some(left.clone());
+    }
+    if is_assignable_to(right, left) {
+        return Some(right.clone());
+    }
+    if is_unit_literal(left) && is_unit_literal(right) && disjoint_domain(left).is_some() {
+        return Some(Type::Never);
+    }
+    None
+}
+
+thread_local! {
+    static HOISTING: std::cell::RefCell<Vec<(Type, Type)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Runs a relation through a hoisted constraint unless the same pair is
+/// already being related that way: the hoisted constraint holds the source
+/// again (`T & 1 | T & 2`), and relater.go's maybe stack answers such a
+/// revisit without the depth limit's assumption. `None` on a revisit.
+fn with_hoisting(from: &Type, to: &Type, relate: impl FnOnce() -> bool) -> Option<bool> {
+    let revisit = HOISTING.with(|stack| stack.borrow().iter().any(|(source, target)| source == from && target == to));
+    if revisit {
+        // Like a depth-limited step, what depends on the revisit is not cached.
+        record_assignability_assumption();
+        return None;
+    }
+    HOISTING.with(|stack| stack.borrow_mut().push((from.clone(), to.clone())));
+    struct Pop;
+    impl Drop for Pop {
+        fn drop(&mut self) {
+            HOISTING.with(|stack| {
+                stack.borrow_mut().pop();
+            });
+        }
+    }
+    let _pop = Pop;
+    Some(relate())
+}
+
+/// The operands of a type variable or of a memberless intersection holding
+/// one, which is how surge keeps `T & X` generic.
+fn generic_intersection_operands(ty: &Type) -> Option<Vec<Type>> {
+    if ty.is_type_variable() {
+        return Some(vec![ty.clone()]);
+    }
+    let operands = type_variable_intersection_operands(ty)?;
+    is_narrowed_type_variable(ty).then(|| operands.to_vec())
+}
+
+/// `getIntersectionType` of two operands one of which is generic: the
+/// variables are kept (first, as `with_type_variable_operands` orders them)
+/// and the other operands reduced among themselves.
+fn intersect_with_type_variables(left: &Type, right: &Type) -> Option<Type> {
+    let mut variables: Vec<Type> = Vec::new();
+    let mut others: Vec<Type> = Vec::new();
+    for operand in [left, right]
+        .into_iter()
+        .flat_map(|ty| generic_intersection_operands(ty).unwrap_or_else(|| vec![ty.clone()]))
+    {
+        if operand.is_type_variable() {
+            if !variables.contains(&operand) {
+                variables.push(operand);
+            }
+        } else {
+            others.push(operand);
+        }
+    }
+    let mut reduced: Option<Type> = None;
+    for operand in others {
+        reduced = Some(match reduced {
+            None => operand,
+            Some(previous) => intersect_constraint_pair(&previous, &operand)?,
+        });
+    }
+    match reduced {
+        Some(Type::Never) => Some(Type::Never),
+        Some(Type::Union(_)) => None,
+        Some(other) if other.is_unknown() => None,
+        Some(other) => {
+            variables.push(other);
+            Some(crate::type_variable::type_variable_intersection(variables))
+        }
+        None if variables.len() == 1 => variables.pop(),
+        None => Some(crate::type_variable::type_variable_intersection(variables)),
+    }
+}
+
+/// `TypeFlagsPrimitive`, the targets the comparable relation hoists an
+/// intersection's constraints against.
+fn is_primitive_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::String
+            | Type::Number
+            | Type::Boolean
+            | Type::BigInt
+            | Type::Symbol
+            | Type::Void
+            | Type::Undefined
+            | Type::Null
+            | Type::Never
+            | Type::StringLiteral(_)
+            | Type::NumberLiteral(_)
+            | Type::BooleanLiteral(_)
+    )
 }
 
 fn some_type(ty: &Type, predicate: impl Fn(&Type) -> bool) -> bool {
@@ -846,15 +1138,65 @@ fn type_variable_related(from: &Type, to: &Type) -> Option<bool> {
         if !variables_related || is_narrowed_type_variable(to) {
             return Some(variables_related);
         }
+        // `typeRelatedToEachType`: the variables are done with, so the source
+        // (not its constraint, which no variable admits) meets the rest.
+        if let Type::Object(object) = to {
+            let rest_operands: Vec<Type> =
+                operands.iter().filter(|operand| !operand.is_type_variable()).cloned().collect();
+            let mut rest = object.clone();
+            rest.intersection_operands = (!rest_operands.is_empty()).then(|| rest_operands.into());
+            return Some(is_assignable_to(from, &Type::Object(rest)));
+        }
     }
     if let Some(operands) = type_variable_intersection_operands(from) {
-        if operands.iter().any(|operand| is_assignable_to(operand, to))
-            || effective_intersection_constraint(operands).is_some_and(|constraint| is_assignable_to(&constraint, to))
+        // `typeRelatedToSomeType` finds the source among the target's members.
+        if let Type::Union(to_union) = to
+            && to_union.types().contains(from)
         {
             return Some(true);
         }
+        // relater.go `unionOrIntersectionRelatedTo`: comparing to a primitive,
+        // the instantiable operands are replaced by their base constraints,
+        // which the other operands may cut down (`T & 1` over `1 | 2`).
+        if current_relation() == Relation::Comparable && is_primitive_type(to) && is_narrowed_type_variable(from) {
+            // An unconstrained variable is its own base constraint, and an
+            // intersection nothing replaces is left to the arms below.
+            let constraints: Vec<Type> = operands
+                .iter()
+                .map(|operand| match operand {
+                    Type::TypeParameter(_) if operand.is_type_variable() => {
+                        crate::type_variable::base_constraint_or_type(operand)
+                    }
+                    other => other.clone(),
+                })
+                .collect();
+            match (constraints.as_slice() != operands)
+                .then(|| intersect_constraint_types(&constraints))
+                .unwrap_or(Some(from.clone()))
+            {
+                None => return Some(true),
+                Some(Type::Never) => return Some(false),
+                Some(hoisted) if generic_intersection_operands(&hoisted).is_none() => {
+                    return Some(is_assignable_to(&hoisted, to) || is_assignable_to(to, &hoisted));
+                }
+                Some(_) => {}
+            }
+        }
+        if operands.iter().any(|operand| is_assignable_to(operand, to)) {
+            return Some(true);
+        }
+        match effective_intersection_constraint(operands, matches!(to, Type::Union(_))) {
+            None => return Some(true),
+            Some(Some(constraint))
+                if !some_type(&constraint, |member| member == from)
+                    && with_hoisting(from, to, || is_assignable_to(&constraint, to)).unwrap_or(false) =>
+            {
+                return Some(true)
+            }
+            Some(_) => {}
+        }
         if is_narrowed_type_variable(from) {
-            return Some(false);
+            return Some(intersection_members_related(operands, to).unwrap_or(false));
         }
     }
     // relater.go tries the target's own arms before a variable source is
@@ -863,6 +1205,18 @@ fn type_variable_related(from: &Type, to: &Type) -> Option<bool> {
         Type::TypeParameter(target) => crate::type_variable::deferred_type(target),
         _ => None,
     };
+    // Two string mappings relate only through the same mapping's operands
+    // (the `StringMapping` source arm of `structuredTypeRelatedToWorker`).
+    if let Some(crate::type_variable::DeferredType::StringMapping { kind, operand }) = &target_deferred
+        && let Some((source_kind, source_operand)) = crate::type_variable::string_mapping_variable_parts(from)
+    {
+        return Some(source_kind == *kind && is_assignable_to(&source_operand, operand));
+    }
+    if matches!(target_deferred, Some(crate::type_variable::DeferredType::StringMapping { .. }))
+        && crate::is_member_of_string_mapping(from, to)
+    {
+        return Some(true);
+    }
     if let Some(deferred) = &target_deferred
         && deferred_target_related(from, deferred)
     {
@@ -887,6 +1241,23 @@ fn type_variable_related(from: &Type, to: &Type) -> Option<bool> {
             return Some(mapped_source_related_to_variable(&keys, &object, modifiers, to));
         }
     }
+    let generic_object_source = crate::type_variable::conditional_type(from).is_some()
+        || crate::type_variable::mapped_generic_type(from).is_some()
+        || crate::type_variable::mapped_constant_type(from).is_some();
+    if generic_object_source && matches!(to, Type::Any | Type::Unknown | Type::ErrorType | Type::GenuineUnknown) {
+        return Some(true);
+    }
+    if let Some(conditional) = crate::type_variable::conditional_type(from) {
+        return Some(conditional_source_related(from, &conditional, to, target_deferred.as_ref()));
+    }
+    if let Some(mapped) = crate::type_variable::mapped_generic_type(from) {
+        return Some(generic_mapped_source_related(from, &mapped, to, target_deferred.is_some()));
+    }
+    if let Some(crate::type_variable::DeferredType::MappedConstant { keys, template, modifiers }) =
+        crate::type_variable::mapped_constant_type(from)
+    {
+        return Some(mapped_constant_source_related(from, &keys, &template, modifiers, to, target_deferred.is_some()));
+    }
     let source = active_variable(from);
     let target_is_variable = active_variable(to).is_some() || target_deferred.is_some();
     if source.is_none() && !target_is_variable {
@@ -903,8 +1274,12 @@ fn type_variable_related(from: &Type, to: &Type) -> Option<bool> {
         return Some(true);
     }
     if let Some((_, constraint)) = source {
+        // `typeRelatedToSomeType` before the source's constraint is tried.
         if let Type::Union(to_union) = to
-            && to_union.types().iter().any(|member| member == from)
+            && to_union
+                .types()
+                .iter()
+                .any(|member| member == from || is_assignable_to(from, member))
         {
             return Some(true);
         }
@@ -923,7 +1298,22 @@ fn type_variable_related(from: &Type, to: &Type) -> Option<bool> {
         }
         // `T extends T` is a circular constraint tsc reports and drops.
         let constraint = constraint.filter(|constraint| constraint != from).unwrap_or(Type::GenuineUnknown);
-        return Some(is_assignable_to(&constraint, to));
+        if is_assignable_to(&constraint, to) {
+            return Some(true);
+        }
+        // relater.go `structuredTypeRelatedTo`: against a union, a type
+        // parameter's constraint is hoisted into an intersection with it
+        // (`T extends 1 | 2` to `T & 1 | T & 2`).
+        if matches!(to, Type::Union(_)) {
+            return Some(match effective_intersection_constraint(std::slice::from_ref(from), true) {
+                None => true,
+                Some(Some(hoisted)) if !some_type(&hoisted, |member| member == from) => {
+                    with_hoisting(from, to, || is_assignable_to(&hoisted, to)).unwrap_or(false)
+                }
+                Some(_) => false,
+            });
+        }
+        return Some(false);
     }
     Some(match from {
         Type::Union(from_union) => union_source_related(from_union, to),
@@ -973,12 +1363,118 @@ fn deferred_target_related(from: &Type, target: &crate::type_variable::DeferredT
         } => {
             return mapped_target_related(from, source.as_ref(), keys, object, *modifiers, *modifiers_optionality);
         }
+        DeferredType::TemplateLiteral { texts, types } => {
+            let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+            if current_relation() == Relation::Comparable
+                && let Some((source_texts, _)) = crate::template_literal::owned_template_parts(from)
+            {
+                let source_texts: Vec<&str> = source_texts.iter().map(String::as_str).collect();
+                return !template_literal_types_definitely_unrelated(&source_texts, &texts);
+            }
+            let types: Vec<&Type> = types.iter().collect();
+            return crate::is_type_matched_by_template_literal(from, &texts, &types);
+        }
+        // Decided by the caller, which has the target type itself.
+        DeferredType::StringMapping { .. } => return false,
+        DeferredType::MappedConstant { keys, template, modifiers } => {
+            return mapped_constant_target_related(from, source.as_ref(), keys, template, *modifiers);
+        }
+        DeferredType::Conditional(conditional) => return conditional_target_related(from, conditional),
+        // A mapped type's key parameter has no target arm of its own.
+        DeferredType::MappedKey { .. } => return false,
+        DeferredType::MappedGeneric(mapped) => return generic_mapped_target_related(from, source.as_ref(), mapped),
+        DeferredType::Tuple { elements, readonly } => {
+            return generic_tuple_target_related(from, source.as_ref(), elements, *readonly);
+        }
     };
     match constraint {
         TargetConstraint::Types(types) => types.iter().all(|ty| is_assignable_to(from, ty)),
         TargetConstraint::Absent => false,
         TargetConstraint::Unmodelled => true,
     }
+}
+
+/// relater.go `propertiesRelatedTo` for a generic tuple target: the source
+/// must be an array or tuple, not readonly unless the target is, and relate
+/// element by element — a variadic target element only to a variadic one.
+fn generic_tuple_target_related(
+    from: &Type,
+    source: Option<&crate::type_variable::DeferredType>,
+    target: &[(crate::type_variable::TupleElementKind, Type)],
+    target_readonly: bool,
+) -> bool {
+    use crate::type_variable::{DeferredType, TupleElementKind};
+    let (source_elements, source_readonly) = match source {
+        Some(DeferredType::Tuple { elements, readonly }) => (elements.clone(), *readonly),
+        Some(_) => return false,
+        None => {
+            let (inner, readonly) = match from {
+                Type::Reference(reference) if reference.is_readonly_array() => (reference.resolve(), true),
+                other => (other.clone(), false),
+            };
+            let Some(elements) = crate::type_variable::spread_elements(&inner) else {
+                return false;
+            };
+            (elements, readonly)
+        }
+    };
+    if source_readonly && !target_readonly {
+        return false;
+    }
+    let is_variable = |kind: TupleElementKind| matches!(kind, TupleElementKind::Rest | TupleElementKind::Variadic);
+    let min_length = |elements: &[(TupleElementKind, Type)]| {
+        elements
+            .iter()
+            .filter(|(kind, _)| matches!(kind, TupleElementKind::Required | TupleElementKind::Variadic))
+            .count()
+    };
+    let source_arity = source_elements.len();
+    let target_arity = target.len();
+    let source_rest = source_elements.iter().any(|(kind, _)| *kind == TupleElementKind::Rest);
+    let target_has_rest = target.iter().any(|(kind, _)| is_variable(*kind));
+    let source_min_length = min_length(&source_elements);
+    let target_min_length = min_length(target);
+    if !source_rest && source_arity < target_min_length {
+        return false;
+    }
+    if !target_has_rest && target_arity < source_min_length {
+        return false;
+    }
+    if !target_has_rest && (source_rest || target_arity < source_arity) {
+        return false;
+    }
+    let target_start_count = target.iter().take_while(|(kind, _)| *kind != TupleElementKind::Rest).count();
+    let target_end_count = target.iter().rev().take_while(|(kind, _)| *kind != TupleElementKind::Rest).count();
+    for (source_position, (source_kind, source_type)) in source_elements.iter().enumerate() {
+        let source_position_from_end = source_arity - 1 - source_position;
+        let target_position = if target_has_rest && source_position >= target_start_count {
+            target_arity as isize - 1 - source_position_from_end.min(target_end_count) as isize
+        } else {
+            source_position as isize
+        };
+        let Some((target_kind, target_type)) = usize::try_from(target_position).ok().and_then(|index| target.get(index))
+        else {
+            return false;
+        };
+        if *target_kind == TupleElementKind::Variadic && *source_kind != TupleElementKind::Variadic {
+            return false;
+        }
+        if *source_kind == TupleElementKind::Variadic && !is_variable(*target_kind) {
+            return false;
+        }
+        if *target_kind == TupleElementKind::Required && *source_kind != TupleElementKind::Required {
+            return false;
+        }
+        let target_check_type = if *source_kind == TupleElementKind::Variadic && *target_kind == TupleElementKind::Rest {
+            Type::Array(Box::new(target_type.clone()))
+        } else {
+            target_type.clone()
+        };
+        if !is_assignable_to(source_type, &target_check_type) {
+            return false;
+        }
+    }
+    true
 }
 
 /// The generic-mapped-type target arms of `structuredTypeRelatedToWorker`
@@ -1000,6 +1496,19 @@ fn mapped_target_related(
 ) -> bool {
     if modifiers.optional >= 0 && object == from {
         return true;
+    }
+    if let Some(source_view) = source.and_then(mapped_view) {
+        let target = crate::type_variable::DeferredType::Mapped {
+            keys: keys.clone(),
+            object: object.clone(),
+            modifiers,
+            modifiers_optionality,
+        };
+        if let (MappedTemplate::Generic(_) | MappedTemplate::Constant(..), Some(target_view)) =
+            (&source_view.template, mapped_view(&target))
+        {
+            return mapped_views_related(&source_view, &target_view);
+        }
     }
     if let Some(crate::type_variable::DeferredType::Mapped {
         keys: source_keys,
@@ -1027,6 +1536,464 @@ fn mapped_target_related(
         return true;
     }
     modifiers.optional > 0 && is_empty_object_type(from)
+}
+
+/// The conditional-type target arm of `structuredTypeRelatedToWorker`: with
+/// no `infer` positions and no branch depending on distribution, a source
+/// relates when it relates to each branch the check does not rule out —
+/// the true branch is skipped when even a permissive instantiation of the
+/// check type fails the extends type (only `never` fails an unconstrained
+/// one), the false branch when a restrictive one satisfies it.
+fn conditional_target_related(from: &Type, target: &crate::type_variable::DeferredConditional) -> bool {
+    if target.has_infer || target.distribution_dependent {
+        return false;
+    }
+    let skip_true = matches!(target.extends, Type::Never);
+    let skip_false = !skip_true
+        && (matches!(target.extends, Type::Any | Type::GenuineUnknown)
+            || target.extends == target.check
+            || matches!(&target.extends, Type::Union(union) if union.types().contains(&target.check)));
+    (skip_true || is_assignable_to(from, &target.true_type)) && (skip_false || is_assignable_to(from, &target.false_type))
+}
+
+/// The conditional-type source arm of `structuredTypeRelatedToWorker`, past
+/// the target arms: another conditional with an identical extends type and a
+/// check type related either way relates branch by branch; otherwise the
+/// source relates through its default constraint (the union of its branches)
+/// or, to a target that is not conditional, its distributive constraint. A
+/// union target relates when a member does.
+fn conditional_source_related(
+    from: &Type,
+    source: &crate::type_variable::DeferredConditional,
+    to: &Type,
+    target_deferred: Option<&crate::type_variable::DeferredType>,
+) -> bool {
+    use crate::type_variable::DeferredType;
+    if let Type::Union(union) = to
+        && union.types().iter().any(|member| member == from || is_assignable_to(from, member))
+    {
+        return true;
+    }
+    let target_conditional = match target_deferred {
+        Some(DeferredType::Conditional(target)) => Some(target.as_ref()),
+        _ => None,
+    };
+    // With `infer` positions tsc first infers the source's from the target's
+    // extends type; two patterns surge resolved identically bind their
+    // `infer` parameters alike, so their branches compare as written.
+    if let Some(target) = target_conditional
+        && crate::is_type_identical_to(&source.extends, &target.extends)
+        && (is_assignable_to(&source.check, &target.check) || is_assignable_to(&target.check, &source.check))
+        && is_assignable_to(&source.true_type, &target.true_type)
+        && is_assignable_to(&source.false_type, &target.false_type)
+    {
+        return true;
+    }
+    match crate::type_variable::default_conditional_constraint(source) {
+        Some(constraint) if is_assignable_to(&constraint, to) => return true,
+        Some(_) => {}
+        None => return true,
+    }
+    target_conditional.is_none()
+        && source
+            .distributive_constraint
+            .as_ref()
+            .is_some_and(|constraint| is_assignable_to(constraint, to))
+}
+
+/// A generic mapped type as `mappedTypeRelatedTo` reads it.
+struct MappedView {
+    /// The key parameter, where the mapping has one of its own.
+    key: Option<Type>,
+    keys: Type,
+    name_type: Option<Type>,
+    /// `getCombinedMappedTypeOptionality`.
+    optionality: i8,
+    template: MappedTemplate,
+}
+
+enum MappedTemplate {
+    /// `object[P]`, holding `undefined` when the mapping adds `?`.
+    Indexed(Type, bool),
+    /// A template that does not read `P`.
+    Constant(Type),
+    Generic(crate::type_variable::DeferredMapped),
+}
+
+fn mapped_view(kind: &crate::type_variable::DeferredType) -> Option<MappedView> {
+    use crate::type_variable::DeferredType;
+    let optionality = |modifiers: crate::type_variable::MappedModifiers, inherited: i8| {
+        if modifiers.optional != 0 { modifiers.optional } else { inherited }
+    };
+    match kind {
+        DeferredType::Mapped {
+            keys,
+            object,
+            modifiers,
+            modifiers_optionality,
+        } => Some(MappedView {
+            key: None,
+            keys: keys.clone(),
+            name_type: None,
+            optionality: optionality(*modifiers, *modifiers_optionality),
+            template: MappedTemplate::Indexed(object.clone(), modifiers.optional > 0),
+        }),
+        DeferredType::MappedConstant { keys, template, modifiers } => Some(MappedView {
+            key: None,
+            keys: keys.clone(),
+            name_type: None,
+            optionality: modifiers.optional,
+            template: MappedTemplate::Constant(mapped_constant_template(template, *modifiers)),
+        }),
+        DeferredType::MappedGeneric(mapped) => Some(MappedView {
+            key: Some(mapped.key.clone()),
+            keys: mapped.keys.clone(),
+            name_type: mapped.name_type.clone(),
+            optionality: optionality(mapped.modifiers, mapped.modifiers_optionality),
+            template: MappedTemplate::Generic((**mapped).clone()),
+        }),
+        _ => None,
+    }
+}
+
+/// The view's template read at `key`.
+fn mapped_view_template(view: &MappedView, key: &Type) -> Option<Type> {
+    Some(match &view.template {
+        MappedTemplate::Indexed(object, optional) => {
+            let read = crate::type_variable::indexed_access_variable(object, key)?;
+            if *optional && crate::strict_null_checks() {
+                crate::union_type(vec![read, Type::Undefined])
+            } else {
+                read
+            }
+        }
+        MappedTemplate::Constant(template) => template.clone(),
+        MappedTemplate::Generic(mapped) => crate::type_variable::mapped_generic_template(mapped, key),
+    })
+}
+
+/// relater.go `mappedTypeRelatedTo`: the source may not add `?` the target
+/// does not, the target's keys must relate to the source's, the `as`
+/// clauses must be the same once the source's key parameter is the
+/// target's, and the source's template must relate to the target's there.
+fn mapped_views_related(source: &MappedView, target: &MappedView) -> bool {
+    let modifiers_related = current_relation() == Relation::Comparable || source.optionality <= target.optionality;
+    if !modifiers_related || !is_assignable_to(&target.keys, &source.keys) {
+        return false;
+    }
+    let key = target.key.clone().or_else(|| source.key.clone()).unwrap_or_else(|| target.keys.clone());
+    let rename = |view: &MappedView, ty: &Type| match &view.key {
+        Some(Type::TypeParameter(parameter)) => crate::type_variable::substitute_variable(ty, parameter, &key),
+        _ => ty.clone(),
+    };
+    let source_name = source.name_type.as_ref().map(|name| rename(source, name));
+    let target_name = target.name_type.as_ref().map(|name| rename(target, name));
+    if source_name != target_name {
+        return false;
+    }
+    match (mapped_view_template(source, &key), mapped_view_template(target, &key)) {
+        (Some(source_template), Some(target_template)) => is_assignable_to(&source_template, &target_template),
+        _ => true,
+    }
+}
+
+/// The generic-mapped-type target arms of `structuredTypeRelatedToWorker`
+/// for the general shape. Another generic mapped type relates through
+/// `mappedTypeRelatedTo`. Unless the mapping removes `?`, any other source
+/// `S` relates when the target's keys (its `as` clause's, where it has one)
+/// relate to `keyof S` — for a mapping that adds `?`, when some are among
+/// them — and `S` at those keys relates to the template; `S` itself relates
+/// to a template `S[P]` and to one reading its keys off an object `S`
+/// relates to.
+fn generic_mapped_target_related(
+    from: &Type,
+    source: Option<&crate::type_variable::DeferredType>,
+    target: &crate::type_variable::DeferredMapped,
+) -> bool {
+    use crate::type_variable::DeferredType;
+    if let Some(source_view) = source.and_then(mapped_view) {
+        let target_view = mapped_view(&DeferredType::MappedGeneric(Box::new(target.clone())));
+        return target_view.is_some_and(|target_view| mapped_views_related(&source_view, &target_view));
+    }
+    if target.modifiers.optional < 0 {
+        return false;
+    }
+    let keys_remapped = target.name_type.is_some();
+    let indexed_template = |ty: &Type| match ty {
+        Type::TypeParameter(parameter) => match crate::type_variable::deferred_type(parameter) {
+            Some(DeferredType::IndexedAccess { object, index }) if index == target.key => Some(object),
+            _ => None,
+        },
+        _ => None,
+    };
+    if !keys_remapped && indexed_template(&target.template).is_some_and(|object| object == *from) {
+        return true;
+    }
+    if matches!(from, Type::Object(object) if object.synthetic_open_index) {
+        return true;
+    }
+    if target.modifiers.optional > 0 && is_empty_object_type(from) {
+        return true;
+    }
+    let target_keys = target.name_type.clone().unwrap_or_else(|| target.keys.clone());
+    let source_keys = if from.is_type_variable() {
+        crate::type_variable::keyof_variable(from)
+    } else {
+        crate::type_variable::literal_keys_of(from)
+    };
+    let Some(source_keys) = source_keys else {
+        return true;
+    };
+    let filtered = if target.modifiers.optional > 0 {
+        if matches!(source_keys, Type::Never) {
+            return false;
+        }
+        Some(crate::type_variable::type_variable_intersection(vec![target_keys.clone(), source_keys]))
+    } else {
+        if !is_assignable_to(&target_keys, &source_keys) {
+            return false;
+        }
+        None
+    };
+    let template = crate::type_variable::mapped_generic_template(target, &target.key);
+    // `extractTypesOfKind(templateType, ^TypeFlagsNullable)`.
+    let non_null_template = match &target.template {
+        Type::Union(union) => crate::union_type(
+            union
+                .types()
+                .iter()
+                .filter(|member| !matches!(member, Type::Undefined | Type::Null))
+                .cloned()
+                .collect(),
+        ),
+        other => other.clone(),
+    };
+    if !keys_remapped && let Some(object) = indexed_template(&non_null_template) {
+        return is_assignable_to(from, &object);
+    }
+    let indexing = match (&filtered, keys_remapped) {
+        (Some(filtered), true) => filtered.clone(),
+        (None, true) => target_keys,
+        (Some(filtered), false) => {
+            crate::type_variable::type_variable_intersection(vec![filtered.clone(), target.key.clone()])
+        }
+        (None, false) => target.key.clone(),
+    };
+    crate::type_variable::indexed_access_variable(from, &indexing).is_none_or(|read| is_assignable_to(&read, &template))
+}
+
+/// A generic mapped source in the general shape, past the target arms: an
+/// object type. It relates to a type parameter `T` when it has no `as`
+/// clause, adds no `?`, `keyof T` relates to its keys and its template to
+/// `T[P]`; to nothing else generic; to a union when it relates to a member;
+/// and to an object type through its members — none, unless the key set is
+/// the `keyof` of a constrained variable whose apparent members surge does
+/// not enumerate — with a string index signature taking the template.
+fn generic_mapped_source_related(
+    from: &Type,
+    mapped: &crate::type_variable::DeferredMapped,
+    to: &Type,
+    target_is_deferred: bool,
+) -> bool {
+    if target_is_deferred {
+        return false;
+    }
+    let template = crate::type_variable::mapped_generic_template(mapped, &mapped.key);
+    match to {
+        Type::TypeParameter(target) => {
+            crate::type_variable::active_constraint(target).is_some()
+                && mapped.name_type.is_none()
+                && mapped.modifiers.optional <= 0
+                && crate::type_variable::keyof_variable(to).is_some_and(|target_keys| is_assignable_to(&target_keys, &mapped.keys))
+                && crate::type_variable::indexed_access_variable(to, &mapped.key)
+                    .is_some_and(|read| is_assignable_to(&template, &read))
+        }
+        Type::Union(union) => union.types().iter().any(|member| is_assignable_to(from, member)),
+        Type::Reference(_) => match to.peeled() {
+            Type::Reference(_) => false,
+            peeled => is_assignable_to(from, &peeled),
+        },
+        Type::Object(object) => {
+            let apparent_members_unknown = match &mapped.keys {
+                Type::TypeParameter(keys) => match crate::type_variable::deferred_type(keys) {
+                    Some(crate::type_variable::DeferredType::Keyof(Type::TypeParameter(operand))) => {
+                        !matches!(crate::type_variable::active_constraint(&operand), Some(None))
+                    }
+                    _ => false,
+                },
+                _ => false,
+            };
+            if apparent_members_unknown {
+                return true;
+            }
+            if object.properties.values().any(|property| !property.optional)
+                || object.call_signature().is_some()
+                || object.construct_signature().is_some()
+            {
+                return false;
+            }
+            match (&object.string_index_type, &object.number_index_type) {
+                (Some(value), number) => {
+                    is_assignable_to(&template, value)
+                        && number.as_deref().is_none_or(|value| is_assignable_to(&template, value))
+                }
+                (None, Some(_)) => false,
+                (None, None) => true,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// `getTemplateTypeFromMappedType`: a mapping that adds `?` reads its
+/// template with `undefined`.
+fn mapped_constant_template(template: &Type, modifiers: crate::type_variable::MappedModifiers) -> Type {
+    if modifiers.optional > 0 && crate::strict_null_checks() {
+        crate::union_type(vec![template.clone(), Type::Undefined])
+    } else {
+        template.clone()
+    }
+}
+
+/// The generic-mapped-type target arms of `structuredTypeRelatedToWorker` for
+/// `{ [P in keys]: template }`, a template that does not read `P`. Another
+/// such mapping relates through `mappedTypeRelatedTo`. Any other source that
+/// is not a generic mapped type relates, unless the mapping removes `?`, when
+/// `keys` relates to its keys (`getIndexType` without index signatures) — or,
+/// for a mapping that adds `?`, when some key is among them — and what it
+/// holds at those keys relates to the template. An empty object type relates
+/// to a mapping that adds `?` (`isPartialMappedType`).
+fn mapped_constant_target_related(
+    from: &Type,
+    source: Option<&crate::type_variable::DeferredType>,
+    keys: &Type,
+    template: &Type,
+    modifiers: crate::type_variable::MappedModifiers,
+) -> bool {
+    use crate::type_variable::{DeferredType, TargetConstraint};
+    if let Some(DeferredType::MappedConstant {
+        keys: source_keys,
+        template: source_template,
+        modifiers: source_modifiers,
+    }) = source
+    {
+        let modifiers_related =
+            current_relation() == Relation::Comparable || source_modifiers.optional <= modifiers.optional;
+        return modifiers_related
+            && is_assignable_to(keys, source_keys)
+            && is_assignable_to(
+                &mapped_constant_template(source_template, *source_modifiers),
+                &mapped_constant_template(template, modifiers),
+            );
+    }
+    if let Some(source_view) = source.and_then(mapped_view) {
+        let target = DeferredType::MappedConstant {
+            keys: keys.clone(),
+            template: template.clone(),
+            modifiers,
+        };
+        return mapped_view(&target).is_some_and(|target_view| mapped_views_related(&source_view, &target_view));
+    }
+    if modifiers.optional < 0 {
+        return false;
+    }
+    let target_template = mapped_constant_template(template, modifiers);
+    if from.is_type_variable() {
+        let Some(source_keys) = crate::type_variable::keyof_variable(from) else {
+            return false;
+        };
+        if modifiers.optional == 0 && !is_assignable_to(keys, &source_keys) {
+            return false;
+        }
+        return crate::type_variable::indexed_access_variable(from, keys)
+            .is_some_and(|read| is_assignable_to(&read, &target_template));
+    }
+    if matches!(from, Type::Object(object) if object.synthetic_open_index) {
+        return true;
+    }
+    if modifiers.optional > 0 && is_empty_object_type(from) {
+        return true;
+    }
+    let Some(source_keys) = crate::type_variable::literal_keys_of(from) else {
+        return true;
+    };
+    let read_keys = if modifiers.optional > 0 {
+        let key_constraint = crate::type_variable::base_constraint_or_type(keys);
+        let common: Vec<Type> = match &source_keys {
+            Type::Union(union) => union.types().to_vec(),
+            Type::Never => Vec::new(),
+            other => vec![other.clone()],
+        }
+        .into_iter()
+        .filter(|key| is_assignable_to(key, &key_constraint))
+        .collect();
+        if common.is_empty() {
+            return false;
+        }
+        crate::union_type(common)
+    } else {
+        if !is_assignable_to(keys, &source_keys) {
+            return false;
+        }
+        keys.clone()
+    };
+    match crate::type_variable::indexed_access_read_types(from, &read_keys) {
+        TargetConstraint::Types(types) => types.iter().all(|ty| is_assignable_to(ty, &target_template)),
+        TargetConstraint::Absent => false,
+        TargetConstraint::Unmodelled => true,
+    }
+}
+
+/// A generic mapped source `{ [P in keys]: template }` whose template does not
+/// read `P`, past the target arms: an object type. It relates to a type
+/// parameter `T` when it adds no `?`, `keyof T` relates to `keys` and the
+/// template to `T[keys]`; to nothing else generic; to a union when it relates
+/// to a member; and to an object type through its members, of which it has
+/// none (`resolveMappedTypeMembers` enumerates no generic key), while a
+/// string index signature takes the template (`indexSignaturesRelatedTo`).
+fn mapped_constant_source_related(
+    from: &Type,
+    keys: &Type,
+    template: &Type,
+    modifiers: crate::type_variable::MappedModifiers,
+    to: &Type,
+    target_is_deferred: bool,
+) -> bool {
+    if target_is_deferred {
+        return false;
+    }
+    let source_template = mapped_constant_template(template, modifiers);
+    match to {
+        Type::TypeParameter(target) => {
+            crate::type_variable::active_constraint(target).is_some()
+                && modifiers.optional <= 0
+                && crate::type_variable::keyof_variable(to).is_some_and(|target_keys| is_assignable_to(&target_keys, keys))
+                && crate::type_variable::indexed_access_variable(to, keys)
+                    .is_some_and(|read| is_assignable_to(&source_template, &read))
+        }
+        Type::Union(union) => union.types().iter().any(|member| is_assignable_to(from, member)),
+        Type::Reference(_) => match to.peeled() {
+            Type::Reference(_) => false,
+            peeled => is_assignable_to(from, &peeled),
+        },
+        Type::Object(object) => {
+            if object.properties.values().any(|property| !property.optional)
+                || object.call_signature().is_some()
+                || object.construct_signature().is_some()
+            {
+                return false;
+            }
+            match (&object.string_index_type, &object.number_index_type) {
+                (Some(value), number) => {
+                    is_assignable_to(&source_template, value)
+                        && number.as_deref().is_none_or(|value| is_assignable_to(&source_template, value))
+                }
+                (None, Some(_)) => false,
+                (None, None) => true,
+            }
+        }
+        _ => false,
+    }
 }
 
 /// relater.go `mappedTypeRelatedTo` for two mappings of the deferred shape:
@@ -1106,7 +2073,9 @@ fn is_empty_object_type(ty: &Type) -> bool {
 fn declared_argument_related(variance: crate::DeclaredVariance, source: &Type, target: &Type) -> bool {
     match variance {
         crate::DeclaredVariance::Covariant => is_assignable_to(source, target),
-        crate::DeclaredVariance::Contravariant => is_assignable_to(target, source),
+        crate::DeclaredVariance::Contravariant | crate::DeclaredVariance::UnreliableContravariant => {
+            is_assignable_to(target, source)
+        }
         crate::DeclaredVariance::Invariant => {
             is_assignable_to(source, target) && is_assignable_to(target, source)
         }
@@ -1186,12 +2155,14 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
     }
 
     // Enum types are nominal (`isEnumTypeRelatedTo`): a member of one enum
-    // never relates to another enum, even where the values coincide.
+    // relates to another enum only when the two are same-named regular enums
+    // whose members match, and then by value.
     if let (Type::Reference(from_ref), Type::Reference(to_ref)) = (from, to)
         && let (Some(from_enum), Some(to_enum)) = (&from_ref.enum_owner, &to_ref.enum_owner)
         && from_enum != to_enum
     {
-        return false;
+        return different_enums_related(from_ref, to_ref)
+            && is_assignable_to(&from_ref.resolve_arc(), &to_ref.resolve_arc());
     }
     // Relate a union source to an enum member by member, before the target
     // is peeled to its values and the members' enum identity is lost.
@@ -1451,18 +2422,13 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
             is_function_assignable_to(source, target)
         }
         (Type::Array(source), Type::Array(target)) => is_assignable_to(source, target),
-        // A source may stop short of trailing target slots that accept
+        // A source may stop short of the trailing target slots that carry
         // `undefined` — how an optional element (`[string, string?]`) is
-        // represented.
+        // represented (`tuple_min_length`); a slot that merely accepts it
+        // (`unknown`) is still required. A source's own `undefined` elements
+        // may be written ones, so they count as present.
         (Type::Tuple(source), Type::Tuple(target)) => {
-            source.len() <= target.len()
-                && source
-                    .iter()
-                    .zip(target.iter())
-                    .all(|(source_ty, target_ty)| is_assignable_to(source_ty, target_ty))
-                && target[source.len()..]
-                    .iter()
-                    .all(|target_ty| is_assignable_to(&Type::Undefined, target_ty))
+            tuple_related_to_fixed_tuple(&fixed_tuple_kinds(source, source.len()), &fixed_tuple_elements(target))
         }
         // relater.go relates a mutable tuple to an array through its number
         // index type, the union of its elements (`never` for `[]`).
@@ -1545,11 +2511,12 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
         // cross-realm `cls: {name: string}` idiom that accepts `typeof SomeClass`. A
         // construct-signature or index-signature target is left to the dedicated arms
         // above (or rejected), since a plain function value models neither.
-        // An index signature of type `any` admits every object source,
-        // functions included (tsc's `membersRelatedToIndexer` skips the members
-        // for an `any` indexer); any other index type asks for an index the
-        // function does not have.
+        // A function has no index signature of its own, nor an inferable one
+        // (`isObjectTypeWithInferableIndex` excludes a type with signatures), so
+        // only `indexSignaturesRelatedTo`'s exemption for an `any` value under a
+        // target string index lets one through.
         (Type::Function(source), Type::Object(target)) => {
+            let target_has_string_index = target.string_index_type.is_some();
             target.construct_signature().is_none()
                 && target
                     .string_index_type
@@ -1558,13 +2525,13 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
                 && target
                     .number_index_type
                     .as_deref()
-                    .is_none_or(|index| matches!(index, Type::Any))
+                    .is_none_or(|index| target_has_string_index && matches!(index, Type::Any))
                 && match target.call_signature() {
                     Some(call_signature) => is_function_assignable_to(source, call_signature),
                     None => true,
                 }
                 && target.properties.iter().all(|(name, target_property)| {
-                    match from.get_property_access_type(name) {
+                    match from.get_property_access_type(name).or_else(|| function_interface_member(name)) {
                         Some(source_ty) => is_assignable_to(&source_ty, &target_property.ty),
                         None => target_property.is_optional(),
                     }
@@ -2736,6 +3703,110 @@ fn is_signature_assignable_to(
     target: &FunctionType,
     bivariant_parameters: bool,
 ) -> bool {
+    // `compareSignaturesRelated`'s `strictVariance` is off for a target
+    // declared by a method, however the signature was reached.
+    signature_related_in_mode(
+        source,
+        target,
+        bivariant_parameters || target.is_method_declaration(),
+        CallbackMode::None,
+    )
+}
+
+/// relater.go `SignatureCheckModeStrictCallback` / `BivariantCallback`: the
+/// mode two callback parameters are compared in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CallbackMode {
+    None,
+    Strict,
+    Bivariant,
+}
+
+/// relater.go `isEnumTypeRelatedTo` for two different enums: the same name,
+/// both regular, and every source member in the target with the same value —
+/// or, where one value is unknown (computed), neither a string.
+fn different_enums_related(source: &crate::TypeReference, target: &crate::TypeReference) -> bool {
+    let enum_name = |owner: &str| owner.rsplit(['\0', '.']).next().unwrap_or(owner).to_string();
+    let (Some(source_owner), Some(target_owner)) = (&source.enum_owner, &target.enum_owner) else {
+        return false;
+    };
+    let (Some(source_members), Some(target_members)) = (&source.enum_members, &target.enum_members) else {
+        return false;
+    };
+    if enum_name(source_owner) != enum_name(target_owner) || !source_members.regular || !target_members.regular {
+        return false;
+    }
+    let is_string = |value: &Option<Type>| matches!(value, Some(Type::StringLiteral(_)));
+    source_members.members.iter().all(|(name, source_value)| {
+        let Some((_, target_value)) = target_members.members.iter().find(|(target_name, _)| target_name == name)
+        else {
+            return false;
+        };
+        match (source_value, target_value) {
+            (Some(source_value), Some(target_value)) => source_value == target_value,
+            _ => !is_string(source_value) && !is_string(target_value),
+        }
+    })
+}
+
+/// relater.go `compareTypePredicateRelatedTo`.
+fn type_predicates_related(source: &crate::TypePredicate, target: &crate::TypePredicate) -> bool {
+    use crate::TypePredicateKind::{AssertsIdentifier, Identifier};
+    if source.kind != target.kind {
+        return false;
+    }
+    if matches!(source.kind, Identifier | AssertsIdentifier) && source.parameter_index != target.parameter_index {
+        return false;
+    }
+    match (&source.ty, &target.ty) {
+        (None, None) => true,
+        (Some(source_type), Some(target_type)) => source_type == target_type || is_assignable_to(source_type, target_type),
+        _ => false,
+    }
+}
+
+/// `getSingleCallSignature` of `getNonNullableType(ty)`.
+fn single_call_signature(ty: &Type) -> Option<FunctionType> {
+    let non_nullable = match ty.peeled() {
+        Type::Union(union) => {
+            let members: Vec<Type> = union
+                .types()
+                .iter()
+                .filter(|member| !matches!(member, Type::Undefined | Type::Null))
+                .cloned()
+                .collect();
+            match members.len() {
+                1 => members.into_iter().next()?,
+                _ => return None,
+            }
+        }
+        other => other.clone(),
+    };
+    match non_nullable.peeled() {
+        Type::Function(function) if function.overloads().is_none() => Some(function.clone()),
+        _ => None,
+    }
+}
+
+/// `getTypeFacts(ty, TypeFactsIsUndefinedOrNull)`.
+fn undefined_or_null_facts(ty: &Type) -> (bool, bool) {
+    match ty.peeled() {
+        Type::Undefined => (true, false),
+        Type::Null => (false, true),
+        Type::Union(union) => union.types().iter().fold((false, false), |facts, member| {
+            let (undefined, null) = undefined_or_null_facts(member);
+            (facts.0 || undefined, facts.1 || null)
+        }),
+        _ => (false, false),
+    }
+}
+
+fn signature_related_in_mode(
+    source: &FunctionType,
+    target: &FunctionType,
+    bivariant_parameters: bool,
+    mode: CallbackMode,
+) -> bool {
     let (source_parameters, source_required, source_variadic) = expanded_signature(source);
     let (target_parameters, target_required, target_variadic) = expanded_signature(target);
     // tsc's `getTypeOfParameter`: an optional parameter's type includes
@@ -2760,8 +3831,8 @@ fn is_signature_assignable_to(
         return false;
     }
 
-    let parameters_compatible = source_parameters.iter().zip(target_parameters.iter()).all(
-        |(source_parameter, target_parameter)| {
+    let parameters_compatible = source_parameters.iter().zip(target_parameters.iter()).enumerate().all(
+        |(index, (source_parameter, target_parameter))| {
             // A source parameter typed `unknown`/`any` accepts whatever argument
             // the target would supply, so it is contravariantly compatible with
             // any target parameter. This is what makes a generic call signature
@@ -2781,11 +3852,29 @@ fn is_signature_assignable_to(
             // not assignable to the source's concrete members), so it falls back
             // to the covariant direction rather than flagging a handler tsc
             // accepts.
-            source_parameter == target_parameter
+            if source_parameter == target_parameter
                 || source_parameter.is_unmodelled()
                 || matches!(source_parameter, Type::Any)
-                || is_assignable_to(target_parameter, source_parameter)
-                || ((bivariant_parameters || signature_parameter_carries_hole(target_parameter))
+            {
+                return true;
+            }
+            // `compareSignaturesRelated`: two callback parameters relate by
+            // their signatures, target against source, so a type used only in
+            // callback parameter positions is covariant.
+            if mode == CallbackMode::None
+                && !source.is_instantiated_generic_parameter(index)
+                && !target.is_instantiated_generic_parameter(index)
+                && let (Some(source_callback), Some(target_callback)) =
+                    (single_call_signature(source_parameter), single_call_signature(target_parameter))
+                && undefined_or_null_facts(source_parameter) == undefined_or_null_facts(target_parameter)
+            {
+                let callback_mode =
+                    if bivariant_parameters { CallbackMode::Bivariant } else { CallbackMode::Strict };
+                return signature_related_in_mode(&target_callback, &source_callback, false, callback_mode);
+            }
+            is_assignable_to(target_parameter, source_parameter)
+                || (((bivariant_parameters && mode == CallbackMode::None)
+                    || signature_parameter_carries_hole(target_parameter))
                     && is_assignable_to(source_parameter, target_parameter))
         },
     );
@@ -2793,9 +3882,23 @@ fn is_signature_assignable_to(
     // A `void`-returning target ignores whatever the source returns: tsc accepts
     // any function as a `() => void` slot (`Array.prototype.forEach` callbacks,
     // event handlers, etc.). Outside that case the source return must be
-    // assignable to the target's.
-    let return_compatible = matches!(target.return_type(), Type::Void)
-        || is_assignable_to(source.return_type(), target.return_type());
+    // assignable to the target's, or, between callbacks of a bivariant
+    // parameter, either way.
+    // Two predicates relate by `compareTypePredicateRelatedTo` alone. tsc also
+    // rejects a source without a predicate against one with, but surge does
+    // not attach the predicates tsc infers from a body
+    // (`getTypePredicateFromBody`), so such a source still relates by its
+    // return type.
+    let return_compatible = matches!(target.return_type(), Type::Void | Type::Any)
+        || match (source.type_predicate(), target.type_predicate()) {
+            (Some(source_predicate), Some(target_predicate)) => {
+                type_predicates_related(source_predicate, target_predicate)
+            }
+            _ => {
+                (mode == CallbackMode::Bivariant && is_assignable_to(target.return_type(), source.return_type()))
+                    || is_assignable_to(source.return_type(), target.return_type())
+            }
+        };
 
     parameters_compatible && return_compatible
 }
@@ -3227,7 +4330,27 @@ fn indexed_member_type(property: &crate::ObjectProperty, numeric_index: bool) ->
 /// target with none asks for nothing; a source with none matches nothing.
 fn object_signatures_related(source: &ObjectType, target: &ObjectType) -> bool {
     signatures_of_kind_related(source.call_signature(), target.call_signature())
+        && construct_signature_modifiers_related(source.construct_signature(), target.construct_signature())
         && signatures_of_kind_related(source.construct_signature(), target.construct_signature())
+}
+
+/// relater.go `signaturesRelatedTo` for construct signatures: an abstract
+/// constructor type is not assignable to a non-abstract one, and
+/// `constructorVisibilitiesAreCompatible`.
+fn construct_signature_modifiers_related(source: Option<&FunctionType>, target: Option<&FunctionType>) -> bool {
+    use crate::ConstructorAccessibility::{Private, Protected, Public, Undeclared};
+    let (Some(source), Some(target)) = (source, target) else {
+        return true;
+    };
+    let (source, target) = (source.construct_modifiers(), target.construct_modifiers());
+    if source.is_abstract() && !target.is_abstract() {
+        return false;
+    }
+    match (source.accessibility(), target.accessibility()) {
+        (Undeclared, _) | (_, Undeclared) | (_, Private) => true,
+        (source, Protected) => source != Private,
+        (source, Public) => source == Public,
+    }
 }
 
 fn signatures_of_kind_related(source: Option<&FunctionType>, target: Option<&FunctionType>) -> bool {
@@ -3325,6 +4448,19 @@ fn callable_object_function_member(source: &ObjectType, name: &str) -> Option<Ty
             true,
             0,
         ))),
+        _ => function_interface_member(name),
+    }
+}
+
+/// The global `Function` members a function value's surface above does not
+/// model, as the relation needs them to satisfy a target that extends
+/// `Function`: lib.es5.d.ts's `prototype` and `arguments` (`any`) and `caller`
+/// (the global `Function`, which this crate cannot name), and
+/// lib.es2015.symbol.wellknown.d.ts's `[Symbol.hasInstance]`.
+fn function_interface_member(name: &str) -> Option<Type> {
+    match name {
+        "prototype" | "arguments" | "caller" => Some(Type::Any),
+        "[Symbol.hasInstance]" => Some(Type::Function(FunctionType::new(vec![Type::Any], Type::Boolean, false, 1))),
         _ => None,
     }
 }

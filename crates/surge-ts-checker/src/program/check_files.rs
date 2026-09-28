@@ -1564,6 +1564,49 @@ fn grammar_finding_diagnostic(
     Some(diagnostic.with_span(crate::context::convert_span(finding.span)))
 }
 
+/// tsc's `checkImportAttributes`: a `with { … }` clause, typed as an object
+/// literal of its values' types, must be assignable to the global
+/// `ImportAttributes` or `undefined`.
+fn check_import_attributes(clauses: &[surge_ts_syntax::ParsedImportAttributes], ctx: &mut CheckerContext) {
+    if clauses.is_empty() || ctx.lookup_type_declaration("ImportAttributes").is_none() {
+        return;
+    }
+    let import_attributes = crate::infer::map_parsed_type(
+        surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            name: "ImportAttributes".to_string(),
+            span: None,
+            type_arguments: Vec::new(),
+        })),
+        ctx,
+    );
+    let target = surge_ts_types::union_type(vec![import_attributes, surge_ts_types::Type::Undefined]);
+    let symbols = ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    'clauses: for clause in clauses {
+        let mut properties = surge_ts_types::PropertyMap::default();
+        for (name, value) in &clause.attributes {
+            let reported = ctx.diagnostics().len();
+            let value_type = crate::infer::infer_expression(value, &symbols, ctx);
+            ctx.truncate_diagnostics(reported);
+            let crate::infer::InferredExpression::Known(ty) = value_type else {
+                continue 'clauses;
+            };
+            properties.insert(
+                std::sync::Arc::from(name.as_str()),
+                surge_ts_types::ObjectProperty {
+                    ty,
+                    optional: false,
+                    method: false,
+                    readonly: false,
+                    restriction: None,
+                    index_slot: false,
+                },
+            );
+        }
+        let source = surge_ts_types::Type::Object(crate::metrics::alloc_object_type(properties, None));
+        crate::checks::var::report_initializer_mismatch(&source, &target, Some(clause.span), ctx);
+    }
+}
+
 pub(crate) fn check_program_file(
     file_index: usize,
     parsed_file: &ParsedProgramFile,
@@ -1859,6 +1902,7 @@ pub(crate) fn check_program_file(
             &final_function_signatures,
             ctx,
         );
+        check_import_attributes(&parsed_file.import_attributes, ctx);
         ctx.namespace_require_reads = None;
         ctx.module_value_fallback = None;
 

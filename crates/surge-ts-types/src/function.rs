@@ -143,6 +143,90 @@ pub struct FunctionType {
     /// one shape still share a payload. Thin pointer on purpose — a fat one
     /// would grow every `Type`.
     overloads: Option<Arc<Vec<FunctionType>>>,
+    /// For a construct signature, the flags relater.go reads off it: see
+    /// [`ConstructModifiers`]. Handle metadata like the fields above.
+    construct_modifiers: ConstructModifiers,
+    /// relater.go `isInstantiatedGenericParameter`: bit `i` is set when this
+    /// signature instantiates one whose parameter `i` was a generic type (a
+    /// bare type variable). Handle metadata like the fields above.
+    instantiated_generic_parameters: u32,
+    /// The signature's written type predicate (`x is T`, `this is T`,
+    /// `asserts x is T`), for `compareTypePredicateRelatedTo`. Handle metadata
+    /// like the fields above.
+    type_predicate: Option<Arc<TypePredicate>>,
+}
+
+/// checker.go `TypePredicate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypePredicate {
+    pub kind: TypePredicateKind,
+    /// The tested parameter's position, for an identifier predicate.
+    pub parameter_index: Option<usize>,
+    /// `None` for a bare `asserts x`.
+    pub ty: Option<Type>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypePredicateKind {
+    This,
+    Identifier,
+    AssertsThis,
+    AssertsIdentifier,
+}
+
+/// A construct signature's `SignatureFlagsAbstract` and the accessibility of
+/// the constructor declaration it came from (`constructorVisibilitiesAreCompatible`).
+/// Also carries whether a call signature's declaration is a method, which
+/// `compareSignaturesRelated` reads off the target (`strictVariance`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct ConstructModifiers(u8);
+
+impl ConstructModifiers {
+    const ABSTRACT: u8 = 1;
+    const ACCESSIBILITY_SHIFT: u8 = 1;
+    const ACCESSIBILITY_MASK: u8 = 0b110;
+    const METHOD_DECLARATION: u8 = 0b1000;
+
+    pub fn new(is_abstract: bool, accessibility: ConstructorAccessibility) -> Self {
+        let accessibility = match accessibility {
+            ConstructorAccessibility::Undeclared => 0,
+            ConstructorAccessibility::Public => 1,
+            ConstructorAccessibility::Protected => 2,
+            ConstructorAccessibility::Private => 3,
+        };
+        Self(u8::from(is_abstract) | (accessibility << Self::ACCESSIBILITY_SHIFT))
+    }
+
+    pub fn is_abstract(self) -> bool {
+        self.0 & Self::ABSTRACT != 0
+    }
+
+    pub fn accessibility(self) -> ConstructorAccessibility {
+        match (self.0 & Self::ACCESSIBILITY_MASK) >> Self::ACCESSIBILITY_SHIFT {
+            1 => ConstructorAccessibility::Public,
+            2 => ConstructorAccessibility::Protected,
+            3 => ConstructorAccessibility::Private,
+            _ => ConstructorAccessibility::Undeclared,
+        }
+    }
+
+    pub fn with_abstract(self, is_abstract: bool) -> Self {
+        Self::new(is_abstract, self.accessibility())
+    }
+
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+}
+
+/// `Undeclared` is a signature without a declaration (a class's default
+/// constructor), which relates to any other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConstructorAccessibility {
+    Undeclared,
+    Public,
+    Protected,
+    Private,
 }
 
 impl FunctionType {
@@ -158,6 +242,9 @@ impl FunctionType {
             alias_name: None,
             declaration: None,
             overloads: None,
+            construct_modifiers: ConstructModifiers::default(),
+            instantiated_generic_parameters: 0,
+            type_predicate: None,
         }
     }
 
@@ -185,6 +272,9 @@ impl FunctionType {
                         alias_name: None,
                         declaration: None,
                         overloads: None,
+                        construct_modifiers: ConstructModifiers::default(),
+                        instantiated_generic_parameters: 0,
+                        type_predicate: None,
                     };
                 }
                 Err((parameters, return_type)) => {
@@ -205,6 +295,9 @@ impl FunctionType {
                         alias_name: None,
                         declaration: None,
                         overloads: None,
+                        construct_modifiers: ConstructModifiers::default(),
+                        instantiated_generic_parameters: 0,
+                        type_predicate: None,
                     };
                 }
             }
@@ -225,6 +318,9 @@ impl FunctionType {
             alias_name: None,
             declaration: None,
             overloads: None,
+            construct_modifiers: ConstructModifiers::default(),
+            instantiated_generic_parameters: 0,
+            type_predicate: None,
         }
     }
 
@@ -237,6 +333,9 @@ impl FunctionType {
             alias_name: self.alias_name.clone(),
             declaration: self.declaration.clone(),
             overloads: self.overloads.clone(),
+            construct_modifiers: self.construct_modifiers,
+            instantiated_generic_parameters: self.instantiated_generic_parameters,
+            type_predicate: self.type_predicate.clone(),
             ..Self::new(parameters, return_type, self.is_variadic(), self.required_parameter_count())
         }
     }
@@ -322,6 +421,46 @@ impl FunctionType {
     pub fn with_overloads(mut self, overloads: Vec<FunctionType>) -> Self {
         self.overloads = (overloads.len() >= 2).then(|| Arc::new(overloads));
         self
+    }
+
+    pub fn with_construct_modifiers(mut self, modifiers: ConstructModifiers) -> Self {
+        self.construct_modifiers = modifiers;
+        self
+    }
+
+    pub fn construct_modifiers(&self) -> ConstructModifiers {
+        self.construct_modifiers
+    }
+
+    /// Marks the signature as declared by a method (`m(x: T): U`), whose
+    /// parameters a relation compares bivariantly.
+    pub fn with_method_declaration(mut self, method: bool) -> Self {
+        let bits = self.construct_modifiers.0 & !ConstructModifiers::METHOD_DECLARATION;
+        self.construct_modifiers =
+            ConstructModifiers(bits | if method { ConstructModifiers::METHOD_DECLARATION } else { 0 });
+        self
+    }
+
+    pub fn is_method_declaration(&self) -> bool {
+        self.construct_modifiers.0 & ConstructModifiers::METHOD_DECLARATION != 0
+    }
+
+    pub fn with_instantiated_generic_parameters(mut self, mask: u32) -> Self {
+        self.instantiated_generic_parameters = mask;
+        self
+    }
+
+    pub fn is_instantiated_generic_parameter(&self, index: usize) -> bool {
+        index < 32 && self.instantiated_generic_parameters & (1 << index) != 0
+    }
+
+    pub fn with_type_predicate(mut self, predicate: Option<TypePredicate>) -> Self {
+        self.type_predicate = predicate.map(Arc::new);
+        self
+    }
+
+    pub fn type_predicate(&self) -> Option<&TypePredicate> {
+        self.type_predicate.as_deref()
     }
 
     pub fn overloads(&self) -> Option<&[FunctionType]> {
@@ -484,6 +623,9 @@ impl Clone for FunctionType {
             alias_name: self.alias_name.clone(),
             declaration: self.declaration.clone(),
             overloads: self.overloads.clone(),
+            construct_modifiers: self.construct_modifiers,
+            instantiated_generic_parameters: self.instantiated_generic_parameters,
+            type_predicate: self.type_predicate.clone(),
         }
     }
 }

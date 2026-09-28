@@ -1542,6 +1542,7 @@ fn binding_pattern_implied_type(binding: &ParsedBindingName) -> Option<ParsedTyp
                 construct_signature_overloads: Vec::new(),
                 non_primitive: false,
                 display_name: None,
+                abstract_construct_signature: false,
             })))
         }
         ParsedBindingName::ArrayPattern(pattern) => {
@@ -1718,6 +1719,14 @@ pub(crate) fn map_function_signature(
             ctx,
         );
     }
+    let type_predicate = return_type.and_then(|return_type| {
+        crate::infer::types::written_type_predicate(
+            return_type,
+            parameters.iter().map(|parameter| parameter_identifier_name(parameter).map(str::to_string)),
+            ctx,
+            |ty, ctx| map_parsed_type_with_substitution(ty.clone(), ctx, &type_parameter_substitution),
+        )
+    });
     ctx.signature_parameter_bindings = outer_parameter_bindings;
 
     if pushed_type_parameter_scope {
@@ -1732,6 +1741,7 @@ pub(crate) fn map_function_signature(
     )
     .with_parameter_names(written_binding_names(parameters))
     .with_type_parameter_head(type_parameter_head(type_parameters))
+    .with_type_predicate(type_predicate)
 }
 
 /// tsc's `checkTypePredicate`: the predicate's type must be assignable to the
@@ -2263,6 +2273,131 @@ fn check_type_parameter_defaults(type_parameters: &[ParsedTypeParameter], ctx: &
             continue;
         };
         let diagnostic = Diagnostic::ts2344(default_name, constraint_name, ctx.file_name.clone())
+            .with_span(convert_span(span));
+        ctx.push_utility_diagnostic_once(diagnostic);
+    }
+}
+
+/// `checkMappedType`: every mapped type written in a type alias relates its
+/// key constraint to `string | number | symbol` (TS2322 at the constraint),
+/// the alias's parameters being type variables. In a conditional type's true
+/// branch a check type naming a parameter is read through the extends type
+/// (`getImpliedConstraint`). The resolutions are speculative; only the
+/// verdict is reported.
+pub(crate) fn check_alias_mapped_type_constraints(
+    type_parameters: &[ParsedTypeParameter],
+    body: &ParsedType,
+    ctx: &mut CheckerContext,
+) {
+    type Implied<'a> = Vec<(&'a str, &'a ParsedType)>;
+    fn collect<'a>(
+        ty: &'a ParsedType,
+        implied: &Implied<'a>,
+        found: &mut Vec<(&'a surge_ts_syntax::ParsedMappedType, Implied<'a>)>,
+    ) {
+        match ty {
+            ParsedType::Mapped(mapped) => {
+                found.push((mapped, implied.clone()));
+                collect(&mapped.value_type, implied, found);
+            }
+            ParsedType::Named(named) => {
+                for argument in &named.type_arguments {
+                    collect(argument, implied, found);
+                }
+            }
+            ParsedType::Array(element) | ParsedType::Readonly(element) | ParsedType::KeyOf(element) => {
+                collect(element, implied, found)
+            }
+            ParsedType::Tuple(elements) | ParsedType::Union(elements) | ParsedType::Intersection(elements) => {
+                for element in elements.iter() {
+                    collect(element, implied, found);
+                }
+            }
+            ParsedType::Object(object) => {
+                for property in &object.properties {
+                    collect(&property.ty, implied, found);
+                }
+                for index in [&object.string_index_type, &object.number_index_type].into_iter().flatten() {
+                    collect(index, implied, found);
+                }
+            }
+            ParsedType::IndexedAccess(access) => {
+                collect(&access.object_type, implied, found);
+                collect(&access.index_type, implied, found);
+            }
+            ParsedType::Conditional(conditional) => {
+                collect(&conditional.check_type, implied, found);
+                collect(&conditional.false_type, implied, found);
+                let mut true_implied = implied.clone();
+                let (check, extends) = match (conditional.check_type.as_ref(), conditional.extends_type.as_ref()) {
+                    (ParsedType::Tuple(check), ParsedType::Tuple(extends)) if check.len() == 1 && extends.len() == 1 => {
+                        (&check[0], &extends[0])
+                    }
+                    (check, extends) => (check, extends),
+                };
+                if let ParsedType::Named(named) = check
+                    && named.type_arguments.is_empty()
+                {
+                    true_implied.push((named.name.as_str(), extends));
+                }
+                collect(&conditional.true_type, &true_implied, found);
+            }
+            _ => {}
+        }
+    }
+    let mut mapped_types = Vec::new();
+    collect(body, &Vec::new(), &mut mapped_types);
+    let constrained: Vec<(TextSpan, &ParsedType, Implied<'_>)> = mapped_types
+        .into_iter()
+        .filter_map(|(mapped, implied)| {
+            let span = match mapped.constraint.as_ref() {
+                ParsedType::Named(named) => named.span?,
+                ParsedType::IndexedAccess(access) => access.span?,
+                _ => return None,
+            };
+            Some((span, mapped.constraint.as_ref(), implied))
+        })
+        .collect();
+    if constrained.is_empty() {
+        return;
+    }
+    let _variables = enter_body_type_variables(type_parameters, ctx);
+    let diagnostics_before = ctx.diagnostics().len();
+    let key_constraint = surge_ts_types::union_type(vec![Type::String, Type::Number, Type::Symbol]);
+    let mut violations = Vec::new();
+    with_type_parameter_scope(type_parameters, ctx, |ctx| {
+        'mapped: for (span, constraint, implied) in constrained {
+            let mut substitution = crate::infer::TypeParameterSubstitution::new();
+            for (name, extends) in implied {
+                let Some(variable) = type_parameters
+                    .iter()
+                    .find(|parameter| parameter.name == name)
+                    .and_then(|parameter| bound_type_variable(parameter, ctx))
+                else {
+                    continue;
+                };
+                let extends = crate::infer::map_parsed_type(extends.clone(), ctx);
+                if extends.is_unmodelled() && !matches!(extends, Type::GenuineUnknown) {
+                    continue 'mapped;
+                }
+                let base = substitution.get(name).cloned().unwrap_or(variable);
+                substitution.insert(
+                    name.to_string(),
+                    surge_ts_types::type_variable::intersect_type_variable(&base, extends),
+                );
+            }
+            let constraint = crate::infer::map_parsed_type_with_substitution(constraint.clone(), ctx, &substitution);
+            if (crate::infer::types::judgeable_through_type_variable(&constraint)
+                || crate::infer::types::constraint_relation_decidable(&constraint, &key_constraint))
+                && !surge_ts_types::is_assignable_to(&constraint, &key_constraint)
+            {
+                violations.push((span, crate::checks::expr::source_display_name(&constraint, &key_constraint)));
+            }
+        }
+    });
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    for (span, constraint_name) in violations {
+        let diagnostic = Diagnostic::ts2322(constraint_name, key_constraint.name(), ctx.file_name.clone())
             .with_span(convert_span(span));
         ctx.push_utility_diagnostic_once(diagnostic);
     }

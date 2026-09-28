@@ -701,6 +701,33 @@ fn evaluate_expression_unsettled(
 
             super::update_result_type(&operand_result)
         }
+        ParsedExpression::ArrayPatternElement {
+            source,
+            source_span,
+            index,
+            rest,
+            tuple_literal,
+            read,
+        } => {
+            let source_type = crate::infer::array_pattern_source_type(source, *tuple_literal, symbols, ctx);
+            let element = match &source_type {
+                InferredExpression::Known(source_type) => super::array_pattern_element_type(
+                    source_type,
+                    *index,
+                    *rest,
+                    ctx.options.strict_builtin_iterator_return,
+                ),
+                _ if *rest => Some(Type::Unknown),
+                _ => None,
+            };
+            match element {
+                Some(element) => {
+                    let _ = evaluate_expression(source, source_span.or(fallback_span), symbols, ctx);
+                    InferredExpression::Known(element)
+                }
+                None => evaluate_expression(read, fallback_span, symbols, ctx),
+            }
+        }
         ParsedExpression::ObjectRest {
             source,
             omitted,
@@ -844,11 +871,12 @@ fn evaluate_expression_unsettled(
             expression: satisfied_expression,
             span,
             target_type,
-            target_span: _,
+            target_span,
         } => evaluate_satisfies_expression(
             satisfied_expression,
             span,
             target_type,
+            *target_span,
             fallback_span,
             symbols,
             ctx,
@@ -860,14 +888,15 @@ fn evaluate_expression_unsettled(
             type_span: pattern_span,
             annotation: true,
         } => {
-            // A destructuring declaration's annotation: the initializer is
-            // checked against it like any declared type, at the pattern, and
-            // the elements read the declared type itself.
+            // A destructuring declaration's annotation, or a JSDoc-typed
+            // assignment declaration's: the value is checked against it like
+            // any declared type, at the pattern or the declaration, and the
+            // reads see the declared type itself.
             let declared = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
                 crate::infer::map_parsed_type(ty.clone(), ctx)
             });
-            // A JSDoc-typed or `require` value names no pattern and is
-            // reported at itself.
+            // A `require` value names no declaration and is reported at
+            // itself.
             let Some(pattern_span) = *pattern_span else {
                 let _ = crate::checks::expected::evaluate_expression_with_expected_type(
                     asserted_expression,
@@ -1252,7 +1281,7 @@ pub(crate) fn report_overwritten_properties(
     }
 }
 
-fn spread_always_writes(ty: &Type, name: &str) -> bool {
+pub(crate) fn spread_always_writes(ty: &Type, name: &str) -> bool {
     match ty {
         Type::Object(object) => object
             .properties
@@ -1306,19 +1335,15 @@ fn evaluate_logical(
 /// operand of `&&` (as context only: the result also carries the left's falsy
 /// part).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn evaluate_logical_in_context(
-    left: &Box<ParsedExpression>,
-    left_span: &Option<SyntaxTextSpan>,
+/// The scope the right operand of `a && b` or `a || b` is checked in: after
+/// the left's assignments, and narrowed by the left holding (`&&`) or failing
+/// (`||`).
+pub(crate) fn logical_right_operand_symbols(
+    left: &ParsedExpression,
     operator: &ParsedLogicalOperator,
-    right: &Box<ParsedExpression>,
-    right_span: &Option<SyntaxTextSpan>,
-    fallback_span: Option<SyntaxTextSpan>,
-    contextual: Option<&Type>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
-) -> InferredExpression {
-    let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
-    report_void_truthiness(&left_result, left_span.or(fallback_span), ctx);
+) -> Option<SymbolTable> {
     // The right operand runs after the left's assignments, and is narrowed by
     // what they assigned: `(next = it.next()) && !next.done`.
     let after_assignments = symbols_after_assignments(left, symbols, ctx);
@@ -1375,7 +1400,24 @@ pub(crate) fn evaluate_logical_in_context(
         ctx,
     )
     .or(narrowed);
-    let right_symbols = narrowed.as_ref().unwrap_or(symbols);
+    narrowed.or(after_assignments)
+}
+
+pub(crate) fn evaluate_logical_in_context(
+    left: &Box<ParsedExpression>,
+    left_span: &Option<SyntaxTextSpan>,
+    operator: &ParsedLogicalOperator,
+    right: &Box<ParsedExpression>,
+    right_span: &Option<SyntaxTextSpan>,
+    fallback_span: Option<SyntaxTextSpan>,
+    contextual: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
+    report_void_truthiness(&left_result, left_span.or(fallback_span), ctx);
+    let right_symbols = logical_right_operand_symbols(left, operator, symbols, ctx);
+    let right_symbols = right_symbols.as_ref().unwrap_or(symbols);
     // `a || b` hands `b` the same contextual type `a ?? b` does.
     let (right_contextual, left_typed) = match operator {
         surge_ts_syntax::ParsedLogicalOperator::Or => {
@@ -1649,6 +1691,17 @@ fn evaluate_yield_expression(
             crate::checks::function::generator_return_type_argument(operand_type)
                 .filter(is_modelled_iteration_type)
                 .map(|ty| if ctx.in_async_body { crate::checks::call::awaited_type(&ty) } else { ty })
+                .or_else(|| {
+                    let strict = ctx.options.strict_builtin_iterator_return;
+                    let usage = if ctx.in_async_generator {
+                        super::IterationUse::async_generator_delegate(strict)
+                    } else {
+                        super::IterationUse::sync(strict)
+                    };
+                    super::iteration_types_of_iterable(operand_type, usage)
+                        .map(|types| types.return_type)
+                        .filter(|ty| is_modelled_iteration_type(ty) && !ty.is_unmodelled())
+                })
         }
         _ => None,
     };
@@ -1750,7 +1803,24 @@ fn evaluate_import_call(
         let diagnostic = Diagnostic::ts2712(ctx.file_name.clone());
         ctx.push(diagnostic_with_syntax_span(diagnostic, span));
     }
+    // `checkImportCallExpression`: a promise of the resolved module's type.
+    // An `export =` module also gains a synthetic `default`
+    // (`getTypeWithSyntheticDefaultImportType`), which is not modelled here.
+    if let ParsedExpression::StringLiteral(specifier) = specifier
+        && let Some(namespace) = import_call_module_namespace(specifier, ctx)
+    {
+        return InferredExpression::Known(crate::checks::call::promise_of(&namespace, ctx));
+    }
     InferredExpression::Unknown
+}
+
+pub(crate) fn import_call_module_namespace(specifier: &str, ctx: &mut CheckerContext) -> Option<Type> {
+    let files = [std::sync::Arc::from(ctx.file_name.as_str()), ctx.canonical_file_name_arc()];
+    let namespaces = ctx.import_type_namespaces.lock().ok()?;
+    let target = files
+        .into_iter()
+        .find_map(|file| namespaces.get(&(file, specifier.to_string())))?;
+    (!target.export_assignment).then(|| target.namespace.clone())
 }
 
 /// The element type a `yield*` operand iterates: an array's or tuple's
@@ -1759,9 +1829,17 @@ pub(crate) fn iterated_element_type(iterable: &Type) -> Option<Type> {
     match iterable {
         Type::Array(element) => Some((**element).clone()),
         Type::Tuple(elements) => Some(union_type(elements.clone())),
-        Type::Reference(_) => crate::checks::function::generator_yield_type_argument(iterable),
+        Type::Reference(_) => crate::checks::function::generator_yield_type_argument(iterable)
+            .or_else(|| structural_yield_type(iterable)),
+        Type::Object(_) => structural_yield_type(iterable),
         _ => None,
     }
+}
+
+fn structural_yield_type(iterable: &Type) -> Option<Type> {
+    super::iteration_types_of_iterable(iterable, super::IterationUse::sync(false))
+        .map(|types| types.yield_type)
+        .filter(|ty| !ty.is_unmodelled())
 }
 
 fn evaluate_optional_property_access(
@@ -1858,6 +1936,7 @@ fn evaluate_satisfies_expression(
     satisfied_expression: &Box<ParsedExpression>,
     span: &Option<SyntaxTextSpan>,
     target_type: &ParsedType,
+    target_span: Option<SyntaxTextSpan>,
     fallback_span: Option<SyntaxTextSpan>,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
@@ -1871,9 +1950,14 @@ fn evaluate_satisfies_expression(
 
     // Evaluate the left expression contextually against the target type
     // This pushes contextual diagnostics (like excess properties, missing properties).
-    let contextual_inferred = crate::checks::expected::evaluate_expression_with_expected_type(
+    // tsc reports a mismatch of the operand as a whole on the satisfies
+    // expression, whose error range is its `satisfies` keyword, or the tag
+    // of a JSDoc `@satisfies` (`GetErrorRangeForNode`): the target's line.
+    let mismatch_span = target_span.or(*span).or(fallback_span);
+    let contextual_inferred = crate::checks::expected::evaluate_expression_with_expected_type_anchored(
         satisfied_expression,
         span.or(fallback_span),
+        mismatch_span,
         Some(&resolved_target_type),
         crate::checks::expected::ExpectedTypeDiagnostic::SatisfiesNotAssignable,
         symbols,
@@ -1884,7 +1968,21 @@ fn evaluate_satisfies_expression(
     // contextually (e.g. primitives, identifiers). However, if contextual checking already
     // failed and returned Unknown, we might get false cascades. Let's do a clean check
     // against the original inferred type.
+    // The operand was checked above under its contextual type; this second,
+    // context-free pass only reads its type, and what it reports (a method
+    // parameter without the target's type, say) is not tsc's.
+    let checked_diagnostics = ctx.diagnostics().len();
     let original_inferred = crate::infer::infer_expression(satisfied_expression, symbols, ctx);
+    ctx.truncate_diagnostics_releasing_utility_keys(checked_diagnostics);
+    // `checkSatisfiesExpression` types its operand under the target as the
+    // contextual type, which is what gives a function's parameters theirs;
+    // the context-free sketch would leave them `any`.
+    let original_inferred = match (satisfied_expression.as_ref(), &contextual_inferred) {
+        (ParsedExpression::ArrowFunction(_), crate::infer::InferredExpression::Known(Type::Function(_))) => {
+            contextual_inferred.clone()
+        }
+        _ => original_inferred,
+    };
 
     // Check if contextual check already failed (meaning it returned Unknown when actual wasn't Unknown).
     let contextual_failed = matches!(
@@ -1927,7 +2025,7 @@ fn evaluate_satisfies_expression(
                     &target_type_name,
                     ctx.file_name.clone(),
                 );
-                let diagnostic = match span.or(fallback_span) {
+                let diagnostic = match mismatch_span {
                     Some(span) => diagnostic.with_span(crate::context::convert_span(span)),
                     None => diagnostic,
                 };
@@ -1967,7 +2065,12 @@ fn evaluate_satisfies_expression(
                             crate::infer::InferredExpression::Known(ty)
                         }
                     } else {
-                        crate::infer::InferredExpression::Known(widen_type(&ty))
+                        crate::infer::InferredExpression::Known(
+                            super::diagnostics::widen_type_for_contextual_type(
+                                &ty,
+                                &resolved_target_type,
+                            ),
+                        )
                     }
                 }
                 crate::context::DiagnosticProfile::Native => {
@@ -2023,7 +2126,8 @@ fn evaluate_type_assertion(
             if degraded {
                 ctx.degraded_expected_type_depth += 1;
             }
-            let _ = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
+            crate::checks::function::NEXT_ARROW_NOT_ELABORATED.set(true);
+            let arrow_type = with_type_copy_reason(TypeCopyReason::ExpressionInference, || {
                 crate::checks::function::check_arrow_function_expression_with_expected_type(
                     arrow.as_ref().clone(),
                     contextual.as_ref(),
@@ -2031,8 +2135,18 @@ fn evaluate_type_assertion(
                     ctx,
                 )
             });
+            crate::checks::function::NEXT_ARROW_NOT_ELABORATED.set(false);
             if degraded {
                 ctx.degraded_expected_type_depth -= 1;
+            }
+            let source_type = Type::Function(arrow_type);
+            if !degraded && super::assertion::assertion_sides_modelled(&source_type, &resolved_type) {
+                super::assertion::check_assertion_overlap(
+                    &crate::infer::InferredExpression::Known(source_type),
+                    &resolved_type,
+                    fallback_span,
+                    ctx,
+                );
             }
         }
         _ => {
@@ -2539,21 +2653,8 @@ fn check_in_operands(
     if !judgeable(right_type) {
         return;
     }
-    fn is_primitive(ty: &Type) -> bool {
-        match ty {
-            Type::String
-            | Type::Number
-            | Type::Boolean
-            | Type::BigInt
-            | Type::Symbol
-            | Type::StringLiteral(_)
-            | Type::NumberLiteral(_)
-            | Type::BooleanLiteral(_) => true,
-            Type::Union(union) => union.types().iter().any(is_primitive),
-            _ => false,
-        }
-    }
-    if is_primitive(right_type) {
+    let non_primitive = Type::Object(surge_ts_types::ObjectType::new(Default::default(), None).with_non_primitive_marker());
+    if !surge_ts_types::is_assignable_to(right_type, &non_primitive) {
         ctx.push(diagnostic_with_syntax_span(
             Diagnostic::ts2322(&right_type.name(), "object", ctx.file_name.clone()),
             right_span,

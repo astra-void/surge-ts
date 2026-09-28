@@ -546,6 +546,16 @@ fn contains_unknown(ty: &surge_ts_types::Type) -> bool {
         {
             false
         }
+        // An overload group's payload is the permissive fold of its members,
+        // which puts the sentinel wherever their parameters differ
+        // (`String.match`, `Date.toLocaleString`); the members are the shape.
+        surge_ts_types::Type::Function(function) if function.overloads().is_some_and(|members| !members.is_empty()) => {
+            function
+                .overloads()
+                .unwrap_or_default()
+                .iter()
+                .any(|member| contains_unknown(&surge_ts_types::Type::Function(member.clone())))
+        }
         surge_ts_types::Type::Function(function) => {
             !crate::checks::call::is_generic_signature(function)
                 && with_signature_type_parameters(function, || {

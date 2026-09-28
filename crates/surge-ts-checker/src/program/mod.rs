@@ -112,6 +112,8 @@ pub(crate) struct ParsedProgramFile {
     pub(crate) import_call_specifiers: Vec<String>,
     /// See [`surge_ts_syntax::ParsedSource::import_calls`].
     pub(crate) import_calls: Vec<surge_ts_syntax::ParsedImportCall>,
+    /// See [`surge_ts_syntax::ParsedSource::import_attributes`].
+    pub(crate) import_attributes: Vec<surge_ts_syntax::ParsedImportAttributes>,
     pub(crate) file_kind: FileKind,
     /// Module-wide identifier reads (see [`surge_ts_syntax::ParsedSource`]),
     /// retained only when `noUnusedLocals` is enabled; empty otherwise.

@@ -264,7 +264,11 @@ fn inferred_predicate_target(
     else {
         return None;
     };
-    let condition = single_returned_expression(&arrow.body)?;
+    let mut condition = single_returned_expression(&arrow.body)?;
+    // `narrowType` sees through `satisfies` as it does through parentheses.
+    while let ParsedExpression::SatisfiesExpression { expression, .. } = condition {
+        condition = expression;
+    }
     // tsc requires the body to be boolean-typed: `(x) => x` narrows `x` in its
     // true branch but returns `x`, not a boolean, so it is no predicate.
     if !is_boolean_shaped(condition) {
@@ -489,6 +493,11 @@ fn narrow_by_branch(
         {
             Some(narrowed)
         }
+        // A test of one of the parameter's properties narrows the parameter
+        // itself only as a union's discriminant (`narrowTypeByDiscriminant`).
+        _ if !matches!(ty, Type::Union(_)) && !condition_tests_reference(condition, name) => {
+            Some(ty.clone())
+        }
         _ => {
             let mut scope =
                 symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
@@ -509,6 +518,30 @@ fn narrow_by_branch(
                 None => Some(ty.clone()),
             }
         }
+    }
+}
+
+/// Whether a condition tests the reference `name` itself rather than one of
+/// its properties: `name`, `typeof name`, `name <op> x`, `"p" in name`, or a
+/// call handed `name`.
+fn condition_tests_reference(condition: &ParsedExpression, name: &str) -> bool {
+    let is_reference =
+        |expression: &ParsedExpression| matches!(expression, ParsedExpression::Identifier { name: found, .. } if found == name);
+    match condition {
+        ParsedExpression::Identifier { .. } => is_reference(condition),
+        ParsedExpression::Unary { operand, .. } => {
+            is_reference(operand) || condition_tests_reference(operand, name)
+        }
+        ParsedExpression::Binary { left, right, .. } => {
+            is_reference(left)
+                || is_reference(right)
+                || condition_tests_reference(left, name)
+                || condition_tests_reference(right, name)
+        }
+        ParsedExpression::Call { arguments, .. } | ParsedExpression::PropertyCall { arguments, .. } => {
+            arguments.iter().any(|argument| is_reference(&argument.expression))
+        }
+        _ => false,
     }
 }
 
@@ -591,6 +624,7 @@ fn check_property_call_like_unrecorded(
                 return None;
             }
         };
+    let object_ty = type_variable_call_receiver(object_ty, property_name);
 
     if surge_ts_types::private_name::is_private_name_key(property_name)
         && let Some(ty) = crate::checks::expr::check_private_name_access(
@@ -1168,6 +1202,20 @@ fn check_promise_then_call(
         symbols,
         ctx,
     );
+
+    // The lib's `onrejected` takes `(reason: any)`; every argument is still
+    // checked (`resolveCall`).
+    let rejected_type = Type::Function(FunctionType::new(vec![Type::Any], Type::Unknown, false, 1));
+    for (index, argument) in arguments.iter().enumerate().skip(1) {
+        let _ = evaluate_expression_with_expected_type(
+            &argument.expression,
+            argument.span,
+            (index == 1).then_some(&rejected_type),
+            ExpectedTypeDiagnostic::ArgumentNotAssignable,
+            symbols,
+            ctx,
+        );
+    }
 
     let next_value = match inferred_callback {
         InferredExpression::Known(Type::Function(function_type)) => {
@@ -1980,4 +2028,41 @@ fn callable_property_signature(ty: Type) -> Type {
 
 fn no_lib_array_member(object_type: &Type, ctx: &CheckerContext) -> bool {
     ctx.options.no_lib && matches!(object_type, Type::Array(_))
+}
+
+/// The receiver a method call on a type variable is resolved against. A
+/// member its apparent type (the constraint) lacks is reported there. One it
+/// has is left to the variable: tsc instantiates the constraint's `this` with
+/// the variable (`getTypeWithThisArgument`), which surge cannot, so the call
+/// result stays unknown rather than the constraint's own type.
+pub(crate) fn type_variable_call_receiver(receiver: Type, property_name: &str) -> Type {
+    match type_variable_apparent_type(&receiver) {
+        Some(apparent) if apparent.get_property_access_type(property_name).is_none() => apparent,
+        _ => receiver,
+    }
+}
+
+/// The constraint a type variable of the body being checked is read through,
+/// followed through variables it names. `None` for anything else, or when
+/// the chain ends without a constraint surge models. A union constraint is
+/// narrowed where tsgo reads it (`getNarrowableTypeForReference`), which
+/// surge does not follow, so it answers nothing either.
+pub(crate) fn type_variable_apparent_type(ty: &Type) -> Option<Type> {
+    if !ty.is_type_variable() {
+        return None;
+    }
+    let mut current = ty.clone();
+    for _ in 0..8 {
+        let Type::TypeParameter(parameter) = &current else {
+            return (!current.is_unknown()
+                && !matches!(current, Type::Any)
+                && !matches!(current.peeled(), Type::Union(_)))
+            .then_some(current);
+        };
+        if surge_ts_types::type_variable::deferred_type(parameter).is_some() {
+            return None;
+        }
+        current = surge_ts_types::type_variable::active_constraint(parameter)??;
+    }
+    None
 }

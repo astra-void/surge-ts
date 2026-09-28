@@ -45,7 +45,8 @@ fn is_definitely_falsy(ty: &Type) -> bool {
 /// tsc's `isValidSpreadType`: an object, `object`, `any`, or an instantiable
 /// non-primitive; a union only when every surviving constituent qualifies.
 fn is_valid_spread_type(ty: &Type) -> bool {
-    let Some(ty) = without_definitely_falsy(ty) else {
+    let ty = base_constraint_or_type(ty);
+    let Some(ty) = without_definitely_falsy(&ty) else {
         return false;
     };
     match &ty {
@@ -62,6 +63,48 @@ fn is_valid_spread_type(ty: &Type) -> bool {
         Type::Reference(reference) => is_valid_spread_type(&reference.resolve()),
         Type::Union(union) => union.types().iter().all(is_valid_spread_type),
         _ => false,
+    }
+}
+
+/// `getBaseConstraintOrType`, as `isValidSpreadType` maps a spread through
+/// it: a type variable of the body being checked stands for its constraint,
+/// and an intersection holding one for the intersection of its operands'
+/// constraints, where a variable with none contributes nothing
+/// (`computeBaseConstraint`). `T & undefined` is `undefined` there.
+fn base_constraint_or_type(ty: &Type) -> Type {
+    let constraint_of = |member: &Type| -> Option<Option<Type>> {
+        let Type::TypeParameter(parameter) = member else {
+            return None;
+        };
+        surge_ts_types::type_variable::active_constraint(parameter)
+    };
+    match ty {
+        Type::TypeParameter(_) => match constraint_of(ty) {
+            Some(Some(constraint)) if !constraint.is_type_variable() => constraint,
+            _ => ty.clone(),
+        },
+        Type::Object(object)
+            if object
+                .intersection_operands
+                .as_deref()
+                .is_some_and(|operands| operands.iter().any(|operand| constraint_of(operand).is_some())) =>
+        {
+            let operands = object.intersection_operands.as_deref().unwrap_or_default();
+            let mut falsy = None;
+            for operand in operands {
+                let operand = match constraint_of(operand) {
+                    Some(Some(constraint)) => constraint,
+                    Some(None) => continue,
+                    None => operand.clone(),
+                };
+                if is_definitely_falsy(&operand) {
+                    falsy = Some(operand);
+                }
+            }
+            falsy.unwrap_or_else(|| ty.clone())
+        }
+        Type::Union(union) => surge_ts_types::union_type(union.types().iter().map(base_constraint_or_type).collect()),
+        _ => ty.clone(),
     }
 }
 
@@ -256,6 +299,9 @@ pub(crate) fn is_definitely_not_iterable(ty: &Type, nullish_is_error: bool) -> b
                 // surge's collapsed `Array` heritage does not carry over.
                 && !(object.number_index_type.is_some() && object.get_property("length").is_some())
         }
+        // The lib's async iteration interfaces declare `[Symbol.asyncIterator]`
+        // and inherit no `[Symbol.iterator]`.
+        Type::Reference(_) if is_lib_async_iterable_reference(ty) => true,
         // A declaration file's interface (the lib's `ArrayIterator`, say) can
         // inherit its protocol member through heritage surge does not resolve
         // in full; only a source-declared type is judged.
@@ -276,6 +322,17 @@ pub(crate) fn is_definitely_not_iterable(ty: &Type, nullish_is_error: bool) -> b
 }
 
 const ASYNC_ITERATION_PROTOCOL_MEMBER: &str = "[Symbol.asyncIterator]";
+
+fn is_lib_async_iterable_reference(ty: &Type) -> bool {
+    let Type::Reference(reference) = ty else {
+        return false;
+    };
+    reference.id.split('\u{0}').next().is_some_and(crate::modules::is_declaration_file_name)
+        && matches!(
+            reference.id.rsplit('\u{0}').next(),
+            Some("AsyncIterable" | "AsyncIterableIterator" | "AsyncGenerator" | "AsyncIteratorObject")
+        )
+}
 
 /// tsc's `getIteratedTypeOrElementType` failure for an operand that may be
 /// async or sync iterable: a `for await…of` operand, or a `yield*` operand in
@@ -339,6 +396,7 @@ fn is_definitely_not_async_iterable(ty: &Type, nullish_is_error: bool) -> bool {
                 _ => false,
             }
         }
+        _ if is_lib_async_iterable_reference(ty) => false,
         _ => is_definitely_not_iterable(ty, nullish_is_error),
     }
 }

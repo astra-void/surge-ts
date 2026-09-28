@@ -542,6 +542,7 @@ fn run_single_file_mode(
             strict_property_initialization: no_implicit_any,
             use_unknown_in_catch_variables: no_implicit_any,
             strict_bind_call_apply: no_implicit_any,
+            strict_builtin_iterator_return: no_implicit_any,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,
             no_implicit_override: false,

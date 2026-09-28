@@ -542,7 +542,10 @@ pub(crate) fn register_import_type_namespaces(
         };
         // `typeof import("m")` is the type of the module's symbol, which for
         // an `export =` module is the assigned value (`resolveExternalModuleSymbol`).
+        // A shorthand ambient module's symbol is typed `any`
+        // (`getTypeOfFuncClassEnumModule` on a module without a body).
         let namespace_type = match &export_table.export_assignment_symbol {
+            _ if export_table.shorthand => surge_ts_types::Type::Any,
             Some(assignment) => assignment.ty.clone(),
             None => {
                 let namespace_type = namespace_export_object_type(&export_table);
@@ -1979,6 +1982,15 @@ fn resolve_namespace_import(
                     ctx,
                 );
                 with_synthetic_default_member(namespace_type, default_value.ty.clone())
+            } else if let Some(assigned) = export_table
+                .export_assignment_symbol
+                .as_ref()
+                .filter(|symbol| !matches!(symbol.ty.peeled(), Type::Object(_)))
+            {
+                // `resolveESModuleSymbol`: with no synthetic default the import
+                // is the `export =` target itself, whose value is no namespace
+                // object to surface members from.
+                assigned.ty.clone()
             } else {
                 namespace_type
             };
@@ -1986,10 +1998,10 @@ fn resolve_namespace_import(
             // (absolute, without the source extension) rather than the structural
             // shape. Tag the object with that display form when we know the file.
             let namespace_type = match resolved_index.and_then(|index| program_files.get(index)) {
-                Some(resolved_file) => {
+                Some(resolved_file) if matches!(namespace_type, Type::Object(_)) => {
                     tag_namespace_type_with_module_path(namespace_type, &resolved_file.file_name)
                 }
-                None => namespace_type,
+                _ => namespace_type,
             };
             (namespace_type, Some(export_table), scope, resolved_index)
         } else {

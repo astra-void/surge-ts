@@ -371,21 +371,123 @@ fn distribute_reference_unions() -> bool {
 }
 
 pub(crate) fn merge_intersection_members(members: Vec<Type>) -> Type {
-    let variables: Vec<Type> = members.iter().filter(|ty| ty.is_type_variable()).cloned().collect();
-    let merged = merge_intersection_member_types(members);
+    let mut variables: Vec<Type> = Vec::new();
+    for member in members.iter().filter(|ty| ty.is_type_variable()) {
+        if !variables.contains(member) {
+            variables.push(member.clone());
+        }
+    }
     if variables.is_empty() {
-        return merged;
+        return merge_intersection_member_types(members);
+    }
+    let mut others: Vec<Type> = members
+        .iter()
+        .filter(|ty| !ty.is_type_variable() && !matches!(ty, Type::GenuineUnknown))
+        .cloned()
+        .collect();
+    // `getIntersectionType` removes an empty anonymous object type from an
+    // intersection holding an object type — a generic mapped or tuple type is
+    // one, where a type parameter is not (`T & {}` stays).
+    if variables.iter().any(is_generic_object_type)
+        && let Some(index) = others.iter().position(is_empty_anonymous_object_type)
+    {
+        others.remove(index);
+    }
+    if others.is_empty() {
+        return match <[Type; 1]>::try_from(variables) {
+            Ok([variable]) => variable,
+            Err(variables) => surge_ts_types::type_variable::type_variable_intersection(variables),
+        };
+    }
+    if !others.iter().any(Type::is_unmodelled)
+        && let Some(kept) = with_type_variable_operands(&merge_intersection_member_types(others), &variables)
+    {
+        return kept;
     }
     // The merge drops a type variable operand like an unmodelled one; the
     // relation still needs it (`T & {}` is assignable to `T`), so it is kept
     // beside the merged members.
-    match merged {
+    match merge_intersection_member_types(members) {
         Type::Object(object) => {
             let mut operands: Vec<Type> = object.intersection_operands.as_deref().unwrap_or_default().to_vec();
             operands.extend(variables);
             Type::Object(object.with_intersection_marker().with_intersection_operands(operands))
         }
         other => other,
+    }
+}
+
+fn is_generic_object_type(ty: &Type) -> bool {
+    use surge_ts_types::type_variable as tv;
+    tv::mapped_type(ty).is_some()
+        || tv::mapped_generic_type(ty).is_some()
+        || tv::mapped_constant_type(ty).is_some()
+        || tv::generic_tuple(ty).is_some()
+}
+
+fn is_empty_anonymous_object_type(ty: &Type) -> bool {
+    matches!(ty, Type::Object(object)
+        if object.properties.is_empty()
+            && object.string_index_type.is_none()
+            && object.number_index_type.is_none()
+            && object.call_signature().is_none()
+            && object.construct_signature().is_none()
+            && !object.non_primitive
+            && !object.is_intersection)
+}
+
+/// `merged & variables` kept generic, as tsc's `getIntersectionType` keeps it,
+/// with a union distributed over (`T & (A | B)` is `(T & A) | (T & B)`). An
+/// object with members stays merged and open, since the variables' members
+/// are not enumerated. `None` for an operand kind surge relates only merged.
+fn with_type_variable_operands(merged: &Type, variables: &[Type]) -> Option<Type> {
+    let narrowed = |operand: &Type| {
+        let mut operands = variables.to_vec();
+        operands.push(operand.clone());
+        surge_ts_types::type_variable::type_variable_intersection(operands)
+    };
+    match merged {
+        Type::Never => Some(Type::Never),
+        Type::Union(union) => {
+            let arms: Option<Vec<Type>> = union
+                .types()
+                .iter()
+                .map(|member| with_type_variable_operands(member, variables))
+                .collect();
+            Some(surge_ts_types::union_type(arms?))
+        }
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::Symbol
+        | Type::Null
+        | Type::Undefined
+        | Type::Void
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_) => Some(narrowed(merged)),
+        Type::Object(object)
+            if object.properties.is_empty()
+                && object.string_index_type.is_none()
+                && object.number_index_type.is_none()
+                && object.call_signature.is_none()
+                && object.construct_signature.is_none()
+                && !object.is_intersection =>
+        {
+            Some(narrowed(merged))
+        }
+        Type::Object(object) if !object.is_intersection || object.intersection_operands.is_none() => {
+            let mut object = object.clone();
+            if object.string_index_type.is_none() {
+                object = object.with_open_index_marker();
+                object.string_index_type = Some(std::sync::Arc::new(Type::Any));
+            }
+            Some(Type::Object(
+                object.with_intersection_marker().with_intersection_operands(variables.to_vec()),
+            ))
+        }
+        _ => None,
     }
 }
 
@@ -875,6 +977,23 @@ fn merge_intersection_members_now(
             })
             .map(std::sync::Arc::new);
         let mut construct_signature: Option<std::sync::Arc<surge_ts_types::FunctionType>> = None;
+        // checker.go `isDiscriminantWithNeverType`: a required property two
+        // operands declare with differing types, one with a literal part and
+        // none `never`, whose types intersect to `never` makes the whole
+        // intersection `never` (`getReducedType`). Each operand contributes its
+        // property's read type (`getTypeOfSymbol`), which for an optional one
+        // includes `undefined`.
+        let mut shared_property_types: Vec<(std::sync::Arc<str>, Vec<Type>)> = Vec::new();
+        let read_type = |property: &surge_ts_types::ObjectProperty| {
+            if property.is_optional()
+                && surge_ts_types::strict_null_checks()
+                && !surge_ts_types::exact_optional_property_types()
+            {
+                surge_ts_types::union_type(vec![property.ty.clone(), Type::Undefined])
+            } else {
+                property.ty.clone()
+            }
+        };
 
         for object in &object_members {
             for (name, property) in object.properties.iter() {
@@ -886,6 +1005,11 @@ fn merge_intersection_members_now(
                 // unnarrowed union.
                 match properties.get(name) {
                     Some(existing) => {
+                        match shared_property_types.iter_mut().find(|(shared, _)| shared == name) {
+                            Some((_, types)) => types.push(read_type(property)),
+                            None => shared_property_types
+                                .push((name.clone(), vec![read_type(existing), read_type(property)])),
+                        }
                         let merged_property = surge_ts_types::ObjectProperty {
                             ty: merge_intersection_members(vec![
                                 existing.ty.clone(),
@@ -921,6 +1045,15 @@ fn merge_intersection_members_now(
                     None => std::sync::Arc::new(object_call_signature.clone()),
                 });
             }
+        }
+        if shared_property_types.into_iter().any(|(name, types)| {
+            properties.get(&name).is_some_and(|property| !property.is_optional())
+                && types.iter().any(has_literal_part)
+                && types.iter().any(|ty| *ty != types[0])
+                && !types.iter().any(|ty| matches!(ty, Type::Never))
+                && matches!(merge_intersection_members(types), Type::Never)
+        }) {
+            return Type::Never;
         }
         let constructors: Vec<&surge_ts_types::FunctionType> = object_members
             .iter()
@@ -991,6 +1124,30 @@ fn merge_intersection_members_now(
     }
 }
 
+/// checker.go `CheckFlagsHasLiteralPart`: `isLiteralType` (a unit type,
+/// `boolean`, or a union of units) or a unique symbol.
+fn has_literal_part(ty: &Type) -> bool {
+    fn is_unit(ty: &Type) -> bool {
+        match ty {
+            Type::StringLiteral(_)
+            | Type::NumberLiteral(_)
+            | Type::BooleanLiteral(_)
+            | Type::Undefined
+            | Type::Null
+            | Type::Void => true,
+            Type::Reference(reference) => {
+                reference.is_unique_symbol() || (reference.enum_owner.is_some() && is_unit(&reference.resolve()))
+            }
+            _ => false,
+        }
+    }
+    match ty {
+        Type::Boolean => true,
+        Type::Union(union) => union.types().iter().all(is_unit),
+        other => is_unit(other),
+    }
+}
+
 /// tsc's `TypeFlagsDisjointDomains` partition (types.go:494), for the operands
 /// surge models as primitives. Object types belong to no domain: `string & {…}`
 /// is a brand, not `never`.
@@ -1002,6 +1159,8 @@ fn primitive_domain(ty: &Type) -> Option<u8> {
         Type::Boolean | Type::BooleanLiteral(_) => Some(3),
         Type::Symbol => Some(4),
         Type::Void | Type::Undefined => Some(5),
+        // The `object` keyword (`TypeFlagsNonPrimitive`).
+        Type::Object(object) if object.non_primitive && !object.is_intersection => Some(6),
         _ => None,
     }
 }

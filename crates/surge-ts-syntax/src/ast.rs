@@ -57,6 +57,9 @@ pub struct ParsedSource {
     /// deduplicated: tsc resolves each one as it checks it and reports an
     /// unresolved module at that literal.
     pub import_calls: Vec<ParsedImportCall>,
+    /// Every top-level import or export declaration's `with { … }` clause,
+    /// in source order (tsc's `checkImportAttributes`).
+    pub import_attributes: Vec<ParsedImportAttributes>,
     /// Grammar-level findings collected in one walk of the full oxc AST (see
     /// `parser::grammar`): a `const` with no initializer, a duplicate
     /// object-literal key, an overload group with no implementation, a member
@@ -87,6 +90,16 @@ pub struct ParsedSource {
     pub json_module_type: Option<ParsedType>,
     /// See [`JsxFactoryUses`].
     pub jsx_factory_uses: JsxFactoryUses,
+}
+
+/// One [`ParsedSource::import_attributes`] entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedImportAttributes {
+    /// The clause, `with` keyword included: where tsc reports it.
+    pub span: TextSpan,
+    pub attributes: Vec<(String, ParsedExpression)>,
+    /// `import type`/`export type` as a whole.
+    pub type_only: bool,
 }
 
 /// One [`ParsedSource::import_calls`] entry.
@@ -917,6 +930,10 @@ pub struct ParsedTypeAliasDeclaration {
     /// Whether that `enum` was a `const enum`, which has no runtime binding to
     /// be used before its declaration.
     pub enum_is_const: bool,
+    /// On an enum's own alias: each member's name and lowered type, in
+    /// declaration order across merged declarations. tsc relates two enums
+    /// member by member (`isEnumTypeRelatedTo`).
+    pub enum_members: Vec<(String, ParsedType)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1469,6 +1486,9 @@ pub struct ParsedObjectType {
     /// The name tsc displays the type by when it is not a written literal —
     /// `typeof E` for an enum's object.
     pub display_name: Option<String>,
+    /// The construct signature is `abstract new (…) => T`
+    /// (`SignatureFlagsAbstract`).
+    pub abstract_construct_signature: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1770,6 +1790,22 @@ pub enum ParsedExpression {
         /// The rest binding's name, where a source that is not an object type
         /// is reported (TS2700).
         name_span: Option<TextSpan>,
+    },
+    /// Element `index` of an array destructuring assignment's `source`
+    /// (`[a, ...rest] = source`), synthesized by the lowering. tsc reads an
+    /// array-like source by index, which `read` is, and any other source
+    /// through its iteration protocol; a rest element takes the rest of a
+    /// tuple or an array of the element type
+    /// (`checkArrayLiteralDestructuringElementAssignment`).
+    ArrayPatternElement {
+        source: Box<ParsedExpression>,
+        source_span: Option<TextSpan>,
+        index: usize,
+        rest: bool,
+        /// An array literal `source` is contextually typed by a tuple-like
+        /// pattern, and so is a tuple of its elements' widened types.
+        tuple_literal: bool,
+        read: Box<ParsedExpression>,
     },
     /// The strings array a tagged template passes as its tag's first argument
     /// (`getEffectiveCallArguments`): a value of the global
@@ -2296,6 +2332,9 @@ pub struct ParsedWhileStatement {
     /// (c)`, or a `while (true)`. Assignments the body makes are definite
     /// afterwards, and the condition may read what the body assigned.
     pub runs_at_least_once: bool,
+    /// A lowered `for`: `body[0]` is the loop body and the rest its update
+    /// clause, which a `continue` in the body reaches too.
+    pub has_update: bool,
 }
 
 /// How a `for…of`/`for…in` head binds its name. A `var` outlives the loop and
@@ -2705,6 +2744,7 @@ impl ParsedExpression {
                 }
             }
             ParsedExpression::ObjectRest { source, .. } => visit(source),
+            ParsedExpression::ArrayPatternElement { read, .. } => visit(read),
             ParsedExpression::ImportCall { specifier, options, .. } => {
                 visit(specifier);
                 if let Some(options) = options {

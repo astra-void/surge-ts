@@ -1,7 +1,7 @@
 use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{
-    ParsedExpression, ParsedForOfStatement, ParsedIfStatement, ParsedSwitchStatement,
-    ParsedTryStatement, ParsedWhileStatement,
+    ParsedExpression, ParsedForOfStatement, ParsedFunctionBodyStatement, ParsedIfStatement,
+    ParsedSwitchStatement, ParsedTryStatement, ParsedWhileStatement,
 };
 use surge_ts_types::{Type, TypeCopyReason, union_type, with_type_copy_reason};
 
@@ -346,6 +346,82 @@ pub(crate) fn check_function_if_statement(
     }
 }
 
+/// The edges `continue` statements take to the innermost loop's update
+/// clause. A loop with no update clause is a barrier: its own `continue`s go
+/// nowhere this tracks.
+struct ContinueTarget;
+
+type ContinueEdges = Option<(Vec<String>, Vec<Vec<(String, Type)>>)>;
+
+thread_local! {
+    static CONTINUE_TARGETS: std::cell::RefCell<Vec<ContinueEdges>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl ContinueTarget {
+    fn enter() -> Self {
+        CONTINUE_TARGETS.with(|targets| targets.borrow_mut().push(None));
+        ContinueTarget
+    }
+}
+
+impl Drop for ContinueTarget {
+    fn drop(&mut self) {
+        CONTINUE_TARGETS.with(|targets| {
+            targets.borrow_mut().pop();
+        });
+    }
+}
+
+/// A `continue` reaching the innermost loop's update clause carries what the
+/// bindings the loop body assigns hold here.
+pub(crate) fn record_continue_edge(scopes: &ScopeStack) {
+    CONTINUE_TARGETS.with(|targets| {
+        if let Some(Some((names, edges))) = targets.borrow_mut().last_mut() {
+            edges.push(branch_assignment_types(names, scopes));
+        }
+    });
+}
+
+/// The body of a lowered `for` runs into its update clause from its end and
+/// from every `continue` (tsc binds `continue` to the incrementor label).
+fn check_loop_body(
+    mut body: Vec<ParsedFunctionBodyStatement>,
+    has_update: bool,
+    return_type: Option<&Type>,
+    scopes: &mut ScopeStack,
+    flow_state: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    if !has_update || body.is_empty() {
+        check_function_body(body, return_type, scopes, flow_state, ctx);
+        return;
+    }
+    let update = body.split_off(1);
+    let names = loop_join_names(&body);
+    let body_flow = analyze_function_body_flow(&body);
+    CONTINUE_TARGETS.with(|targets| {
+        if let Some(top) = targets.borrow_mut().last_mut() {
+            *top = Some((names.clone(), Vec::new()));
+        }
+    });
+    check_function_body(body, return_type, scopes, flow_state, ctx);
+    let mut edges = CONTINUE_TARGETS.with(|targets| {
+        targets
+            .borrow_mut()
+            .last_mut()
+            .and_then(Option::take)
+            .map(|(_, edges)| edges)
+            .unwrap_or_default()
+    });
+    if !edges.is_empty() {
+        if !body_flow.guarantees_exit && !body_flow.guarantees_value_return {
+            edges.push(branch_assignment_types(&names, scopes));
+        }
+        join_branch_edges(&edges, scopes);
+    }
+    check_function_body(update, return_type, scopes, flow_state, ctx);
+}
+
 pub(crate) fn check_function_while_statement(
     while_statement: ParsedWhileStatement,
     statement_index: usize,
@@ -359,7 +435,9 @@ pub(crate) fn check_function_while_statement(
         condition_span,
         body,
         runs_at_least_once,
+        has_update,
     } = while_statement;
+    let _barrier = ContinueTarget::enter();
 
     // A lowered `do … while (c)` runs its body first, so the body is checked
     // with the enclosing flow state (its assignments stand afterwards) and the
@@ -372,7 +450,7 @@ pub(crate) fn check_function_while_statement(
     if runs_at_least_once {
         scopes.push_child();
         let pending_mutations = prime_loop_mutations(&body, scopes, ctx);
-        check_function_body(body, return_type, scopes, flow_state, ctx);
+        check_loop_body(body, has_update, return_type, scopes, flow_state, ctx);
         release_loop_mutations(pending_mutations, scopes, ctx);
         let body_types = branch_assignment_types(&assigned, scopes);
         scopes.pop_child();
@@ -430,10 +508,10 @@ pub(crate) fn check_function_while_statement(
     if flow_state.tracked_local_count() > 0 {
         flow_state.begin_branch_capture();
         mark_condition_true_assignments(&condition, flow_state);
-        check_function_body(body, return_type, scopes, flow_state, ctx);
+        check_loop_body(body, has_update, return_type, scopes, flow_state, ctx);
         let _ = flow_state.finish_branch_capture();
     } else {
-        check_function_body(body, return_type, scopes, flow_state, ctx);
+        check_loop_body(body, has_update, return_type, scopes, flow_state, ctx);
     }
     release_loop_mutations(pending_mutations, scopes, ctx);
     let body_types = branch_assignment_types(&assigned, scopes);
@@ -475,6 +553,7 @@ pub(crate) fn check_function_for_of_statement(
     flow_state: &mut FunctionFlowState,
     ctx: &mut CheckerContext,
 ) {
+    let _barrier = ContinueTarget::enter();
     let flow_active = flow_state.tracked_local_count() > 0;
     let head = crate::flow::for_head_initializing(&for_of_statement);
     let iterable_blocked = if flow_active || !head.is_empty() {
@@ -659,12 +738,15 @@ pub(crate) fn check_function_for_of_statement(
                 ctx,
             );
             if let InferredExpression::Known(iterable_type) = iterable_type {
-                element_type = for_of_element_type(&iterable_type);
+                element_type = if for_of_statement.is_await {
+                    for_await_element_type(&iterable_type, ctx)
+                } else {
+                    for_of_element_type(&iterable_type)
+                };
             }
             // `checkForOfStatement`: a head naming an existing binding is
             // assigned each iterated value, which must fit its declared type.
-            if !for_of_statement.is_await
-                && for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::ExistingBinding
+            if for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::ExistingBinding
                 && let surge_ts_syntax::ParsedBindingName::Identifier {
                     name,
                     span: Some(span),
@@ -969,6 +1051,8 @@ pub(crate) fn for_of_element_type(iterable_type: &Type) -> Type {
         Type::Reference(reference) => {
             if let Some(element) = iterable_reference_element_type(reference) {
                 element
+            } else if let Some(types) = structural_iteration_types(iterable_type) {
+                types.yield_type
             } else {
                 // A non-collection reference may still be a structural iterable
                 // (an array alias, a tuple alias). Peel once and re-derive; the
@@ -980,8 +1064,32 @@ pub(crate) fn for_of_element_type(iterable_type: &Type) -> Type {
                 }
             }
         }
+        Type::Object(_) => structural_iteration_types(iterable_type)
+            .map(|types| types.yield_type)
+            .unwrap_or(Type::Unknown),
         _ => Type::Unknown,
     }
+}
+
+/// `checkForOfStatement` for `for await`: the async iteration protocol first,
+/// then the sync one with its values awaited.
+fn for_await_element_type(iterable_type: &Type, ctx: &CheckerContext) -> Type {
+    let usage = crate::checks::expr::IterationUse::for_await(ctx.options.strict_builtin_iterator_return);
+    match crate::checks::expr::iteration_types_of_iterable(iterable_type, usage) {
+        Some(types) if !types.yield_type.is_unmodelled() => types.yield_type,
+        _ => crate::checks::call::awaited_type(&for_of_element_type(iterable_type)),
+    }
+}
+
+/// The iteration types of an operand the nominal fast paths above do not
+/// name. Only the yield type is read here, which the `BuiltinIteratorReturn`
+/// setting does not affect.
+fn structural_iteration_types(iterable_type: &Type) -> Option<crate::checks::expr::IterationTypes> {
+    crate::checks::expr::iteration_types_of_iterable(
+        iterable_type,
+        crate::checks::expr::IterationUse::sync(false),
+    )
+    .filter(|types| !types.yield_type.is_unmodelled())
 }
 
 /// The element type a `for…of` binds when iterating a known lib collection or
@@ -1255,7 +1363,14 @@ pub(crate) fn check_function_switch_statement(
         })
         .collect();
     let mut edges = Vec::new();
-    if !has_default && !assigned.is_empty() {
+    // The implicit `default` edge carries nothing past an exhaustive `switch`
+    // (`getTypeAtFlowBranchLabel`'s `bypassFlow`).
+    if !has_default
+        && !assigned.is_empty()
+        && !case_literals.as_deref().is_some_and(|literals| {
+            switch_covers_discriminant(&switch_statement.discriminant, literals, scopes, ctx)
+        })
+    {
         edges.push(branch_assignment_types(&assigned, scopes));
     }
     // A case is entered from the `switch` itself, and from the case before it
@@ -1500,6 +1615,50 @@ fn record_non_exhaustive_switch(
     } else {
         ctx.exhaustive_switches.push((span.start, span.end));
     }
+}
+
+/// `computeExhaustiveSwitchStatement` for a discriminant of a literal type:
+/// every member of it is named by a case. Anything surge cannot type as such
+/// is left not exhaustive.
+fn switch_covers_discriminant(
+    discriminant: &ParsedExpression,
+    case_literals: &[Type],
+    scopes: &ScopeStack,
+    ctx: &mut CheckerContext,
+) -> bool {
+    if matches!(
+        discriminant,
+        ParsedExpression::Unary { operator: surge_ts_syntax::ParsedUnaryOperator::Typeof, .. }
+    ) {
+        return false;
+    }
+    let diagnostics_before = ctx.diagnostics().len();
+    let inferred = crate::infer::infer_expression(discriminant, &visible_symbols(scopes), ctx);
+    ctx.truncate_diagnostics(diagnostics_before);
+    let InferredExpression::Known(discriminant_type) = inferred else {
+        return false;
+    };
+    let peeled = discriminant_type.peeled();
+    let members: &[Type] = match &peeled {
+        Type::Union(union) => union.types(),
+        other => std::slice::from_ref(other),
+    };
+    let mut units = Vec::with_capacity(members.len());
+    for member in members {
+        match member {
+            Type::Boolean => {
+                units.push(Type::BooleanLiteral(true));
+                units.push(Type::BooleanLiteral(false));
+            }
+            Type::StringLiteral(_)
+            | Type::NumberLiteral(_)
+            | Type::BooleanLiteral(_)
+            | Type::Null
+            | Type::Undefined => units.push(member.clone()),
+            _ => return false,
+        }
+    }
+    !units.is_empty() && units.iter().all(|unit| case_literals.contains(unit))
 }
 
 /// The literal each case tests — written, or the unit type of a `const` it

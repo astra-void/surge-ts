@@ -682,6 +682,7 @@ impl Project {
             esm_module_files,
             strict_null_checks: loaded.compiler_options.strict_null_checks,
             strict_bind_call_apply: loaded.compiler_options.strict_bind_call_apply,
+            strict_builtin_iterator_return: loaded.compiler_options.strict_builtin_iterator_return,
             strict_property_initialization: loaded
                 .compiler_options
                 .strict_property_initialization,

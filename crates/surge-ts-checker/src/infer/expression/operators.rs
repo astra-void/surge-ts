@@ -59,37 +59,34 @@ pub(crate) fn infer_unary_expression(
         ParsedUnaryOperator::Typeof => InferredExpression::Known(typeof_result_type()),
         ParsedUnaryOperator::Delete => InferredExpression::Known(Type::Boolean),
         ParsedUnaryOperator::Void => InferredExpression::Known(Type::Undefined),
+        // checker.go `checkPrefixUnaryExpression`: `+x` is always `number`;
+        // `-x` and `~x` are `getUnaryResultType`, `bigint` for a `bigint`
+        // operand and `number | bigint` for one that may be either.
         ParsedUnaryOperator::Plus | ParsedUnaryOperator::Minus | ParsedUnaryOperator::BitwiseNot => match operand_type {
-            InferredExpression::Known(Type::Any) => InferredExpression::Known(Type::Number),
-            InferredExpression::Known(ty) if matches!(ty.base_primitive(), Some(Type::Number)) => {
-                InferredExpression::Known(Type::Number)
-            }
-            InferredExpression::Known(Type::Unknown)
-            | InferredExpression::Known(Type::ErrorType)
-            | InferredExpression::Known(Type::GenuineUnknown)
-            | InferredExpression::Known(Type::TypeParameter(_))
+            InferredExpression::Known(Type::Unknown | Type::ErrorType)
             | InferredExpression::UnresolvedIdentifier { .. }
             | InferredExpression::MissingProperty { .. }
-            | InferredExpression::Unknown
-            | InferredExpression::Known(Type::Undefined)
-            | InferredExpression::Known(Type::Null)
-            | InferredExpression::Known(Type::Void)
-            | InferredExpression::Known(Type::String)
-            | InferredExpression::Known(Type::Number)
-            | InferredExpression::Known(Type::Boolean)
-            | InferredExpression::Known(Type::BigInt)
-            | InferredExpression::Known(Type::Symbol)
-            | InferredExpression::Known(Type::StringLiteral(_))
-            | InferredExpression::Known(Type::NumberLiteral(_))
-            | InferredExpression::Known(Type::BooleanLiteral(_))
-            | InferredExpression::Known(Type::Object(_))
-            | InferredExpression::Known(Type::Array(_))
-            | InferredExpression::Known(Type::Tuple(_))
-            | InferredExpression::Known(Type::OpenTuple(_))
-            | InferredExpression::Known(Type::Function(_))
-            | InferredExpression::Known(Type::Never)
-            | InferredExpression::Known(Type::Reference(_))
-            | InferredExpression::Known(Type::Union(_)) => InferredExpression::Unknown,
+            | InferredExpression::Unknown => InferredExpression::Unknown,
+            InferredExpression::Known(_) if matches!(operator, ParsedUnaryOperator::Plus) => {
+                InferredExpression::Known(Type::Number)
+            }
+            InferredExpression::Known(ty) => {
+                let peeled = ty.peeled();
+                let bigint_like = |member: &Type| matches!(member, Type::BigInt);
+                let number_like = |member: &Type| matches!(member.base_primitive(), Some(Type::Number));
+                let (has_bigint, has_number) = match &peeled {
+                    Type::Union(union) => (
+                        union.types().iter().any(bigint_like),
+                        union.types().iter().any(number_like),
+                    ),
+                    other => (bigint_like(other), false),
+                };
+                InferredExpression::Known(match (has_bigint, has_number || matches!(peeled, Type::Any | Type::GenuineUnknown)) {
+                    (false, _) => Type::Number,
+                    (true, false) => Type::BigInt,
+                    (true, true) => surge_ts_types::union_type(vec![Type::Number, Type::BigInt]),
+                })
+            }
         },
     }
 }
@@ -115,31 +112,7 @@ pub(crate) fn infer_logical_expression(
         None => infer_expression(right, symbols, ctx),
     };
 
-    match (left_type, right_type) {
-        (InferredExpression::Known(left_ty), InferredExpression::Known(right_ty))
-            if !left_ty.is_unknown() && !right_ty.is_unknown() =>
-        {
-            // `a || b` -> `truthy(a) | b`; `a && b` -> `falsy(a) | b`. See
-            // `ops::evaluate_logical_expression`.
-            let result = match operator {
-                surge_ts_syntax::ParsedLogicalOperator::Or => {
-                    if matches!(falsy_part(&left_ty), Type::Never) {
-                        left_ty
-                    } else {
-                        union_type(vec![truthy_part(&left_ty), right_ty])
-                    }
-                }
-                // `a && b` is `b` when `a` is truthy and `a` otherwise, so
-                // only `a`'s falsy part survives (`Box | undefined` contributes
-                // `undefined`, `string` contributes `""`).
-                surge_ts_syntax::ParsedLogicalOperator::And => {
-                    union_type(vec![falsy_part(&left_ty), right_ty])
-                }
-            };
-            InferredExpression::Known(result)
-        }
-        _ => InferredExpression::Unknown,
-    }
+    crate::checks::ops::evaluate_logical_expression(operator, left_type, right_type)
 }
 
 pub(crate) fn infer_conditional_expression(
@@ -150,7 +123,7 @@ pub(crate) fn infer_conditional_expression(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     let condition_type = infer_expression(condition, symbols, ctx);
-    if !is_known_non_unknown(&condition_type) {
+    if !matches!(&condition_type, InferredExpression::Known(ty) if !ty.is_unmodelled()) {
         return InferredExpression::Unknown;
     }
 
@@ -315,6 +288,7 @@ pub(crate) fn truthy_part(ty: &Type) -> Type {
         Type::NumberLiteral(literal) if literal.value == "0" => Type::Never,
         Type::Boolean => Type::BooleanLiteral(true),
         Type::Union(union) => union_type(union.types().iter().map(truthy_part).collect()),
+        Type::TypeParameter(_) => surge_ts_types::type_variable::non_nullable_type_variable(ty),
         Type::Reference(reference) if reference.enum_owner.is_none() => match reference.resolve() {
             resolved @ (Type::Union(_) | Type::Boolean) => truthy_part(&resolved),
             _ => ty.clone(),

@@ -48,6 +48,9 @@ pub(crate) struct TypeAliasInfo {
     /// Whether that enum is a `const enum`, whose object only a string
     /// literal may index (`isConstEnumObjectType`).
     pub(crate) enum_is_const: bool,
+    /// On an enum's own alias, its members' names and lowered types (see
+    /// [`surge_ts_syntax::ParsedTypeAliasDeclaration::enum_members`]).
+    pub(crate) enum_members: Arc<[(String, ParsedType)]>,
     /// Memoized resolution-cache key (canonical file name + declared name).
     /// Built on first request — key construction canonicalizes the path and
     /// allocates, and resolution asks for it millions of times per run. Carried
@@ -82,6 +85,7 @@ impl TypeAliasInfo {
             enum_name: None,
             enum_exported: false,
             enum_is_const: false,
+            enum_members: Arc::from([]),
             cached_resolution_key: std::sync::OnceLock::new(),
             cached_alias_id: std::sync::OnceLock::new(),
         }
@@ -100,6 +104,13 @@ impl TypeAliasInfo {
         self.enum_is_const = is_const;
         self
     }
+
+    pub(crate) fn with_enum_members(mut self, members: &[(String, ParsedType)]) -> Self {
+        if !members.is_empty() {
+            self.enum_members = Arc::from(members);
+        }
+        self
+    }
 }
 
 impl Clone for TypeAliasInfo {
@@ -115,6 +126,7 @@ impl Clone for TypeAliasInfo {
             enum_name: self.enum_name.clone(),
             enum_exported: self.enum_exported,
             enum_is_const: self.enum_is_const,
+            enum_members: self.enum_members.clone(),
             cached_resolution_key: self.cached_resolution_key.clone(),
             cached_alias_id: self.cached_alias_id.clone(),
         }
@@ -399,33 +411,52 @@ impl TypeDeclarationInfo {
     ///
     /// An unannotated parameter a `-?` mapping names in its key constraint
     /// measures `Unmeasurable`: `mappedTypeRelatedTo` instantiates that
-    /// constraint with `reportUnmeasurableMapper` for such a source.
+    /// constraint with `reportUnmeasurableMapper` for such a source, and with
+    /// `reportUnreliableMapper` otherwise. It relates the target's constraint
+    /// to the source's and the source's template to the target's, so a
+    /// parameter that is the whole constraint of a mapping without an `as`
+    /// clause measures contravariant (and unreliable), and one that is the
+    /// whole template covariant.
     pub(crate) fn declared_variances(&self) -> u32 {
-        let (type_parameters, required_mapping) = match self {
+        let (type_parameters, mapping) = match self {
             Self::Alias(info) => match &info.body.ty {
                 ParsedType::Object(_) | ParsedType::Function(_) => (&info.body.type_parameters, None),
-                ParsedType::Mapped(mapped) => (
-                    &info.body.type_parameters,
-                    matches!(mapped.optional, surge_ts_syntax::MappedOptionality::Remove).then_some(mapped),
-                ),
+                ParsedType::Mapped(mapped) => (&info.body.type_parameters, Some(mapped)),
                 _ => return 0,
             },
             Self::Interface(info) => (&info.body.type_parameters, None),
         };
-        let names_in_key_constraint = |name: &str| {
-            required_mapping.is_some_and(|mapped| {
-                let mut named = false;
-                mapped.constraint.for_each_named_type(&mut |reference| {
-                    named |= reference.name == name && reference.type_arguments.is_empty();
-                });
-                named
-            })
+        let names = |ty: &ParsedType, name: &str| {
+            let mut named = false;
+            ty.for_each_named_type(&mut |reference| {
+                named |= reference.name == name && reference.type_arguments.is_empty();
+            });
+            named
+        };
+        let is_bare = |ty: &ParsedType, name: &str| {
+            matches!(ty, ParsedType::Named(reference) if reference.name == name && reference.type_arguments.is_empty())
+        };
+        let measured = |name: &str| {
+            let mapped = mapping?;
+            let in_constraint = names(&mapped.constraint, name);
+            if matches!(mapped.optional, surge_ts_syntax::MappedOptionality::Remove) && in_constraint {
+                return Some(surge_ts_types::DeclaredVariance::Unmeasurable);
+            }
+            if mapped.name_type.is_some() {
+                return None;
+            }
+            let in_template = names(&mapped.value_type, name);
+            if is_bare(&mapped.constraint, name) && !in_template {
+                Some(surge_ts_types::DeclaredVariance::UnreliableContravariant)
+            } else if is_bare(&mapped.value_type, name) && !in_constraint {
+                Some(surge_ts_types::DeclaredVariance::Covariant)
+            } else {
+                None
+            }
         };
         surge_ts_types::declared_variances(type_parameters.iter().map(|parameter| {
-            surge_ts_types::DeclaredVariance::annotated(parameter.is_in, parameter.is_out).or_else(|| {
-                names_in_key_constraint(parameter.name.as_str())
-                    .then_some(surge_ts_types::DeclaredVariance::Unmeasurable)
-            })
+            surge_ts_types::DeclaredVariance::annotated(parameter.is_in, parameter.is_out)
+                .or_else(|| measured(parameter.name.as_str()))
         }))
     }
 }

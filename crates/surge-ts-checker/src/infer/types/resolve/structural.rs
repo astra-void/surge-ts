@@ -16,8 +16,18 @@ pub(crate) fn resolve_tuple_type(
     let mut resolved_elements = Vec::new();
     let mut had_error = false;
     let min_length = ParsedType::tuple_min_length(&elements);
+    // Under `exactOptionalPropertyTypes` an optional element's type is the
+    // written one (tsc adds `missing`, not `undefined`); the recorded
+    // `minLength` keeps it optional.
+    let exact_optional = surge_ts_types::strict_null_checks() && surge_ts_types::exact_optional_property_types();
 
     for element in elements {
+        let element = match element {
+            ParsedType::Union(members) if exact_optional && members.len() == 2 && matches!(members[0], ParsedType::Undefined) => {
+                members[1].clone()
+            }
+            other => other,
+        };
         let resolved_element = resolve_parsed_type(element, ctx, resolving, substitution);
         had_error |= resolved_element.had_error;
         resolved_elements.push(resolved_element.ty);
@@ -56,6 +66,9 @@ impl surge_ts_types::ResolveReference for ReadonlyShape {
 /// else (a degraded operand, a union the operator was written over in error)
 /// is returned unchanged so no new degradation is introduced.
 pub(crate) fn readonly_reference(ty: Type) -> Type {
+    if let Some(readonly) = surge_ts_types::type_variable::readonly_generic_tuple(&ty) {
+        return readonly;
+    }
     match ty {
         Type::Reference(ref reference) if reference.is_readonly_array() => ty,
         _ if matches!(ty, Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)) || surge_ts_types::is_written_tuple(&ty) => {
@@ -105,6 +118,9 @@ pub(crate) fn resolve_variadic_tuple_type(
         resolved.push((is_rest, resolved_element.ty));
     }
 
+    if let Some(generic) = generic_tuple_from_operands(&resolved) {
+        return ResolvedType { ty: generic, had_error };
+    }
     if let Some(members) = splice_spread_operands(&resolved) {
         return ResolvedType {
             ty: Type::Tuple(members),
@@ -115,6 +131,27 @@ pub(crate) fn resolve_variadic_tuple_type(
         ty: open_tuple_from_operands(&resolved).unwrap_or(Type::Unknown),
         had_error,
     }
+}
+
+/// A tuple spreading a type variable of the body being checked stays generic
+/// (`createNormalizedTupleType` keeps a variadic element over a generic
+/// type); the other spreads contribute their elements.
+fn generic_tuple_from_operands(elements: &[(bool, Type)]) -> Option<Type> {
+    use surge_ts_types::type_variable::TupleElementKind;
+    if !elements.iter().any(|(is_rest, ty)| *is_rest && ty.is_type_variable()) {
+        return None;
+    }
+    let mut tuple = Vec::with_capacity(elements.len());
+    for (is_rest, ty) in elements {
+        if !*is_rest {
+            tuple.push((TupleElementKind::Required, ty.clone()));
+        } else if ty.is_type_variable() {
+            tuple.push((TupleElementKind::Variadic, ty.clone()));
+        } else {
+            tuple.extend(surge_ts_types::type_variable::spread_elements(ty)?);
+        }
+    }
+    surge_ts_types::type_variable::generic_tuple_variable(tuple, false)
 }
 
 /// tsc's `isArrayLikeType`: an array, or a non-nullable type assignable to
@@ -221,6 +258,106 @@ fn spread_operand_members(ty: &Type) -> Option<Vec<Type>> {
     }
 }
 
+/// checker.go `getTypePredicateOfSignature` for a written predicate return,
+/// its type produced by `resolve_type`. Its type's own diagnostics belong to
+/// the return annotation's resolution.
+pub(crate) fn written_type_predicate(
+    return_type: &ParsedType,
+    value_parameter_names: impl Iterator<Item = Option<String>>,
+    ctx: &mut CheckerContext,
+    resolve_type: impl FnOnce(&ParsedType, &mut CheckerContext) -> Type,
+) -> Option<surge_ts_types::TypePredicate> {
+    use surge_ts_types::TypePredicateKind;
+    let ParsedType::Predicate(predicate) = return_type else {
+        return None;
+    };
+    let this_predicate = predicate.parameter_name == "this";
+    let kind = match (this_predicate, predicate.asserts) {
+        (true, false) => TypePredicateKind::This,
+        (true, true) => TypePredicateKind::AssertsThis,
+        (false, false) => TypePredicateKind::Identifier,
+        (false, true) => TypePredicateKind::AssertsIdentifier,
+    };
+    let parameter_index = if this_predicate {
+        None
+    } else {
+        let mut names = value_parameter_names;
+        Some(names.position(|name| name.as_deref() == Some(predicate.parameter_name.as_str()))?)
+    };
+    let diagnostics_before = ctx.diagnostics().len();
+    let ty = predicate.ty.as_ref().map(|ty| resolve_type(ty, ctx));
+    ctx.truncate_diagnostics(diagnostics_before);
+    Some(surge_ts_types::TypePredicate { kind, parameter_index, ty })
+}
+
+/// A written predicate's type. Inside another declaration's resolution it is
+/// deferred like a parameter annotation: nothing else resolves it there, and
+/// it often names a class that extends the one being resolved, which would
+/// close a cycle that degrades both.
+fn predicate_type(
+    ty: &ParsedType,
+    return_type: &ParsedType,
+    top_level: bool,
+    substitution: &TypeParameterSubstitution,
+    ctx: &mut CheckerContext,
+) -> Type {
+    if top_level {
+        return resolve_parsed_type(ty.clone(), ctx, &mut Vec::new(), substitution).ty;
+    }
+    let written_at = match return_type {
+        ParsedType::Predicate(predicate) => predicate.type_span.map_or(0, |span| span.start),
+        _ => 0,
+    };
+    // The key is by position, so the written type and the bindings it is
+    // resolved under keep two predicates at one offset apart.
+    let written = {
+        use std::hash::Hasher;
+        let mut hasher = surge_ts_types::fx::FxHasher::default();
+        hasher.write(format!("{ty:?}").as_bytes());
+        hasher.finish()
+    };
+    let name = format!(
+        "type-predicate {written:016x} {:016x}",
+        super::super::cache::member_substitution_fingerprint(substitution)
+    );
+    crate::infer::make_lazy_signature_annotation_reference(
+        ctx,
+        &name,
+        written_at,
+        crate::infer::LazySignatureComponent::TypePredicate,
+        ty.clone(),
+        crate::infer::LazySignatureEnvironment::for_member_substitution(substitution),
+    )
+}
+
+/// relater.go `isInstantiatedGenericParameter` for a signature resolved under
+/// an enclosing declaration's bindings: the value parameters written as one of
+/// its type variables (`set(value: T)`), or an indexed access into one.
+fn instantiated_generic_parameters(
+    function_type: &ParsedFunctionType,
+    substitution: &TypeParameterSubstitution,
+) -> u32 {
+    let is_bound_variable = |ty: &ParsedType| {
+        let mut ty = ty;
+        while let ParsedType::IndexedAccess(access) = ty {
+            ty = &access.object_type;
+        }
+        matches!(ty, ParsedType::Named(named)
+            if named.type_arguments.is_empty()
+                && !function_type.type_parameters.iter().any(|own| own.name == named.name)
+                && substitution.get(&named.name).is_some()
+                && !substitution.is_placeholder(&named.name))
+    };
+    function_type
+        .parameters
+        .iter()
+        .filter(|parameter| !parameter.is_this)
+        .take(32)
+        .enumerate()
+        .filter(|(_, parameter)| is_bound_variable(&parameter.ty))
+        .fold(0, |mask, (index, _)| mask | (1 << index))
+}
+
 pub(crate) fn resolve_function_type(
     function_type: std::sync::Arc<ParsedFunctionType>,
     ctx: &mut CheckerContext,
@@ -263,6 +400,7 @@ pub(crate) fn resolve_function_type(
         .is_some_and(|parameter| parameter.rest);
     let (parameters, return_type, had_error) =
         resolve_signature_types(&function_type, ctx, resolving, &local_substitution);
+    let top_level = resolving.is_empty();
     let mut resolved_function = alloc_function_type(
         parameters,
         return_type,
@@ -272,6 +410,13 @@ pub(crate) fn resolve_function_type(
     .with_parameter_names(written_parameter_names(&value_parameters))
     .with_type_parameter_head(crate::checks::function::type_parameter_head(
         &function_type.type_parameters,
+    ))
+    .with_instantiated_generic_parameters(instantiated_generic_parameters(&function_type, substitution))
+    .with_type_predicate(written_type_predicate(
+        &function_type.return_type,
+        value_parameters.iter().map(|parameter| parameter.name.clone()),
+        ctx,
+        |ty, ctx| predicate_type(ty, &function_type.return_type, top_level, &local_substitution, ctx),
     ));
     // A generic signature's own type parameters are erased above (`T` maps to
     // the sentinel), so a call through the resolved handle could not infer
@@ -507,7 +652,14 @@ pub(crate) fn resolve_function_type_lazy_components(
     );
     had_error |= return_type.had_error;
     let mut resolved_function =
-        alloc_function_type(parameters, return_type.ty, is_variadic, required_parameter_count);
+        alloc_function_type(parameters, return_type.ty, is_variadic, required_parameter_count)
+            .with_instantiated_generic_parameters(instantiated_generic_parameters(&function_type, substitution))
+            .with_type_predicate(written_type_predicate(
+                &function_type.return_type,
+                value_parameters.iter().map(|parameter| parameter.name.clone()),
+                ctx,
+                |ty, ctx| predicate_type(ty, &function_type.return_type, false, &local_substitution, ctx),
+            ));
     if function_type.type_parameters.is_empty() {
         resolved_function = crate::checks::call::declared_without_type_parameters(resolved_function);
     }
@@ -733,7 +885,12 @@ pub(crate) fn resolve_object_type(
                     overloads.push(overload);
                 }
             }
-            resolved_object = resolved_object.with_construct_signature(function_type.with_overloads(overloads));
+            let modifiers = surge_ts_types::ConstructModifiers::new(
+                object_type.abstract_construct_signature,
+                surge_ts_types::ConstructorAccessibility::Public,
+            );
+            resolved_object = resolved_object
+                .with_construct_signature(function_type.with_overloads(overloads).with_construct_modifiers(modifiers));
         }
     }
     ctx.type_literal_member_frames.pop();

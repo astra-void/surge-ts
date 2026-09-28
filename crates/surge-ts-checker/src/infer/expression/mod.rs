@@ -267,6 +267,29 @@ fn infer_expression_unsettled(
         ParsedExpression::Update { operand, .. } => {
             crate::checks::expr::update_result_type(&infer_expression(operand, symbols, ctx))
         }
+        ParsedExpression::ArrayPatternElement {
+            source,
+            index,
+            rest,
+            tuple_literal,
+            read,
+            ..
+        } => {
+            let element = match array_pattern_source_type(source, *tuple_literal, symbols, ctx) {
+                InferredExpression::Known(source_type) => crate::checks::expr::array_pattern_element_type(
+                    &source_type,
+                    *index,
+                    *rest,
+                    ctx.options.strict_builtin_iterator_return,
+                ),
+                _ if *rest => Some(Type::Unknown),
+                _ => None,
+            };
+            match element {
+                Some(element) => InferredExpression::Known(element),
+                None => infer_expression(read, symbols, ctx),
+            }
+        }
         ParsedExpression::ObjectRest {
             source, omitted, ..
         } => match infer_expression(source, symbols, ctx) {
@@ -675,7 +698,16 @@ fn infer_expression_unsettled(
             crate::program::class_expression_type(class_expression, symbols, ctx),
         ),
         ParsedExpression::Instantiation { expression, .. } => infer_expression(expression, symbols, ctx),
-        ParsedExpression::ImportCall { .. } | ParsedExpression::Unknown => InferredExpression::Unknown,
+        ParsedExpression::ImportCall { specifier, .. } => match specifier.as_ref() {
+            ParsedExpression::StringLiteral(specifier) => {
+                match crate::checks::expr::import_call_module_namespace(specifier, ctx) {
+                    Some(namespace) => InferredExpression::Known(crate::checks::call::promise_of(&namespace, ctx)),
+                    None => InferredExpression::Unknown,
+                }
+            }
+            _ => InferredExpression::Unknown,
+        },
+        ParsedExpression::Unknown => InferredExpression::Unknown,
     };
     record_program_timing(ctx.timings.as_ref(), |timings| {
         timings.type_inference += infer_start.elapsed()
@@ -709,10 +741,6 @@ pub(crate) fn tuple_index_value(index_type: &Type) -> Option<usize> {
         }
         _ => None,
     }
-}
-
-fn is_known_non_unknown(result: &InferredExpression) -> bool {
-    matches!(result, InferredExpression::Known(ty) if !ty.is_unknown())
 }
 
 /// tsc's `checkTemplateExpression`: a template whose interpolations all
@@ -793,6 +821,28 @@ pub(crate) fn template_literal_type(
     Type::StringLiteral(text)
 }
 
+/// The type of an element access's argument. A template expression there is
+/// in a template literal context (`isTemplateLiteralContext`), so it has a
+/// template literal type over its spans' types rather than `string`
+/// (`checkTemplateExpression`).
+pub(crate) fn infer_element_access_argument(
+    index: &ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    let ParsedExpression::TemplateLiteral { expressions, quasis, .. } = index else {
+        return infer_expression(index, symbols, ctx);
+    };
+    let evaluated = infer_expression(index, symbols, ctx);
+    if matches!(evaluated, InferredExpression::Known(Type::StringLiteral(_))) {
+        return evaluated;
+    }
+    match template_expression_pattern_type(expressions, quasis, symbols, ctx) {
+        Some(pattern) => InferredExpression::Known(pattern),
+        None => evaluated,
+    }
+}
+
 fn callable_return_without_inference(callee_type: &Type) -> Option<Type> {
     let signature = match callee_type.peeled() {
         Type::Object(object) => object.call_signature()?.clone(),
@@ -801,4 +851,28 @@ fn callable_return_without_inference(callee_type: &Type) -> Option<Type> {
     };
     (signature.overloads().is_none() && signature.type_parameter_names().is_empty())
         .then(|| signature.return_type().clone())
+}
+
+/// The type of an array destructuring assignment's source. An array literal
+/// the pattern contextually types as a tuple is one, of its elements' widened
+/// types (`checkArrayLiteral` under a tuple-like contextual type).
+pub(crate) fn array_pattern_source_type(
+    source: &ParsedExpression,
+    tuple_literal: bool,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    match source {
+        ParsedExpression::ArrayLiteral { elements, .. } if tuple_literal && elements.iter().all(|element| !element.spread) => {
+            let mut types = Vec::with_capacity(elements.len());
+            for element in elements {
+                match infer_expression(&element.expression, symbols, ctx) {
+                    InferredExpression::Known(ty) => types.push(crate::checks::expr::widen_type(&ty)),
+                    _ => return InferredExpression::Unknown,
+                }
+            }
+            InferredExpression::Known(Type::Tuple(types))
+        }
+        _ => infer_expression(source, symbols, ctx),
+    }
 }

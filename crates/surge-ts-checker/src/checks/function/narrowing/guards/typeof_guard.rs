@@ -10,6 +10,19 @@ pub(super) fn typeof_tag_of(member: &Type) -> Option<&'static str> {
     if surge_ts_types::is_global_function_interface(member) {
         return Some("function");
     }
+    // A generic mapped type is an object type without signatures
+    // (`getTypeFacts` gives it `ObjectFacts`).
+    if let Type::TypeParameter(parameter) = member
+        && matches!(
+            surge_ts_types::type_variable::deferred_type(parameter),
+            Some(
+                surge_ts_types::type_variable::DeferredType::Mapped { .. }
+                    | surge_ts_types::type_variable::DeferredType::MappedConstant { .. }
+            )
+        )
+    {
+        return Some("object");
+    }
     match member.peeled() {
         Type::Number | Type::NumberLiteral(_) => Some("number"),
         Type::String | Type::StringLiteral(_) => Some("string"),
@@ -193,7 +206,9 @@ pub(crate) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) 
     if kept.is_empty() {
         return Some(Type::Never);
     }
-    if kept.len() == union.types().len() {
+    // A type variable member is narrowed in place (`T` to `T & object`), so
+    // an unchanged count does not mean nothing changed.
+    if kept.as_slice() == union.types() {
         return None;
     }
     Some(union_type(kept))

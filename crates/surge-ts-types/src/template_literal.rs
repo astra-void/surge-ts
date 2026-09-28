@@ -124,6 +124,10 @@ fn build(texts: &[String], types: &[Type]) -> Type {
         return Type::StringLiteral(text);
     }
     new_texts.push(text);
+    if new_types.iter().any(crate::type_variable::is_generic_index_type) {
+        let display = template_display(&new_texts, &new_types);
+        return crate::type_variable::template_literal_variable(new_texts, new_types, display).unwrap_or(Type::String);
+    }
     if new_texts.iter().all(String::is_empty) {
         if new_types.iter().all(|ty| *ty == Type::String) {
             return Type::String;
@@ -154,15 +158,13 @@ fn add_spans(
         if let Some(rendered) = template_string_for_type(ty) {
             text.push_str(&rendered);
             text.push_str(following);
-        } else if let Some((nested_texts, nested_types)) = template_literal_parts(ty) {
-            let nested_texts: Vec<String> = nested_texts.into_iter().map(String::from).collect();
-            let nested_types: Vec<Type> = nested_types.into_iter().cloned().collect();
+        } else if let Some((nested_texts, nested_types)) = owned_template_parts(ty) {
             text.push_str(&nested_texts[0]);
             if !add_spans(&nested_texts, &nested_types, text, new_texts, new_types) {
                 return false;
             }
             text.push_str(following);
-        } else if is_pattern_literal_placeholder(ty) {
+        } else if is_pattern_literal_placeholder(ty) || crate::type_variable::is_generic_index_type(ty) {
             new_types.push(ty.clone());
             new_texts.push(std::mem::take(text));
             text.push_str(following);
@@ -185,20 +187,29 @@ fn template_string_for_type(ty: &Type) -> Option<String> {
     }
 }
 
-fn intern(texts: Vec<String>, types: Vec<Type>) -> Type {
+fn template_display(texts: &[String], types: &[Type]) -> String {
     let mut display = String::from("`");
-    let mut arguments = Vec::with_capacity(texts.len() + types.len());
     for (index, text) in texts.iter().enumerate() {
         display.push_str(text);
-        arguments.push(Type::StringLiteral(text.clone()));
         if let Some(ty) = types.get(index) {
             display.push_str("${");
             display.push_str(&ty.name());
             display.push('}');
-            arguments.push(ty.clone());
         }
     }
     display.push('`');
+    display
+}
+
+fn intern(texts: Vec<String>, types: Vec<Type>) -> Type {
+    let display = template_display(&texts, &types);
+    let mut arguments = Vec::with_capacity(texts.len() + types.len());
+    for (index, text) in texts.iter().enumerate() {
+        arguments.push(Type::StringLiteral(text.clone()));
+        if let Some(ty) = types.get(index) {
+            arguments.push(ty.clone());
+        }
+    }
     Type::Reference(TypeReference::new(
         TEMPLATE_LITERAL_REFERENCE_ID,
         display,
@@ -227,14 +238,19 @@ fn infer_types_from_template_literal(
     if let Type::StringLiteral(value) = source {
         return infer_from_literal_parts(&[value.as_str()], &[], texts);
     }
-    let (source_texts, source_types) = template_literal_parts(source)?;
+    let (source_texts, source_types) = owned_template_parts(source)?;
+    let source_texts: Vec<&str> = source_texts.iter().map(String::as_str).collect();
+    let source_types: Vec<&Type> = source_types.iter().collect();
     if source_texts == texts {
         return Some(
             source_types
                 .iter()
                 .zip(types)
                 .map(|(source_type, target_type)| {
-                    if is_assignable_to(source_type, target_type) {
+                    if is_assignable_to(
+                        &crate::type_variable::base_constraint_or_type(source_type),
+                        &crate::type_variable::base_constraint_or_type(target_type),
+                    ) {
                         (*source_type).clone()
                     } else {
                         string_like_type_for(source_type)
@@ -244,6 +260,25 @@ fn infer_types_from_template_literal(
         );
     }
     infer_from_literal_parts(&source_texts, &source_types, texts)
+}
+
+/// The parts of a template literal type, a pattern or a generic one.
+pub fn owned_template_parts(ty: &Type) -> Option<(Vec<String>, Vec<Type>)> {
+    match template_literal_parts(ty) {
+        Some((texts, types)) => Some((
+            texts.into_iter().map(String::from).collect(),
+            types.into_iter().cloned().collect(),
+        )),
+        None => crate::type_variable::template_literal_variable_parts(ty),
+    }
+}
+
+/// The parts of a string mapping type, a pattern or a generic one.
+fn owned_string_mapping_parts(ty: &Type) -> Option<(StringMappingKind, Type)> {
+    match string_mapping_parts(ty) {
+        Some((kind, inner)) => Some((kind, inner.clone())),
+        None => crate::type_variable::string_mapping_variable_parts(ty),
+    }
 }
 
 /// tsc's `inferTypesFromTemplateLiteralType` against a template written as
@@ -506,17 +541,19 @@ fn is_valid_type_for_placeholder(source: &Type, target: &Type) -> bool {
             Type::BooleanLiteral(expected) => *value == expected.to_string(),
             Type::Null => value == "null",
             Type::Undefined => value == "undefined",
-            _ if string_mapping_parts(target).is_some() => is_member_of_string_mapping(source, target),
-            _ => template_literal_parts(target).is_some_and(|(texts, types)| {
+            _ if owned_string_mapping_parts(target).is_some() => is_member_of_string_mapping(source, target),
+            _ => owned_template_parts(target).is_some_and(|(texts, types)| {
+                let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+                let types: Vec<&Type> = types.iter().collect();
                 is_type_matched_by_template_literal(source, &texts, &types)
             }),
         };
     }
-    if let Some((texts, types)) = template_literal_parts(source) {
+    if let Some((texts, types)) = owned_template_parts(source) {
         return texts.len() == 2
             && texts[0].is_empty()
             && texts[1].is_empty()
-            && is_assignable_to(types[0], target);
+            && is_assignable_to(&types[0], target);
     }
     false
 }
@@ -670,6 +707,21 @@ pub fn string_mapping_type(kind: StringMappingKind, ty: &Type) -> Type {
                 let (texts, types) = apply_template_string_mapping(kind, &texts, &types);
                 return template_literal_type(&texts, &types);
             }
+            if let Some((texts, types)) = crate::type_variable::template_literal_variable_parts(ty) {
+                let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+                let types: Vec<&Type> = types.iter().collect();
+                let (texts, types) = apply_template_string_mapping(kind, &texts, &types);
+                return template_literal_type(&texts, &types);
+            }
+            if let Some((existing, _)) = crate::type_variable::string_mapping_variable_parts(ty)
+                && existing == kind
+            {
+                return ty.clone();
+            }
+            if ty.is_type_variable() {
+                return crate::type_variable::string_mapping_variable(kind, ty, format!("{}<{}>", kind.name(), ty.name()))
+                    .unwrap_or_else(|| ty.clone());
+            }
             match string_mapping_parts(ty) {
                 Some((existing, _)) if existing == kind => ty.clone(),
                 Some(_) => generic_string_mapping(kind, ty),
@@ -717,10 +769,10 @@ pub fn is_member_of_string_mapping(source: &Type, target: &Type) -> bool {
     if matches!(target, Type::Any) {
         return true;
     }
-    if *target == Type::String || is_template_literal_type(target) {
+    if *target == Type::String || owned_template_parts(target).is_some() {
         return is_assignable_to(source, target);
     }
-    if string_mapping_parts(target).is_some() {
+    if owned_string_mapping_parts(target).is_some() {
         // Applying the target's own mappings must leave the source unchanged,
         // and the source must belong to what is being mapped.
         let (mapped, inner) = apply_target_string_mapping_to_source(source, target);
@@ -731,13 +783,13 @@ pub fn is_member_of_string_mapping(source: &Type, target: &Type) -> bool {
 
 /// tsc's `applyTargetStringMappingToSource`.
 fn apply_target_string_mapping_to_source(source: &Type, target: &Type) -> (Type, Type) {
-    let Some((kind, inner)) = string_mapping_parts(target) else {
+    let Some((kind, inner)) = owned_string_mapping_parts(target) else {
         return (source.clone(), target.clone());
     };
-    let (source, inner) = if string_mapping_parts(inner).is_some() {
-        apply_target_string_mapping_to_source(source, inner)
+    let (source, inner) = if owned_string_mapping_parts(&inner).is_some() {
+        apply_target_string_mapping_to_source(source, &inner)
     } else {
-        (source.clone(), inner.clone())
+        (source.clone(), inner)
     };
     (string_mapping_type(kind, &source), inner)
 }

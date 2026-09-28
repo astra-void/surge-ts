@@ -707,6 +707,14 @@ pub(crate) fn resolve_parsed_type(
             }
         }
         ParsedType::KeyOf(inner) => {
+            // A written `any` operand is the real `any`, not a modelling
+            // placeholder: `getIndexType` answers `keyofConstraintType`.
+            if matches!(inner.as_ref(), ParsedType::Any) {
+                return ResolvedType {
+                    ty: surge_ts_types::union_type(vec![Type::String, Type::Number, Type::Symbol]),
+                    had_error: false,
+                };
+            }
             let resolved_inner = resolve_parsed_type(
                 std::sync::Arc::unwrap_or_clone(inner),
                 ctx,
@@ -717,6 +725,32 @@ pub(crate) fn resolve_parsed_type(
             if let Some(keys) = surge_ts_types::type_variable::keyof_variable(&resolved_inner.ty) {
                 return ResolvedType {
                     ty: keys,
+                    had_error: resolved_inner.had_error,
+                };
+            }
+            // `getIndexType` over a union of variables is the intersection of
+            // their keys, and over an intersection of them the union.
+            let variable_operands = match &resolved_inner.ty {
+                Type::Union(union) => Some((true, union.types())),
+                intersection @ Type::Object(object)
+                    if surge_ts_types::type_variable::is_narrowed_type_variable(intersection) =>
+                {
+                    object.intersection_operands.as_deref().map(|operands| (false, operands))
+                }
+                _ => None,
+            };
+            if let Some((is_union, operands)) = variable_operands
+                && let Some(keys) = operands
+                    .iter()
+                    .map(surge_ts_types::type_variable::keyof_variable)
+                    .collect::<Option<Vec<Type>>>()
+            {
+                return ResolvedType {
+                    ty: if is_union {
+                        intersection::merge_intersection_members(keys)
+                    } else {
+                        surge_ts_types::union_type(keys)
+                    },
                     had_error: resolved_inner.had_error,
                 };
             }
@@ -775,6 +809,16 @@ pub(crate) fn resolve_parsed_type(
                         .filter(|(key, property)| !key.starts_with('[') && is_public_key(key, property))
                     {
                         keys.push(Type::StringLiteral(key.to_string()));
+                    }
+                    // `getIndexType`: a string index signature keys every
+                    // string and number, a number one every number. An open
+                    // shape surge could not enumerate keys nothing it knows.
+                    if !object_type.synthetic_open_index {
+                        if object_type.string_index_type.is_some() {
+                            keys.extend([Type::String, Type::Number]);
+                        } else if object_type.number_index_type.is_some() {
+                            keys.push(Type::Number);
+                        }
                     }
                 }
                 Type::Union(union) if !resolved_inner.had_error => {

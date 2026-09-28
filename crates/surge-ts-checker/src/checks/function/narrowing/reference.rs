@@ -282,6 +282,8 @@ pub(super) fn reference_path(expression: &ParsedExpression) -> Option<(String, V
         // tsc's `isMatchingReference`: a comma expression is the reference its
         // right operand is.
         ParsedExpression::Sequence { expressions } => reference_path(&expressions.last()?.0),
+        // ...and an assignment is the reference it writes.
+        ParsedExpression::Assignment { target_name, .. } => Some((target_name.clone(), Vec::new())),
         _ => None,
     }
 }

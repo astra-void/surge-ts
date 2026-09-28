@@ -550,6 +550,7 @@ pub(crate) fn export_assignment_value(
 /// the descriptor's `value` (`getTypeFromPropertyDescriptor`), which an
 /// accessor descriptor leaves untyped here.
 fn define_property_export(call: &CallExpression<'_>, statement_span: oxc_span::Span) -> Option<Vec<ParsedStatement>> {
+    use oxc_ast::ast::ObjectPropertyKind;
     if !is_define_property_of_exports(call) {
         return None;
     }
@@ -562,42 +563,99 @@ fn define_property_export(call: &CallExpression<'_>, statement_span: oxc_span::S
     if !EXPORTED.with(|exported| exported.borrow_mut().insert(name.value.to_string())) {
         return None;
     }
-    let value = descriptor.properties.iter().find_map(|property| match property {
-        oxc_ast::ast::ObjectPropertyKind::ObjectProperty(property)
-            if !property.method && property.key.static_name().as_deref() == Some("value") =>
-        {
-            Some(&property.value)
-        }
-        _ => None,
-    });
-    let descriptor_expression = super::expressions::parse_expression(
+    let member = |key: &str| {
+        descriptor.properties.iter().find_map(|property| match property {
+            ObjectPropertyKind::ObjectProperty(property) if property.key.static_name().as_deref() == Some(key) => {
+                Some(property.as_ref())
+            }
+            _ => None,
+        })
+    };
+    let (value, writable, get, set) = (member("value"), member("writable"), member("get"), member("set"));
+    // `isReadonlyAssignmentDeclaration`: a `value` is read-only unless
+    // `writable` is there and not the literal `false`; an accessor pair
+    // without a `set` is read-only.
+    let readonly = match value {
+        Some(_) => writable.is_none_or(|writable| matches!(&writable.value, Expression::BooleanLiteral(literal) if !literal.value)),
+        None => set.is_none(),
+    };
+    // The call's argument is contextually typed by `defineProperty`'s
+    // `PropertyDescriptor` parameter, which is what types its accessors'
+    // parameters.
+    let (descriptor_expression, descriptor_span) = super::expressions::parse_expression(
         call.arguments[2].as_expression().expect("an object literal is an expression"),
     );
-    let (value, value_span, declared_type) = match value {
-        Some(value) => {
-            let (value, span) = super::expressions::parse_expression(value);
-            (value, Some(text_span_from_oxc_span(span)), None)
+    let descriptor_span = Some(text_span_from_oxc_span(descriptor_span));
+    let descriptor_expression = ParsedExpression::SatisfiesExpression {
+        expression: Box::new(descriptor_expression),
+        target_type: ParsedType::Named(std::sync::Arc::new(crate::ParsedNamedType {
+            name: "PropertyDescriptor".to_string(),
+            span: None,
+            type_arguments: Vec::new(),
+        })),
+        span: descriptor_span,
+        target_span: None,
+    };
+    // `getTypeFromPropertyDescriptor`: the descriptor's `value`, else its
+    // getter's return type, else its setter's parameter type, else `any`.
+    let member_read = |property_name: &str, call: bool| {
+        if call {
+            ParsedExpression::PropertyCall {
+                object: Box::new(descriptor_expression.clone()),
+                object_span: descriptor_span,
+                property_name: property_name.to_string(),
+                property_span: None,
+                call_span: descriptor_span,
+                type_arguments: Vec::new(),
+                arguments: Vec::new(),
+            }
+        } else {
+            ParsedExpression::PropertyAccess {
+                object: Box::new(descriptor_expression.clone()),
+                object_span: descriptor_span,
+                property_name: property_name.to_string(),
+                property_span: None,
+                is_bracketed: false,
+                binding_element: false,
+            }
         }
-        None => (
-            descriptor_expression.0,
-            Some(text_span_from_oxc_span(descriptor_expression.1)),
-            Some(ParsedType::Any),
-        ),
+    };
+    let setter_parameter_type = || {
+        let Expression::FunctionExpression(function) = &set?.value else {
+            return None;
+        };
+        let parameter = function.params.items.first()?;
+        parameter
+            .type_annotation
+            .as_ref()
+            .and_then(|annotation| super::types::parse_type_annotation(annotation))
+            .or_else(|| super::jsdoc::parameter_at(parameter.span.start).and_then(|jsdoc| jsdoc.ty.map(|(ty, _)| ty)))
+    };
+    let (initializer, declared_type) = if value.is_some() {
+        (Some(member_read("value", false)), None)
+    } else if get.is_some() {
+        (Some(member_read("get", true)), None)
+    } else if set.is_some() {
+        (None, Some(setter_parameter_type().unwrap_or(ParsedType::Any)))
+    } else {
+        (Some(descriptor_expression.clone()), Some(ParsedType::Any))
     };
     let mut statements = declared_export(
         name.value.to_string(),
         name.span,
-        value,
-        value_span,
+        initializer.clone().unwrap_or(ParsedExpression::Unknown),
+        descriptor_span,
         statement_span,
         declared_type,
     );
-    // The descriptor's value widens as a mutable location's does.
-    if let Some(ParsedStatement::VariableDeclaration(variable)) = statements.first_mut()
-        && matches!(variable.initializer, Some(ParsedExpression::ConstAssertion { .. }))
-        && let Some(ParsedExpression::ConstAssertion { expression, .. }) = variable.initializer.take()
-    {
-        variable.initializer = Some(*expression);
+    if let Some(ParsedStatement::VariableDeclaration(variable)) = statements.first_mut() {
+        variable.initializer = initializer;
+        if readonly {
+            variable.kind = ParsedVariableKind::Const;
+        }
+    }
+    if matches!(statements.first(), Some(ParsedStatement::VariableDeclaration(variable)) if variable.initializer.is_none()) {
+        statements.push(ParsedStatement::Expression(Box::new(descriptor_expression)));
     }
     Some(statements)
 }
@@ -763,5 +821,6 @@ fn own_module_variable_type(name: &str, specifier: &str) -> ParsedType {
         construct_signature_overloads: Vec::new(),
         non_primitive: false,
         display_name: None,
+        abstract_construct_signature: false,
     }))
 }

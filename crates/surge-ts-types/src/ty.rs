@@ -605,6 +605,7 @@ impl Type {
                     peeled => peeled.name(),
                 }
             }
+            Type::Reference(reference) if let Some(alias) = &reference.alias_display => alias.to_string(),
             Type::Reference(reference) if crate::tsc_display::active() => crate::tsc_display::reference_name(reference),
             Type::Reference(reference) => reference.display.to_string(),
         }
@@ -961,6 +962,7 @@ fn object_answers_name(object: &crate::ObjectType, name: &str) -> bool {
 /// `name`.
 const FUNCTION_MEMBER_NAMES: &[&str] = &[
     "apply", "arguments", "bind", "call", "caller", "length", "name", "prototype", "toString",
+    "[Symbol.hasInstance]",
 ];
 
 /// The index signatures a union constituent contributes to the union's own

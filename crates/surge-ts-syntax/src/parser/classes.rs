@@ -832,6 +832,7 @@ fn this_as_object(annotation: &oxc_ast::ast::TSType<'_>) -> Option<crate::Parsed
             construct_signature_overloads: Vec::new(),
             non_primitive: true,
             display_name: None,
+            abstract_construct_signature: false,
         }))),
         TSType::TSParenthesizedType(parenthesized) => this_as_object(&parenthesized.type_annotation),
         TSType::TSUnionType(union) => {

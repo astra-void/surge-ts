@@ -205,10 +205,16 @@ impl<'a> ContextCollector<'a, '_> {
                 let start = rest.span.start;
                 self.push(1053, Span::new(start, start + 3), &[]);
             } else if let Some(parameter) = params.items.first() {
+                let jsdoc_question = (!parameter.optional && parameter.type_annotation.is_none())
+                    .then(|| super::super::jsdoc::parameter_at(parameter.span.start))
+                    .flatten()
+                    .and_then(|jsdoc| jsdoc.question);
                 if parameter.optional {
                     if let Some(question) = self.question_token(parameter) {
                         self.push(1051, question, &[]);
                     }
+                } else if let Some(question) = jsdoc_question {
+                    self.push(1051, Span::new(question.start as u32, question.end as u32), &[]);
                 } else if parameter.initializer.is_some() {
                     self.push(1052, name_span, &[]);
                 }

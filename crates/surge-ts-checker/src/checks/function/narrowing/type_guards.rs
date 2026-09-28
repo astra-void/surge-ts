@@ -494,6 +494,14 @@ pub(super) fn narrow_to_instanceof_subclass(
     if instance.is_unknown() || instance == ty {
         return None;
     }
+    // `getNarrowedTypeWorker` keeps a subject derived from the candidate
+    // (`isTypeDerivedFrom`): an instantiation of the candidate's own generic
+    // declaration (`B<number>` under `instanceof B`, whose instance is `B<any>`).
+    if let (Type::Reference(subject), Type::Reference(candidate)) = (ty, instance)
+        && subject.id == candidate.id
+    {
+        return None;
+    }
     // Narrow only along a real subtype edge; an unrelated constructor leaves the
     // subject alone rather than replacing it with something it never was.
     if surge_ts_types::is_assignable_to(instance, ty) {

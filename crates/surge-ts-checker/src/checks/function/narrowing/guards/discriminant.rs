@@ -47,6 +47,13 @@ fn is_nullish_only(ty: &Type) -> bool {
 /// A discriminant test through an optional chain narrows twice: the union by
 /// the discriminant, and the base by the chain's non-nullishness. Both apply to
 /// `x?.kind === "a"` on `A | B | null`, which leaves `A`.
+/// flow.go `getDiscriminantPropertyAccess`: only a reference whose declared
+/// or current type is a union is narrowed by one of its properties.
+pub(crate) fn narrows_by_discriminant(current: &Type, declared: Option<&Type>) -> bool {
+    let is_union = |ty: &Type| matches!(ty.peeled(), Type::Union(_));
+    is_union(current) || declared.is_some_and(is_union)
+}
+
 pub(crate) fn narrow_discriminant_through_optional_chain(
     condition: &ParsedExpression,
     subject_ty: &Type,
@@ -248,6 +255,9 @@ pub(crate) fn narrow_discriminant_symbol_table(
     match discriminant_object {
         ParsedExpression::Identifier { name, .. } => {
             let symbol = symbols.get(name)?;
+            if !narrows_by_discriminant(&symbol.ty, symbols.declared_type(name)) {
+                return None;
+            }
             let narrowed = narrow_discriminant_through_optional_chain(
                 condition,
                 &symbol.ty,

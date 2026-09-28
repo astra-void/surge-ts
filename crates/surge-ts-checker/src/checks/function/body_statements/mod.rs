@@ -265,7 +265,9 @@ pub(crate) fn check_function_variable_declaration(
         // (and re-reporting) the expression.
         let narrowed = literal_initializer_type
             .filter(|initialized| {
-                matches!(symbol.ty, Type::Union(_)) && is_assignable_to(initialized, &symbol.ty)
+                // `boolean` is tsc's `true | false` union.
+                matches!(symbol.ty, Type::Union(_) | Type::Boolean)
+                    && is_assignable_to(initialized, &symbol.ty)
             })
             .map(|initialized| assignments::assignment_reduced_type(Some(&symbol.ty), initialized))
             .or_else(|| {

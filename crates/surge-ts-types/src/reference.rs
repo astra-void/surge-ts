@@ -101,11 +101,31 @@ pub struct TypeReference {
     /// `getBaseTypeOfEnumLikeType`), when the member was resolved where its
     /// enum could be. Provenance like `enum_owner`, outside `nominal_eq`.
     pub enum_base: Option<Arc<Type>>,
+    /// The members of the `enum` this reference is (or is a member type of),
+    /// which `isEnumTypeRelatedTo` compares between two same-named enums.
+    /// Provenance like `enum_owner`, outside `nominal_eq`.
+    pub enum_members: Option<Arc<EnumMembers>>,
+    /// The type alias this reference was written as the body of (`type NN =
+    /// NumberTo<number>`), which tsc displays in its place. Display only.
+    pub alias_display: Option<Arc<str>>,
+    /// An interface or class with one base and no members of its own, which
+    /// tsc relates as that base (`getSingleBaseForNonAugmentingSubtype`).
+    /// Display only: it decides which type a report names.
+    pub non_augmenting_subtype: bool,
     /// The variances the declaration states for its type parameters, packed
     /// by [`declared_variances`]. A pure function of the declaration, so it
     /// stays out of `nominal_eq` and canonical identity like `numeric_enum`.
     pub declared_variances: u32,
     resolver: Arc<dyn ResolveReference>,
+}
+
+/// An `enum`'s members for `isEnumTypeRelatedTo`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct EnumMembers {
+    /// A regular enum (`SymbolFlagsRegularEnum`): not a `const enum`.
+    pub regular: bool,
+    /// Each member's name and value, `None` for a computed one.
+    pub members: Vec<(Arc<str>, Option<Type>)>,
 }
 
 /// Nominal id of the synthetic reference that carries the `readonly` array /
@@ -161,6 +181,9 @@ impl TypeReference {
             numeric_enum: false,
             enum_owner: None,
             enum_base: None,
+            enum_members: None,
+            alias_display: None,
+            non_augmenting_subtype: false,
             declared_variances: 0,
             resolver,
         }
@@ -188,6 +211,24 @@ impl TypeReference {
     /// Records the `enum` this member type widens to.
     pub fn with_enum_base(mut self, base: Type) -> Self {
         self.enum_base = Some(Arc::new(base));
+        self
+    }
+
+    /// Records the members of this reference's `enum`.
+    pub fn with_enum_members(mut self, members: Arc<EnumMembers>) -> Self {
+        self.enum_members = Some(members);
+        self
+    }
+
+    /// Records the type alias this reference is displayed as.
+    pub fn with_alias_display(mut self, display: impl Into<Arc<str>>) -> Self {
+        self.alias_display = Some(display.into());
+        self
+    }
+
+    /// Marks this reference as a non-augmenting subtype of its single base.
+    pub fn as_non_augmenting_subtype(mut self) -> Self {
+        self.non_augmenting_subtype = true;
         self
     }
 
@@ -259,6 +300,9 @@ pub enum DeclaredVariance {
     /// Unannotated, but measuring it reports `Unmeasurable`: only identical
     /// arguments relate without a structural comparison.
     Unmeasurable,
+    /// Unannotated, measured contravariant with `VarianceFlagsUnreliable`: a
+    /// failed argument check still falls back to the structural comparison.
+    UnreliableContravariant,
 }
 
 impl DeclaredVariance {
@@ -290,6 +334,7 @@ pub fn declared_variances(variances: impl IntoIterator<Item = Option<DeclaredVar
                 Some(DeclaredVariance::Contravariant) => 2,
                 Some(DeclaredVariance::Invariant) => 3,
                 Some(DeclaredVariance::Unmeasurable) => 4,
+                Some(DeclaredVariance::UnreliableContravariant) => 5,
             };
             packed | (code << (index * DECLARED_VARIANCE_BITS))
         })
@@ -305,6 +350,7 @@ pub fn declared_variance(packed: u32, index: usize) -> Option<DeclaredVariance> 
         2 => Some(DeclaredVariance::Contravariant),
         3 => Some(DeclaredVariance::Invariant),
         4 => Some(DeclaredVariance::Unmeasurable),
+        5 => Some(DeclaredVariance::UnreliableContravariant),
         _ => None,
     }
 }

@@ -59,7 +59,6 @@ pub(crate) enum LazySignatureComponent {
     Parameter(usize),
     Return,
     ThisParameter,
-    #[allow(dead_code)]
     TypePredicate,
 }
 

@@ -9,6 +9,7 @@ mod evaluate;
 mod guarded_unknown;
 mod index_access;
 mod inferred;
+mod iteration;
 mod lib_features;
 mod operand_types;
 mod operand_writes;
@@ -26,8 +27,13 @@ pub(crate) use evaluate::*;
 pub(crate) use guarded_unknown::downgrade_guarded_genuine_unknown;
 use guarded_unknown::downgrade_predicate_guarded_genuine_unknown;
 use index_access::*;
-pub(crate) use index_access::{object_element_read, report_invalid_deferred_index, report_unusable_index_type};
+pub(crate) use index_access::{constraint_element_read, object_element_read, report_invalid_deferred_index, report_unusable_index_type};
+pub(crate) use index_access::well_known_symbol_key_type;
 pub(crate) use inferred::*;
+pub(crate) use iteration::{
+    IterationTypes, IterationUse, array_pattern_element_type, generator_return_iteration_types,
+    iteration_types_of_iterable,
+};
 pub(crate) use lib_features::{lib_feature_of_missing_member, suggested_lib_for_nonexistent_name};
 pub(crate) use operand_types::{
     IterationSend, check_async_iterable_operand, check_instanceof_left_operand,
@@ -177,6 +183,17 @@ pub(crate) fn missing_properties_report(
     target_name: &str,
     file_name: &str,
 ) -> Option<surge_ts_diagnostics::Diagnostic> {
+    // relater.go `reportErrorResults` lets a missing-property message head the
+    // report only when it names the same types (`chainArgsMatch`). A reference
+    // displayed by its alias is elaborated as the bare reference
+    // (`getNormalizedType`), and so is an interface that only extends one base
+    // (`getSingleBaseForNonAugmentingSubtype`): the head stays TS2322/TS2345.
+    let aliased = |ty: &Type| {
+        matches!(ty, Type::Reference(reference) if reference.alias_display.is_some() || reference.non_augmenting_subtype)
+    };
+    if aliased(source) || aliased(target) {
+        return None;
+    }
     let missing = missing_required_properties(source, target)?;
     let first = missing.first()?.clone();
     Some(missing_properties_diagnostic(
@@ -578,6 +595,18 @@ fn evaluate_const_expression_unrecorded(
                     symbols,
                     ctx,
                 );
+                // `getSpreadType` merges a spread's properties, read-only in a
+                // const context (`getSpreadSymbol`), after what came before.
+                if property.is_spread && property.unnamed_key_value.is_none() {
+                    if let InferredExpression::Known(spread) = &inferred
+                        && let Type::Object(source) = spread.peeled()
+                    {
+                        for (name, source_property) in source.properties.iter() {
+                            props.insert(name.clone(), source_property.clone().with_readonly(true));
+                        }
+                    }
+                    continue;
+                }
                 let ty = match inferred {
                     InferredExpression::Known(ty) => ty,
                     _ => Type::Unknown,

@@ -60,18 +60,20 @@ fn unresolved_module_resolution_diagnostic(
     module_specifier: &str,
     resolution_mode: Option<surge_ts_syntax::ResolutionModeOverride>,
 ) -> Option<Diagnostic> {
-    // A `.json` specifier under `resolveJsonModule: false` is not a missing
-    // module — it is a module the option refuses to resolve, and tsc says so
-    // with its own code and hint.
-    if !ctx.options.resolve_json_module && surge_ts_syntax::is_json_file_name(module_specifier) {
-        return Some(Diagnostic::ts2732(module_specifier, ctx.file_name.clone()));
-    }
-
+    // A `.d.json.ts` beside a `.json` specifier resolves it whatever
+    // `resolveJsonModule` says, so the extension is what is refused.
     if is_relative_specifier(module_specifier)
         && !arbitrary_extension_resolution_allowed(&ctx.file_name)
         && let Some(declaration) = arbitrary_extension_declaration_on_disk(ctx, module_specifier)
     {
         return Some(Diagnostic::ts6263(module_specifier, &declaration, ctx.file_name.clone()));
+    }
+
+    // A `.json` specifier under `resolveJsonModule: false` is not a missing
+    // module — it is a module the option refuses to resolve, and tsc says so
+    // with its own code and hint.
+    if !ctx.options.resolve_json_module && surge_ts_syntax::is_json_file_name(module_specifier) {
+        return Some(Diagnostic::ts2732(module_specifier, ctx.file_name.clone()));
     }
 
     if is_relative_specifier(module_specifier)

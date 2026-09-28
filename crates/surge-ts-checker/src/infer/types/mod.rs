@@ -72,6 +72,13 @@ pub(crate) struct InferenceCandidate {
     /// Taken from a fresh literal, whose literal types a fixed inference
     /// widens (`getWidenedLiteralType` leaves a regular literal alone).
     pub(crate) fresh: bool,
+    /// What the candidate widens to when the call widens its literals, which
+    /// `getCovariantInference` does only while every candidate was inferred at
+    /// the top level (`InferenceInfo.topLevel`).
+    pub(crate) widened: Option<Type>,
+    /// How many type-argument levels deep the candidate was inferred
+    /// (`InferenceInfo.candidateDepths`); deeper candidates come first.
+    pub(crate) depth: u32,
 }
 
 impl TypeParameterSubstitution {
@@ -241,6 +248,29 @@ impl TypeParameterSubstitution {
 
     pub(crate) fn push_inference_candidate(&mut self, name: &str, candidate: InferenceCandidate) {
         self.inference_record_mut(name).candidates.push(candidate);
+    }
+
+    /// `inferFromTypes`' insertion of a covariant candidate: a candidate already
+    /// present at a lower depth is moved, and a candidate goes immediately before
+    /// the first one inferred at a lower depth, so the deepest come first.
+    /// Returns whether it was added.
+    pub(crate) fn insert_covariant_candidate(&mut self, name: &str, candidate: InferenceCandidate) -> bool {
+        let candidates = &mut self.inference_record_mut(name).candidates;
+        if let Some(index) = candidates
+            .iter()
+            .position(|recorded| !recorded.contravariant && recorded.ty == candidate.ty)
+        {
+            if candidates[index].depth >= candidate.depth {
+                return false;
+            }
+            candidates.remove(index);
+        }
+        let index = candidates
+            .iter()
+            .position(|recorded| !recorded.contravariant && recorded.depth < candidate.depth)
+            .unwrap_or(candidates.len());
+        candidates.insert(index, candidate);
+        true
     }
 
     pub(crate) fn is_inference_fixed(&self, name: &str) -> bool {

@@ -259,6 +259,26 @@ pub(crate) fn parse_export_default_declaration(
             ))]);
         }
     };
+    // The literal forms above are lowered without `parse_expression`, which
+    // is what applies a JSDoc `@type` to the exported expression.
+    let parsed_declaration = match parsed_declaration {
+        ParsedDefaultExportDeclaration::Expression(expression)
+            if super::spans::lowering_javascript()
+                && !matches!(expression, ParsedExpression::TypeAssertion { annotation: true, .. })
+                && let Some(value) = declaration.declaration.as_expression()
+                && let Some((ty, _, anchor)) =
+                    super::jsdoc::assignment_type_at(value.span().start, value.span().end) =>
+        {
+            ParsedDefaultExportDeclaration::Expression(ParsedExpression::TypeAssertion {
+                expression: Box::new(expression),
+                expression_span: Some(text_span_from_oxc_span(value.span())),
+                ty,
+                type_span: Some(anchor),
+                annotation: true,
+            })
+        }
+        other => other,
+    };
 
     Some(vec![ParsedStatement::ExportDeclaration(Box::new(
         ParsedExportDeclaration::Default {

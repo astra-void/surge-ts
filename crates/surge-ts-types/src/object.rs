@@ -204,6 +204,11 @@ impl ObjectProperty {
 
     pub fn with_method(mut self, method: bool) -> Self {
         self.method = method;
+        // The member's signature is declared by the method, as tsc's
+        // `Signature.declaration` records it wherever the type is read.
+        if method && let Type::Function(function) = &self.ty {
+            self.ty = Type::Function(function.clone().with_method_declaration(true));
+        }
         self
     }
 

@@ -109,6 +109,7 @@ pub(crate) fn instantiate_function_type<'a>(
             instantiated,
             function_type,
             function_signature,
+            &substitution,
             outer_type_arguments,
             type_arguments,
             arguments,
@@ -210,6 +211,7 @@ pub(crate) fn instantiate_function_type<'a>(
         instantiated,
         function_type,
         function_signature,
+        &substitution,
         outer_type_arguments,
         type_arguments,
         arguments,
@@ -236,6 +238,7 @@ fn fold_overload_alternative_parameters<'a>(
     instantiated: Cow<'a, FunctionType>,
     function_type: &FunctionType,
     function_signature: &FunctionSignatureInfo,
+    kept_substitution: &TypeParameterSubstitution,
     outer_type_arguments: &[(String, Type)],
     type_arguments: &[ParsedType],
     arguments: &[ParsedCallArgument],
@@ -246,19 +249,34 @@ fn fold_overload_alternative_parameters<'a>(
     if function_signature.overload_alternatives.is_empty() {
         return instantiated;
     }
+    // Each member is its own declaration's signature (tsc resolves the call
+    // against those), so it keeps that declaration's arity rather than the
+    // group fold's. The group lists its members in the same order.
+    let group_members = function_type.overloads();
+    let member_base = |index: usize, signature: &FunctionSignatureInfo| {
+        group_members
+            .and_then(|members| members.get(index))
+            .filter(|member| member.parameters().len() == signature.parameter_types.len())
+            .cloned()
+    };
 
     let mut parameters = instantiated.parameters().to_vec();
     let mut folded = false;
     // The kept signature first, then each alternative in declaration order:
     // the same list a non-generic group carries, instantiated for this call.
     let mut members = Vec::with_capacity(1 + function_signature.overload_alternatives.len());
-    members.push(instantiated.clone().into_owned());
+    let kept_member = match member_base(0, function_signature) {
+        Some(base) => instantiate_function_type_with_substitution(&base, function_signature, kept_substitution, ctx)
+            .into_owned(),
+        None => instantiated.clone().into_owned(),
+    };
+    members.push(kept_member);
     // An alternative's own annotations are resolved here only to read their
     // shape; a constraint violation or an unresolved name in an overload this
     // call did not pick is not the call's error.
     let diagnostics_before = ctx.diagnostics.len();
 
-    for alternative in &function_signature.overload_alternatives {
+    for (alternative_index, alternative) in function_signature.overload_alternatives.iter().enumerate() {
         let mut substitution = if type_arguments.is_empty() {
             let mut substitution =
                 // Each candidate is inferred under the call's contextual
@@ -299,7 +317,11 @@ fn fold_overload_alternative_parameters<'a>(
             ctx,
         );
 
-        members.push(alternative_type.clone().into_owned());
+        members.push(match member_base(alternative_index + 1, alternative) {
+            Some(base) => instantiate_function_type_with_substitution(&base, alternative, &substitution, ctx)
+                .into_owned(),
+            None => alternative_type.clone().into_owned(),
+        });
 
         for (index, parameter) in parameters.iter_mut().enumerate() {
             let Some(candidate) = alternative_type.parameters().get(index) else {
@@ -871,8 +893,33 @@ fn apply_uninferred_type_parameter_defaults(
         }
     }
 
+    // `getInferredType` instantiates a default or constraint through the
+    // inference mapper, which infers a parameter it names first
+    // (`<U extends T, T extends A>` fixes `T` before `U`).
+    let mut ordered = Vec::with_capacity(uninferred.len());
+    let mut pending = uninferred;
+    while !pending.is_empty() {
+        let ready: Vec<usize> = (0..pending.len())
+            .filter(|&index| {
+                let written = pending[index].default_type.as_ref().or(pending[index].constraint.as_ref());
+                written.is_none_or(|written| {
+                    pending
+                        .iter()
+                        .enumerate()
+                        .all(|(other, parameter)| other == index || !parsed_type_mentions_name(written, &parameter.name))
+                })
+            })
+            .collect();
+        if ready.is_empty() {
+            ordered.append(&mut pending);
+            break;
+        }
+        let mut batch: Vec<_> = ready.into_iter().rev().map(|index| pending.remove(index)).collect();
+        batch.reverse();
+        ordered.extend(batch);
+    }
     let mut bound = substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
-    for type_parameter in uninferred {
+    for type_parameter in ordered {
         // No default: the *constraint* stands in, as tsc's inference does when a
         // parameter has no candidate at all. Leaving it unbound kept the
         // declaration's own name in the result, and a conditional over it then
@@ -935,6 +982,21 @@ thread_local! {
     /// inferences only fill what the arguments left open — tsc's
     /// `InferencePriority.ReturnType`, below every argument's.
     static INFERRING_FROM_RETURN_TYPE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// tsc's `InferenceState.depth`: how many `inferFromTypeArguments` levels
+    /// the walk is inside.
+    static INFERENCE_TYPE_ARGUMENT_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Inferences made to a type parameter so far (`inferFromTypes` reaching
+    /// one), which is what `inferToMultipleTypes` asks when it records whether a
+    /// source matched some target.
+    static INFERENCES_MADE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Runs `walk` one `inferFromTypeArguments` level deeper.
+fn inferring_from_type_arguments<R>(walk: impl FnOnce() -> R) -> R {
+    INFERENCE_TYPE_ARGUMENT_DEPTH.set(INFERENCE_TYPE_ARGUMENT_DEPTH.get() + 1);
+    let result = walk();
+    INFERENCE_TYPE_ARGUMENT_DEPTH.set(INFERENCE_TYPE_ARGUMENT_DEPTH.get() - 1);
+    result
 }
 
 fn with_inference_root<R>(root: &ParsedType, walk: impl FnOnce() -> R) -> R {
@@ -2832,20 +2894,35 @@ fn infer_type_arguments_from_expected_return_type(
     else {
         return;
     };
-    if declared_return_type.type_arguments.is_empty() {
+    // A bare type parameter return (`absorb<T>(): T`) is itself the inference
+    // target `inferTypes` is handed.
+    let naked_type_parameter = declared_return_type.type_arguments.is_empty()
+        && unresolved.iter().any(|name| *name == declared_return_type.name);
+    if declared_return_type.type_arguments.is_empty() && !naked_type_parameter {
         return;
     }
 
     let mut from_return = substitution.clone_with_reason(TypeCopyReason::CallResolution);
     let outer_from_return = INFERRING_FROM_RETURN_TYPE.replace(true);
-    infer_through_generic_reference(
-        declared_return_type,
-        expected_return_type,
-        &mut from_return,
-        false,
-        ctx,
-        0,
-    );
+    if naked_type_parameter {
+        collect_inferred_type_argument(
+            &ParsedType::Named(declared_return_type.clone()),
+            expected_return_type,
+            &mut from_return,
+            false,
+            ctx,
+            0,
+        );
+    } else {
+        infer_through_generic_reference(
+            declared_return_type,
+            expected_return_type,
+            &mut from_return,
+            false,
+            ctx,
+            0,
+        );
+    }
     INFERRING_FROM_RETURN_TYPE.set(outer_from_return);
     for name in unresolved {
         if let Some(candidate) = from_return.get(&name)
@@ -2915,17 +2992,7 @@ pub(crate) fn collect_inferred_type_argument(
             // index signature tsc gives the result — with every `TS4111` that
             // depends on it — disappears. `Type::Array` has no object surface,
             // so the member walk below cannot do it.
-            if !named_type.type_arguments.is_empty()
-                && matches!(
-                    named_type.name.as_str(),
-                    "Array"
-                        | "ReadonlyArray"
-                        | "Iterable"
-                        | "IterableIterator"
-                        | "ArrayLike"
-                        | "ConcatArray"
-                )
-            {
+            if !named_type.type_arguments.is_empty() && infers_element_wise(&named_type.name) {
                 let element_type = &named_type.type_arguments[0];
                 // Elements are never widened here. A *fresh* array literal has
                 // already widened its own elements in `infer_array_literal`
@@ -2954,7 +3021,7 @@ pub(crate) fn collect_inferred_type_argument(
                     other => other.clone(),
                 };
                 let widen_elements = false;
-                match &argument_type {
+                inferring_from_type_arguments(|| match &argument_type {
                     Type::Array(actual_element_type) => {
                         collect_inferred_type_argument(
                             element_type,
@@ -2994,7 +3061,7 @@ pub(crate) fn collect_inferred_type_argument(
                         }
                     }
                     _ => {}
-                }
+                });
             }
 
             // surge models a resolved `Promise<T>` as its awaited `T`, so a
@@ -3063,7 +3130,7 @@ pub(crate) fn collect_inferred_type_argument(
             }
         }
         ParsedType::Array(element_type) => match &argument_type.peeled() {
-            Type::Array(actual_element_type) => {
+            Type::Array(actual_element_type) => inferring_from_type_arguments(|| {
                 collect_inferred_type_argument(
                     element_type.as_ref(),
                     actual_element_type.as_ref(),
@@ -3072,7 +3139,7 @@ pub(crate) fn collect_inferred_type_argument(
                     ctx,
                     depth,
                 );
-            }
+            }),
             Type::Tuple(elements) => {
                 for element in elements {
                     collect_inferred_type_argument(
@@ -3114,12 +3181,24 @@ pub(crate) fn collect_inferred_type_argument(
             );
         }
         ParsedType::Tuple(expected_elements) => {
-            if let Type::Tuple(actual_elements) = argument_type
+            // Under `exactOptionalPropertyTypes` an optional element's type is
+            // the written one, as `resolve_tuple_type` resolves it.
+            let exact_optional =
+                surge_ts_types::strict_null_checks() && surge_ts_types::exact_optional_property_types();
+            if let Some((actual_elements, _)) = surge_ts_types::fixed_tuple_parts(argument_type)
                 && expected_elements.len() == actual_elements.len()
             {
                 for (expected_element, actual_element) in
                     expected_elements.iter().zip(actual_elements.iter())
                 {
+                    let expected_element = match expected_element {
+                        ParsedType::Union(members)
+                            if exact_optional && members.len() == 2 && matches!(members[0], ParsedType::Undefined) =>
+                        {
+                            &members[1]
+                        }
+                        other => other,
+                    };
                     collect_inferred_type_argument(
                         expected_element,
                         actual_element,
@@ -3351,6 +3430,35 @@ pub(crate) fn collect_inferred_type_argument(
                     return;
                 }
             }
+            // `inferFromMatchingTypes` with `isTypeOrBaseIdenticalTo`: a source
+            // member identical to a target member that names no type parameter
+            // is matched with it, and both leave the inference (`get<U>(x: U |
+            // void)` handed `string | void` binds `U` to `string`).
+            if let Some((remaining_targets, remaining_sources)) = infer_from_matching_members(
+                expected_types,
+                argument_type,
+                substitution,
+                widen_literals,
+                ctx,
+                depth,
+            ) {
+                let Some(target) = (match remaining_targets.as_slice() {
+                    [] => None,
+                    [only] => Some(only.clone()),
+                    _ => Some(ParsedType::Union(std::sync::Arc::new(remaining_targets.clone()))),
+                }) else {
+                    return;
+                };
+                // Every source matched: tsc still infers the whole source to what
+                // is left, at a lower priority.
+                let source = if remaining_sources.is_empty() {
+                    argument_type.clone()
+                } else {
+                    surge_ts_types::union_type(remaining_sources)
+                };
+                collect_inferred_type_argument(&target, &source, substitution, widen_literals, ctx, depth);
+                return;
+            }
             // A union carries no member order, so zipping positionally is only
             // meaningful when every member has a shape to pin it to. Once the
             // union mixes a naked type parameter with structured members
@@ -3428,13 +3536,36 @@ pub(crate) fn collect_inferred_type_argument(
             };
             let mut matches: Vec<(&ParsedType, &Type)> = Vec::new();
             let mut unmatched: Vec<Type> = Vec::new();
+            // `inferToMultipleTypes` infers each source to every structured
+            // target, not only the first that could take it; a source is matched
+            // when some target made an inference from it. A generic reference
+            // target has no shape to test, so it is inferred into directly.
             for member in argument_members {
-                match structured
-                    .iter()
-                    .find(|target| parsed_shape_matches(target, member))
-                {
-                    Some(target) => matches.push((target, member)),
-                    None => unmatched.push(member.clone()),
+                let before = matches.len();
+                for target in structured.iter().filter(|target| parsed_shape_matches(target, member)) {
+                    matches.push((target, member));
+                }
+                if matches.len() > before {
+                    continue;
+                }
+                // Inferred as `inferFromTypes` would: element-wise for an array
+                // target, otherwise through the reference's declaration, so a
+                // promise target reached by a non-thenable source infers nothing
+                // (`inferFromObjectTypes` finds no `then`).
+                let inferences_before = INFERENCES_MADE.get();
+                for target in structured.iter() {
+                    if let ParsedType::Named(named) = target
+                        && !named.type_arguments.is_empty()
+                    {
+                        if infers_element_wise(&named.name) {
+                            collect_inferred_type_argument(target, member, substitution, widen_literals, ctx, depth);
+                        } else {
+                            infer_through_generic_reference(named, member, substitution, widen_literals, ctx, depth);
+                        }
+                    }
+                }
+                if INFERENCES_MADE.get() == inferences_before {
+                    unmatched.push(member.clone());
                 }
             }
             // Nothing shaped matched and there is no naked member to take the
@@ -3492,6 +3623,150 @@ pub(crate) fn collect_inferred_type_argument(
         }
         _ => {}
     }
+}
+
+/// `inferFromTypes`' two `inferFromMatchingTypes` passes over a union target:
+/// first a source identical to a target free of the call's type parameters
+/// (`isTypeOrBaseIdenticalTo`), then a source reference to the declaration a
+/// target reference names (`isTypeCloselyMatchedBy`), inferred from its type
+/// arguments. Returns the targets and sources left, or `None` when nothing
+/// pairs. The target union is flattened through aliases of unions, as
+/// `getUnionType` flattens it.
+fn infer_from_matching_members(
+    targets: &[ParsedType],
+    source: &Type,
+    substitution: &mut TypeParameterSubstitution,
+    widen_literals: bool,
+    ctx: &mut CheckerContext,
+    depth: usize,
+) -> Option<(Vec<ParsedType>, Vec<Type>)> {
+    let sources: Vec<Type> = match source {
+        Type::Union(union) => union.types().to_vec(),
+        other => vec![other.clone()],
+    };
+    let flattened;
+    let targets: &[ParsedType] = if sources.iter().any(|source| matches!(source, Type::Reference(_))) {
+        flattened = flatten_alias_union_targets(targets, ctx, 0);
+        &flattened
+    } else {
+        targets
+    };
+    let type_parameters: Vec<std::sync::Arc<str>> = substitution.iter().map(|(name, _)| name.clone()).collect();
+    let mut matched_targets = vec![false; targets.len()];
+    let mut matched_sources = vec![false; sources.len()];
+    for (target_index, target) in targets.iter().enumerate() {
+        if type_parameters.iter().any(|name| parsed_type_mentions_name(target, name)) {
+            continue;
+        }
+        let diagnostics_before = ctx.diagnostics().len();
+        let mapped = map_parsed_type_with_substitution(target.clone(), ctx, substitution);
+        ctx.truncate_diagnostics(diagnostics_before);
+        if mapped.is_unknown() {
+            continue;
+        }
+        for (source_index, source) in sources.iter().enumerate() {
+            let identical = *source == mapped
+                || matches!((&mapped, source), (Type::String, Type::StringLiteral(_)))
+                || matches!((&mapped, source), (Type::Number, Type::NumberLiteral(_)));
+            if identical {
+                matched_targets[target_index] = true;
+                matched_sources[source_index] = true;
+            }
+        }
+    }
+    for (target_index, target) in targets.iter().enumerate() {
+        let ParsedType::Named(named) = target else {
+            continue;
+        };
+        if matched_targets[target_index] || named.type_arguments.is_empty() {
+            continue;
+        }
+        for (source_index, source) in sources.iter().enumerate() {
+            if matched_sources[source_index] {
+                continue;
+            }
+            let Type::Reference(reference) = source else {
+                continue;
+            };
+            if !reference.arguments.is_empty() && reference_names_declaration(reference, named, ctx) {
+                infer_through_generic_reference(named, source, substitution, widen_literals, ctx, depth);
+                matched_targets[target_index] = true;
+                matched_sources[source_index] = true;
+            }
+        }
+    }
+    if !matched_sources.iter().any(|matched| *matched) {
+        return None;
+    }
+    let remaining_targets = targets
+        .iter()
+        .zip(&matched_targets)
+        .filter(|(_, matched)| !**matched)
+        .map(|(target, _)| target.clone())
+        .collect();
+    let remaining_sources = sources
+        .into_iter()
+        .zip(matched_sources)
+        .filter(|(_, matched)| !*matched)
+        .map(|(source, _)| source)
+        .collect();
+    Some((remaining_targets, remaining_sources))
+}
+
+/// A reference's declaration is the one `named` resolves to. Unlike
+/// [`reference_targets_declaration`], a name that resolves to nothing matches
+/// nothing.
+fn reference_names_declaration(
+    reference: &surge_ts_types::TypeReference,
+    named: &ParsedNamedType,
+    ctx: &CheckerContext,
+) -> bool {
+    lookup_declaration_for_inference(&named.name, ctx).is_some()
+        && !matches!(named.name.as_str(), "Array" | "ReadonlyArray")
+        && reference_targets_declaration(reference, named, ctx)
+}
+
+/// Union targets with each alias whose body is a union replaced by that
+/// union's members, written in the reference's arguments.
+fn flatten_alias_union_targets(targets: &[ParsedType], ctx: &mut CheckerContext, depth: usize) -> Vec<ParsedType> {
+    let mut flattened = Vec::with_capacity(targets.len());
+    for target in targets {
+        let expanded = match target {
+            ParsedType::Union(members) if depth < 4 => Some(flatten_alias_union_targets(members, ctx, depth + 1)),
+            ParsedType::Named(named) if depth < 4 && !named.type_arguments.is_empty() => {
+                lookup_declaration_for_inference(&named.name, ctx).and_then(|handle| match handle.get() {
+                    TypeDeclarationInfo::Alias(alias) => match &alias.body.ty {
+                        ParsedType::Union(members) => {
+                            let map = filled_type_parameter_map(&alias.body.type_parameters, &named.type_arguments);
+                            let members: Vec<ParsedType> = members
+                                .iter()
+                                .map(|member| crate::infer::substitute_parsed_type_parameters_deep(member, &map))
+                                .collect();
+                            Some(members)
+                        }
+                        _ => None,
+                    },
+                    TypeDeclarationInfo::Interface(_) => None,
+                })
+                .map(|members| flatten_alias_union_targets(&members, ctx, depth + 1))
+            }
+            _ => None,
+        };
+        match expanded {
+            Some(members) => flattened.extend(members),
+            None => flattened.push(target.clone()),
+        }
+    }
+    flattened
+}
+
+/// Lib references whose first type argument is the element an array or tuple
+/// argument supplies, and which surge infers element by element.
+fn infers_element_wise(name: &str) -> bool {
+    matches!(
+        name,
+        "Array" | "ReadonlyArray" | "Iterable" | "IterableIterator" | "ArrayLike" | "ConcatArray"
+    )
 }
 
 /// tsc's `getRestTypeAtPosition`: the source's parameters from `position` on,
@@ -3771,20 +4046,22 @@ fn infer_through_generic_reference(
         return;
     }
     if let Type::Reference(reference) = argument_type {
-        for (pattern_argument, actual_argument) in named_type
-            .type_arguments
-            .iter()
-            .zip(reference.arguments.iter())
-        {
-            collect_inferred_type_argument(
-                pattern_argument,
-                actual_argument,
-                substitution,
-                widen_literals,
-                ctx,
-                depth + 1,
-            );
-        }
+        inferring_from_type_arguments(|| {
+            for (pattern_argument, actual_argument) in named_type
+                .type_arguments
+                .iter()
+                .zip(reference.arguments.iter())
+            {
+                collect_inferred_type_argument(
+                    pattern_argument,
+                    actual_argument,
+                    substitution,
+                    widen_literals,
+                    ctx,
+                    depth + 1,
+                );
+            }
+        });
         return;
     }
 
@@ -3825,6 +4102,17 @@ fn infer_through_generic_reference(
                         info.body.ty,
                         ParsedType::Conditional(_) | ParsedType::Union(_)
                     )
+                    // An alias for an array (`RecArray<T> = Array<T | RecArray<T>>`)
+                    // is the array reference an array argument infers against.
+                    || (matches!(argument_type.peeled(), Type::Array(_) | Type::Tuple(_))
+                        && match &info.body.ty {
+                            ParsedType::Array(_) => true,
+                            ParsedType::Named(body) => {
+                                matches!(body.name.as_str(), "Array" | "ReadonlyArray")
+                                    && !body.type_arguments.is_empty()
+                            }
+                            _ => false,
+                        })
                     || (matches!(argument_type, Type::Function(_))
                         && (alias_parameters_carry_type_parameters(info)
                             || SOURCE_IS_FUNCTION_LITERAL.get()));
@@ -3857,12 +4145,7 @@ fn infer_through_generic_reference(
         return;
     }
 
-    let parameter_map: surge_ts_types::fx::FxHashMap<String, ParsedType> = body
-        .type_parameters
-        .iter()
-        .zip(named_type.type_arguments.iter())
-        .map(|(parameter, argument)| (parameter.name.clone(), argument.clone()))
-        .collect();
+    let parameter_map = filled_type_parameter_map(&body.type_parameters, &named_type.type_arguments);
 
     // A member's annotation names what the *declaring* file has in scope
     // (`MutationFunction`, which the consumer never imported), so the walk
@@ -3873,8 +4156,24 @@ fn infer_through_generic_reference(
             else {
                 continue;
             };
-            let expected_member_type =
-                substitute_parsed_type_parameters(&member.ty, &parameter_map);
+            // The declaration's parameters are replaced wherever the member
+            // names them, a method's parameters and return included, except
+            // where a generic method's own parameter shadows one.
+            let expected_member_type = match &member.ty {
+                ParsedType::Function(function)
+                    if function
+                        .type_parameters
+                        .iter()
+                        .any(|parameter| parameter_map.contains_key(&parameter.name)) =>
+                {
+                    let mut unshadowed = parameter_map.clone();
+                    for parameter in &function.type_parameters {
+                        unshadowed.remove(&parameter.name);
+                    }
+                    crate::infer::substitute_parsed_type_parameters_deep(&member.ty, &unshadowed)
+                }
+                _ => crate::infer::substitute_parsed_type_parameters_deep(&member.ty, &parameter_map),
+            };
             with_bivariant_inference(member.is_method, || {
                 collect_inferred_type_argument(
                     &expected_member_type,
@@ -4009,6 +4308,28 @@ fn lookup_declaration_for_inference(
 /// the argument against the substituted TRUE branch: selecting that branch is
 /// exactly what a successful inference implies, and its members are where the
 /// parameter occurs (tsc infers `T` from `variants` the same way).
+/// A declaration's type parameters mapped to a reference's arguments, the
+/// missing ones filled with their defaults as `fillMissingTypeArguments` does
+/// (`unknown` without one), so no name of the declaration's own is left in
+/// the walk to be read as one of the call's type parameters.
+fn filled_type_parameter_map(
+    parameters: &[surge_ts_syntax::ParsedTypeParameter],
+    arguments: &[ParsedType],
+) -> surge_ts_types::fx::FxHashMap<String, ParsedType> {
+    let mut map: surge_ts_types::fx::FxHashMap<String, ParsedType> = Default::default();
+    for (index, parameter) in parameters.iter().enumerate() {
+        let argument = match arguments.get(index) {
+            Some(argument) => argument.clone(),
+            None => match &parameter.default_type {
+                Some(default) => crate::infer::substitute_parsed_type_parameters_deep(default, &map),
+                None => ParsedType::UnknownKeyword,
+            },
+        };
+        map.insert(parameter.name.clone(), argument);
+    }
+    map
+}
+
 fn infer_through_generic_alias(
     alias: &crate::symbols::TypeAliasInfo,
     named_type: &ParsedNamedType,
@@ -4021,13 +4342,7 @@ fn infer_through_generic_alias(
     if alias.body.type_parameters.len() < named_type.type_arguments.len() {
         return;
     }
-    let parameter_map: surge_ts_types::fx::FxHashMap<String, ParsedType> = alias
-        .body
-        .type_parameters
-        .iter()
-        .zip(named_type.type_arguments.iter())
-        .map(|(parameter, argument)| (parameter.name.clone(), argument.clone()))
-        .collect();
+    let parameter_map = filled_type_parameter_map(&alias.body.type_parameters, &named_type.type_arguments);
 
     let mut body = &alias.body.ty;
     if let ParsedType::Conditional(conditional) = body {
@@ -4146,13 +4461,12 @@ pub(crate) fn record_type_argument_candidate(
     let Some(existing) = substitution.get(type_parameter_name).cloned() else {
         return;
     };
+    INFERENCES_MADE.set(INFERENCES_MADE.get() + 1);
 
     record_generic_call_inference_candidate();
-    let candidate = if widen_literals && !substitution.keeps_literal(type_parameter_name) {
-        widen_candidate_type(argument_type)
-    } else {
-        with_type_copy_reason(TypeCopyReason::CallResolution, || argument_type.clone())
-    };
+    let candidate = with_type_copy_reason(TypeCopyReason::CallResolution, || argument_type.clone());
+    let widened = (widen_literals && !substitution.keeps_literal(type_parameter_name))
+        .then(|| widen_candidate_type(argument_type));
 
     if substitution.is_inference_fixed(type_parameter_name) {
         return;
@@ -4183,27 +4497,33 @@ pub(crate) fn record_type_argument_candidate(
                 contravariant: false,
                 top_level: true,
                 fresh: false,
+                widened: None,
+                depth: 0,
             },
         );
     }
+    let recorded = InferenceCandidate {
+        ty: candidate,
+        literal,
+        contravariant,
+        top_level,
+        fresh,
+        widened: widened.filter(|_| !contravariant),
+        depth: INFERENCE_TYPE_ARGUMENT_DEPTH.get(),
+    };
     // `inferFromTypes` records a candidate once in each list.
-    if substitution
-        .inference_candidates(type_parameter_name)
-        .iter()
-        .any(|recorded| recorded.contravariant == contravariant && recorded.ty == candidate)
-    {
+    if contravariant {
+        if substitution
+            .inference_candidates(type_parameter_name)
+            .iter()
+            .any(|existing| existing.contravariant && existing.ty == recorded.ty)
+        {
+            return;
+        }
+        substitution.push_inference_candidate(type_parameter_name, recorded);
+    } else if !substitution.insert_covariant_candidate(type_parameter_name, recorded) {
         return;
     }
-    substitution.push_inference_candidate(
-        type_parameter_name,
-        InferenceCandidate {
-            ty: candidate,
-            literal,
-            contravariant,
-            top_level,
-            fresh,
-        },
-    );
     let inferred = inferred_type(substitution.inference_candidates(type_parameter_name), false);
     substitution.set(type_parameter_name.to_string(), inferred, false);
 }
@@ -4218,8 +4538,22 @@ pub(crate) fn record_type_argument_candidate(
 /// beyond what recording a candidate already widened: set once the parameter
 /// is fixed.
 fn inferred_type(candidates: &[InferenceCandidate], widen_literals: bool) -> Type {
+    let every_top_level = candidates
+        .iter()
+        .filter(|candidate| !candidate.contravariant)
+        .all(|candidate| candidate.top_level);
+    let effective: Vec<InferenceCandidate> = candidates
+        .iter()
+        .map(|candidate| match (&candidate.widened, every_top_level) {
+            (Some(widened), true) => InferenceCandidate {
+                ty: widened.clone(),
+                ..candidate.clone()
+            },
+            _ => candidate.clone(),
+        })
+        .collect();
     let (contra, co): (Vec<&InferenceCandidate>, Vec<&InferenceCandidate>) =
-        candidates.iter().partition(|candidate| candidate.contravariant);
+        effective.iter().partition(|candidate| candidate.contravariant);
     let covariant = (!co.is_empty()).then(|| covariant_inference(&co, widen_literals));
     let Some(contravariant) = contravariant_inference(&contra) else {
         return covariant.unwrap_or(Type::Never);
@@ -4285,7 +4619,12 @@ fn covariant_inference(candidates: &[&InferenceCandidate], widen_literals: bool)
         types.push((surge_ts_types::union_type(literals.clone()), true));
     }
     crate::checks::var::widen_nullable_type(&normalize_object_literal_members(
-        &common_supertype(types),
+        &common_supertype(
+            types,
+            candidates
+                .iter()
+                .any(|candidate| !candidate.fresh && literal_base_type(&candidate.ty).is_some()),
+        ),
         &literals,
     ))
 }
@@ -4311,7 +4650,7 @@ fn contravariant_inference(candidates: &[&InferenceCandidate]) -> Option<Type> {
 /// binds `T` to `B | undefined`. The supertype is the leftmost candidate no
 /// later one is a supertype of (`findLeftmostType` with `isTypeSubtypeOf`).
 /// Each type is paired with whether it is the object literal candidates' union.
-fn common_supertype(types: Vec<(Type, bool)>) -> Type {
+fn common_supertype(types: Vec<(Type, bool)>, union_same_base_literals: bool) -> Type {
     if types.len() == 1 {
         return types.into_iter().next().map(|(ty, _)| ty).unwrap_or(Type::Never);
     }
@@ -4332,6 +4671,19 @@ fn common_supertype(types: Vec<(Type, bool)>) -> Type {
         nullable.extend(nulls);
         if !rest.is_empty() {
             primary.push((surge_ts_types::union_type(rest), literal));
+        }
+    }
+    // `literalTypesWithSameBaseType`: literal candidates of one primitive are
+    // unioned rather than reduced to a supertype. Candidates that are all fresh
+    // literals still settle on the primitive below: tsc's union of them stays
+    // fresh and a mutable binding widens it, a freshness surge's types do not
+    // carry.
+    if union_same_base_literals && primary.len() > 1 {
+        let bases: Vec<Option<Type>> = primary.iter().map(|(ty, _)| literal_base_type(ty)).collect();
+        if bases.iter().all(|base| base.is_some() && *base == bases[0]) {
+            let mut members: Vec<Type> = primary.into_iter().map(|(ty, _)| ty).collect();
+            members.extend(nullable);
+            return surge_ts_types::union_type(members);
         }
     }
     let supertype = primary.into_iter().reduce(|left, right| {
@@ -4355,6 +4707,27 @@ fn common_supertype(types: Vec<(Type, bool)>) -> Type {
     let mut members: Vec<Type> = supertype.into_iter().map(|(ty, _)| ty).collect();
     members.extend(nullable);
     surge_ts_types::union_type(members)
+}
+
+/// The primitive a literal type, or a union of literals of one primitive,
+/// widens to (`getBaseTypeOfLiteralType`); `None` for anything that is not a
+/// literal.
+fn literal_base_type(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::StringLiteral(_) => Some(Type::String),
+        Type::NumberLiteral(_) => Some(Type::Number),
+        Type::BooleanLiteral(_) => Some(Type::Boolean),
+        Type::Union(union) => {
+            let mut bases = union.types().iter().map(literal_base_type);
+            let first = bases.next()??;
+            bases.all(|base| base.as_ref() == Some(&first)).then_some(first)
+        }
+        Type::Reference(reference) if reference.enum_base.is_none() => match reference.resolve() {
+            resolved @ Type::Union(_) => literal_base_type(&resolved),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// `isTypeSubtypeOf` for candidate selection, whose source is never an object

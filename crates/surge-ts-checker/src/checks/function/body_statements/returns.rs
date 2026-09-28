@@ -514,9 +514,31 @@ pub(crate) fn check_generator_instantiation(
     {
         return;
     }
-    let yield_type = generator_type_argument(declared, 0).unwrap_or(Type::Any);
-    let return_type = generator_type_argument(declared, 1).unwrap_or_else(|| yield_type.clone());
-    let next_type = generator_type_argument(declared, 2).unwrap_or(Type::GenuineUnknown);
+    let iteration = generator_type_argument(declared, 0).is_none().then(|| {
+        crate::checks::expr::generator_return_iteration_types(
+            declared,
+            is_async,
+            ctx.options.strict_builtin_iterator_return,
+        )
+        .filter(|types| {
+            !types.yield_type.is_unmodelled()
+                && !types.return_type.is_unmodelled()
+                && types.next_type.as_ref().is_none_or(|next| !next.is_unmodelled())
+        })
+    });
+    let (yield_type, return_type, next_type) = match iteration.flatten() {
+        Some(types) => (
+            types.yield_type,
+            types.return_type,
+            types.next_type.unwrap_or(Type::GenuineUnknown),
+        ),
+        None => {
+            let yield_type = generator_type_argument(declared, 0).unwrap_or(Type::Any);
+            let return_type = generator_type_argument(declared, 1).unwrap_or_else(|| yield_type.clone());
+            let next_type = generator_type_argument(declared, 2).unwrap_or(Type::GenuineUnknown);
+            (yield_type, return_type, next_type)
+        }
+    };
     let Some(generator) = generator_type_of(&yield_type, &return_type, &next_type, is_async, ctx) else {
         return;
     };

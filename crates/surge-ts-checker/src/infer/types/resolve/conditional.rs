@@ -75,7 +75,7 @@ pub(crate) fn resolve_conditional_type(
     }
 
     let resolved_extends =
-        resolve_parsed_type(*conditional.extends_type, ctx, resolving, substitution);
+        resolve_parsed_type((*conditional.extends_type).clone(), ctx, resolving, substitution);
     // Only bail when the extends pattern is structureless: a usable shape that
     // merely tainted `had_error` from an unmodelled deep member (e.g. React's
     // `JSXElementConstructor<P>`, whose body pulls `ReactNode`/`Component`) is
@@ -116,6 +116,30 @@ pub(crate) fn resolve_conditional_type(
         };
     }
 
+    // A distributive conditional over a union is mapped over its members
+    // first (`getConditionalTypeInstantiation`); each member is deferred or
+    // decided on its own below.
+    let distributes_over_union = distributive_parameter.is_some()
+        && matches!(
+            crate::program::with_dts_expansion_reason(crate::program::DtsExpansionReason::ConditionalType, || {
+                resolved_check.ty.peeled()
+            }),
+            Type::Union(_) | Type::Never
+        );
+    if !distributes_over_union
+        && let Some(deferred) = deferred_generic_conditional(
+            &conditional,
+            &resolved_check.ty,
+            &resolved_extends.ty,
+            &extends_pattern,
+            ctx,
+            resolving,
+            substitution,
+        )
+    {
+        return deferred;
+    }
+
     if let Some(parameter_name) = distributive_parameter {
         // A deferred alias instantiation can carry its union behind a lazy
         // nominal reference; distribution must see the structural union (tsc
@@ -149,6 +173,26 @@ pub(crate) fn resolve_conditional_type(
                     ty: Type::Unknown,
                     had_error: false,
                 };
+            }
+            if is_generic_conditional_operand(&member) || is_generic_conditional_operand(&resolved_extends.ty) {
+                let mut member_substitution =
+                    substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+                member_substitution.insert(parameter_name.clone(), member.clone());
+                let member_extends = resolve_parsed_type(extends_pattern.clone(), ctx, resolving, &member_substitution);
+                if !member_extends.had_error
+                    && let Some(deferred) = deferred_generic_conditional(
+                        &conditional,
+                        &member,
+                        &member_extends.ty,
+                        &extends_pattern,
+                        ctx,
+                        resolving,
+                        &member_substitution,
+                    )
+                {
+                    results.push(deferred.ty);
+                    continue;
+                }
             }
             // Same "cannot decide" degrade as the non-distributive path below: a
             // member that collapsed to the `unknown` sentinel (a value type surge
@@ -445,6 +489,202 @@ pub(crate) fn resolve_conditional_type(
     } else {
         resolve_parsed_type(*conditional.false_type, ctx, resolving, substitution)
     }
+}
+
+thread_local! {
+    static DISTRIBUTIVE_CONSTRAINT_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// `isGenericType` for what a conditional's check or extends type can be: a
+/// type variable of the body being checked, or a union or intersection
+/// holding one.
+fn is_generic_conditional_operand(ty: &Type) -> bool {
+    ty.is_type_variable()
+        || match ty {
+            Type::Union(union) => union.types().iter().any(is_generic_conditional_operand),
+            Type::Object(object) => object
+                .intersection_operands
+                .as_deref()
+                .is_some_and(|operands| operands.iter().any(Type::is_type_variable)),
+            _ => false,
+        }
+}
+
+/// tsc's `getConditionalType` over a generic check or extends type
+/// (`isDeferredType`, with `checkTuples` for two written tuples of one
+/// length): neither branch is chosen, and the conditional is a type of its
+/// own. `None` when neither side is generic, or one is unmodelled.
+fn deferred_generic_conditional(
+    conditional: &ParsedConditionalType,
+    check: &Type,
+    extends: &Type,
+    extends_pattern: &ParsedType,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    substitution: &TypeParameterSubstitution,
+) -> Option<ResolvedType> {
+    let check_tuples = matches!(
+        (conditional.check_type.as_ref(), conditional.extends_type.as_ref()),
+        (ParsedType::Tuple(check), ParsedType::Tuple(extends)) if check.len() == extends.len()
+    );
+    let generic = |ty: &Type| {
+        is_generic_conditional_operand(ty)
+            || check_tuples && matches!(ty, Type::Tuple(elements) if elements.iter().any(is_generic_conditional_operand))
+    };
+    if !generic(check) && !generic(extends) {
+        return None;
+    }
+    let unmodelled = |ty: &Type| ty.is_unmodelled() && !matches!(ty, Type::GenuineUnknown | Type::ErrorType);
+    if unmodelled(check) || unmodelled(extends) {
+        return None;
+    }
+    let check_name = match conditional.check_type.as_ref() {
+        ParsedType::Named(named) if named.type_arguments.is_empty() => Some(named.name.clone()),
+        _ => None,
+    };
+    let distributive = check_name
+        .as_deref()
+        .is_some_and(|name| substitution.get(name).is_some() || check.is_type_variable());
+    let names_check = |ty: &ParsedType| {
+        check_name.as_deref().is_some_and(|name| {
+            let mut named = false;
+            ty.for_each_named_type(&mut |reference| {
+                named |= reference.name == name && reference.type_arguments.is_empty();
+            });
+            named
+        })
+    };
+    let distribution_dependent =
+        distributive && (names_check(&conditional.true_type) || names_check(&conditional.false_type));
+    let has_infer = parsed_type_contains_infer(extends_pattern);
+
+    // `getImpliedConstraint`: in the true branch the check type is read
+    // through the extends type, element by element for two unary tuples.
+    let mut true_substitution = substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+    let implied = match (conditional.check_type.as_ref(), conditional.extends_type.as_ref(), check, extends) {
+        (ParsedType::Tuple(check_elements), ParsedType::Tuple(extends_elements), Type::Tuple(checks), Type::Tuple(extendses))
+            if check_elements.len() == 1 && extends_elements.len() == 1 && checks.len() == 1 && extendses.len() == 1 =>
+        {
+            match &check_elements[0] {
+                ParsedType::Named(named) if named.type_arguments.is_empty() => {
+                    Some((named.name.clone(), checks[0].clone(), extendses[0].clone()))
+                }
+                _ => None,
+            }
+        }
+        _ => check_name.clone().map(|name| (name, check.clone(), extends.clone())),
+    };
+    // A check type that is not a written type parameter (`T["k"]`) is read
+    // through the extends type wherever the true branch names it; the
+    // reference is replaced once the branch is resolved.
+    let implied_by_type = match (&implied, check) {
+        (None, Type::TypeParameter(parameter))
+            if check.is_type_variable() && !matches!(extends, Type::Any | Type::GenuineUnknown) =>
+        {
+            Some((parameter.clone(), surge_ts_types::type_variable::intersect_type_variable(check, extends.clone())))
+        }
+        _ => None,
+    };
+    if let Some((name, variable, constraint)) = implied
+        && surge_ts_types::type_variable::is_generic_index_type(&variable)
+        && !matches!(constraint, Type::Any | Type::GenuineUnknown)
+    {
+        let implied = match &variable {
+            Type::Object(object) => {
+                let mut operands = object.intersection_operands.as_deref().unwrap_or_default().to_vec();
+                operands.push(constraint);
+                surge_ts_types::type_variable::type_variable_intersection(operands)
+            }
+            _ => surge_ts_types::type_variable::intersect_type_variable(&variable, constraint),
+        };
+        true_substitution.insert(name, implied);
+    }
+    // `getInferredTrueTypeFromConditionalType`: inferring from a generic check
+    // type with `InferencePriority.NoConstraints` finds no candidate, so each
+    // `infer` type parameter is `unknown`.
+    if has_infer {
+        let mut infer_names = Vec::new();
+        collect_infer_names(extends_pattern, &mut infer_names);
+        for name in infer_names {
+            true_substitution.insert(name, Type::GenuineUnknown);
+        }
+    }
+    let true_type = {
+        let resolved = resolve_parsed_type(conditional.true_type.as_ref().clone(), ctx, resolving, &true_substitution);
+        match (resolved.had_error, &implied_by_type) {
+            (true, _) => Type::Unknown,
+            (false, Some((parameter, implied))) => {
+                surge_ts_types::type_variable::substitute_variable(&resolved.ty, parameter, implied)
+            }
+            (false, None) => resolved.ty,
+        }
+    };
+    let false_type = {
+        let resolved = resolve_parsed_type(conditional.false_type.as_ref().clone(), ctx, resolving, substitution);
+        if resolved.had_error { Type::Unknown } else { resolved.ty }
+    };
+
+    // `getConstraintOfDistributiveConditionalType`: the conditional over the
+    // check type's constraint.
+    let distributive_constraint = match (distributive, check_name.as_deref(), check) {
+        (true, Some(name), Type::TypeParameter(parameter)) => {
+            match surge_ts_types::type_variable::active_constraint(parameter) {
+                Some(Some(constraint)) if constraint != *check && !constraint.is_unmodelled() => {
+                    let depth = DISTRIBUTIVE_CONSTRAINT_DEPTH.with(|depth| {
+                        let next = depth.get() + 1;
+                        depth.set(next);
+                        next
+                    });
+                    let result = (depth <= 8)
+                        .then(|| {
+                            let mut constraint_substitution =
+                                substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+                            constraint_substitution.insert(name.to_string(), constraint);
+                            let diagnostics_before = ctx.diagnostics().len();
+                            let resolved = resolve_conditional_type(
+                                conditional.clone(),
+                                ctx,
+                                resolving,
+                                &constraint_substitution,
+                            );
+                            ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+                            resolved
+                        })
+                        .filter(|resolved| !resolved.had_error && !resolved.ty.is_unmodelled() && resolved.ty != Type::Never)
+                        .map(|resolved| resolved.ty);
+                    DISTRIBUTIVE_CONSTRAINT_DEPTH.with(|depth| depth.set(depth.get() - 1));
+                    result
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+
+    let name = format!(
+        "{} extends {} ? {} : {}",
+        check.name(),
+        extends.name(),
+        true_type.name(),
+        false_type.name()
+    );
+    let deferred = surge_ts_types::type_variable::conditional_variable(
+        surge_ts_types::type_variable::DeferredConditional {
+            check: check.clone(),
+            extends: extends.clone(),
+            true_type,
+            false_type,
+            distributive,
+            distribution_dependent,
+            has_infer,
+            distributive_constraint,
+        },
+        name,
+    )?;
+    Some(ResolvedType {
+        ty: deferred,
+        had_error: false,
+    })
 }
 
 /// tsc's `getConditionalType` for an `any` check type (checker.go:24727): `any`
@@ -2648,6 +2888,7 @@ fn interface_members_pattern(
         construct_signature_overloads: Vec::new(),
         non_primitive: false,
         display_name: None,
+        abstract_construct_signature: false,
     }))
 }
 

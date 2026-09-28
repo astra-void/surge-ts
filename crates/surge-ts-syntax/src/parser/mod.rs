@@ -26,6 +26,7 @@ mod grammar_modifiers;
 mod grammar_merges;
 mod grammar_recovered;
 mod import_aliases;
+mod import_attributes;
 mod import_calls;
 mod imports;
 mod interfaces;
@@ -822,12 +823,49 @@ fn lower_assignment_pattern(
                         index_span: span,
                     },
                 };
+                let read = match source {
+                    ParsedExpression::ArrayLiteral { .. } => read,
+                    _ => ParsedExpression::ArrayPatternElement {
+                        source: Box::new(source.clone()),
+                        source_span,
+                        index,
+                        rest: false,
+                        tuple_literal: false,
+                        read: Box::new(read),
+                    },
+                };
                 for value in values(read, default) {
                     assign(target, value, assignments);
                 }
             }
             if let Some(rest) = &pattern.rest {
-                assign(&rest.target, ParsedExpression::Unknown, assignments);
+                // `checkArrayLiteralAssignment` reports a rest element that is
+                // not last and checks nothing through it.
+                let rest_start = rest.span.start;
+                let rest_is_last = pattern
+                    .elements
+                    .iter()
+                    .flatten()
+                    .all(|element| oxc_span::GetSpan::span(element).start < rest_start);
+                // The pattern is the array literal's contextual type
+                // (`getContextualTypeForAssignmentDeclaration`); it is tuple-like
+                // with an element before the rest, or a nested array pattern
+                // as the rest.
+                let tuple_literal = !pattern.elements.is_empty()
+                    || matches!(rest.target, AssignmentTarget::ArrayAssignmentTarget(_));
+                let value = if rest_is_last {
+                    ParsedExpression::ArrayPatternElement {
+                        source: Box::new(source.clone()),
+                        source_span,
+                        index: pattern.elements.len(),
+                        rest: true,
+                        tuple_literal,
+                        read: Box::new(source.clone()),
+                    }
+                } else {
+                    ParsedExpression::Unknown
+                };
+                assign(&rest.target, value, assignments);
             }
         }
         AssignmentTarget::ObjectAssignmentTarget(pattern) => {

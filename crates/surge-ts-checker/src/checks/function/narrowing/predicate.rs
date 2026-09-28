@@ -1345,14 +1345,18 @@ fn refined_parameter_predicate(
         if true_type == initial || true_type.is_unmodelled() {
             continue;
         }
+        // `checkIfExpressionRefinesParameter` narrows the false branch from
+        // the true type with the parameter's declared type still the
+        // reference's declared type, which decides discriminant narrowing.
         let mut assumed = scope.clone_with_reason(TypeCopyReason::ScopeOrContext);
-        assumed.insert(
+        assumed.insert_narrowed(
             name.clone(),
             SymbolInfo {
                 ty: true_type.clone(),
                 kind: crate::symbols::SymbolKind::Parameter,
                 function_signature: None,
             },
+            declared.clone(),
         );
         let false_subtype =
             narrowed_parameter(narrowed_by_condition(returned, &assumed, false, ctx))

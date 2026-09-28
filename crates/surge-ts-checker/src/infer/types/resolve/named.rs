@@ -295,6 +295,21 @@ fn resolve_named_type_inner(
         };
     }
 
+    // `getIntendedTypeFromJSDocTypeReference`: every annotation in a
+    // JavaScript file is JSDoc, where a bare `Object` is `any` unless
+    // `noImplicitAny` keeps it the global interface.
+    if named_type.name == "Object"
+        && named_type.type_arguments.is_empty()
+        && !ctx.options.no_implicit_any
+        && resolving.is_empty()
+        && surge_ts_syntax::is_javascript_file_name(&ctx.file_name)
+    {
+        return ResolvedType {
+            ty: Type::Any,
+            had_error: false,
+        };
+    }
+
     // Look up the declaration through a context-independent handle so resolution
     // can read the (often large) interface/alias payload while `ctx` is borrowed
     // mutably, without deep-cloning it. The handle owns its payload, so the
@@ -503,6 +518,7 @@ fn resolve_named_type_inner(
         // assignability recognise two resolutions of the same declaration.
         let alias_id = type_declaration_alias_id(declaration, &cache_key);
         let resolved = attach_object_alias_name(resolved, &named_type.name, &alias_id);
+        let resolved = alias_of_generic_reference(resolved, declaration, Some(&named_type.name));
         // An enum type is nominal in tsc and displayed by the enum's name, which
         // the lowered literal-union body cannot express. Wrap it in a nominal
         // reference so the *display* carries the enum while the payload stays the
@@ -515,6 +531,7 @@ fn resolve_named_type_inner(
         // peeled reference still compares nominally and displays by name).
         let resolved =
             wrap_named_object_reference(resolved, &named_type.name, &alias_id, &cache_key, ctx);
+        let resolved = mark_non_augmenting_subtype(resolved, declaration);
         cache_named_type_resolution(ctx, &cache_key, &resolved);
         return with_enum_base(resolved, declaration, &cache_key, &named_type.name, ctx, resolving, substitution);
     }
@@ -1066,7 +1083,7 @@ fn resolve_named_type_inner(
             cache_persistent_generic_resolution(ctx, &key, arguments, &resolved);
         }
     }
-    tag_generic_object_reference(
+    let tagged = tag_generic_object_reference(
         resolved,
         alias_display_name.as_deref(),
         branch_alias,
@@ -1076,7 +1093,60 @@ fn resolve_named_type_inner(
         declared_variances,
         intern_key,
         ctx,
-    )
+    );
+    let tagged = mark_non_augmenting_subtype(tagged, declaration);
+    alias_of_generic_reference(tagged, declaration, alias_display_name.as_deref())
+}
+
+/// checker.go `getSingleBaseForNonAugmentingSubtype`: one base type and no
+/// members of its own (a class base written as a name).
+fn mark_non_augmenting_subtype(resolved: ResolvedType, declaration: &TypeDeclarationInfo) -> ResolvedType {
+    let TypeDeclarationInfo::Interface(interface) = declaration else {
+        return resolved;
+    };
+    let body = &interface.body;
+    let non_augmenting = body.extends.len() == 1
+        && body.members.is_empty()
+        && body.string_index_type.is_none()
+        && body.number_index_type.is_none()
+        && body.call_signature.is_none()
+        && body.construct_signatures.is_empty()
+        && !(interface.is_class_instance && interface.declares_constructor);
+    match resolved.ty {
+        Type::Reference(reference) if non_augmenting => {
+            ResolvedType { ty: Type::Reference(reference.as_non_augmenting_subtype()), had_error: resolved.had_error }
+        }
+        ty => ResolvedType { ty, had_error: resolved.had_error },
+    }
+}
+
+/// checker.go `isDeferredTypeReferenceNode`: an alias whose body is a written
+/// reference to a generic declaration names that reference
+/// (`getAliasSymbolForTypeNode`), so tsc displays it by the alias.
+fn alias_of_generic_reference(
+    resolved: ResolvedType,
+    declaration: &TypeDeclarationInfo,
+    display: Option<&str>,
+) -> ResolvedType {
+    let (TypeDeclarationInfo::Alias(alias), Some(display)) = (declaration, display) else {
+        return resolved;
+    };
+    let written_generic_reference =
+        matches!(&alias.body.ty, ParsedType::Named(body) if !body.type_arguments.is_empty());
+    match resolved.ty {
+        Type::Reference(reference)
+            if written_generic_reference
+                && !resolved.had_error
+                && !reference.arguments.is_empty()
+                && reference.enum_owner.is_none()
+                && !reference.render_structurally
+                && !reference.is_readonly_array()
+                && reference.written_tuple().is_none() =>
+        {
+            ResolvedType { ty: Type::Reference(reference.with_alias_display(display)), had_error: false }
+        }
+        ty => ResolvedType { ty, had_error: resolved.had_error },
+    }
 }
 
 /// Opt-in (`SURGE_TRACE_TYPE_EXPANSION=1`) trace of degraded (`had_error`)
@@ -1661,29 +1731,71 @@ fn wrap_enum_member_reference(
         Some((_, member)) if !member.is_empty() => format!("{enum_name}.{member}"),
         _ => enum_name.to_string(),
     };
-    let display = if alias.enum_exported {
+    // An enum a namespace exports is registered under its qualified name
+    // (`First.E`) and is not a module export: tsc names it bare.
+    let namespace_member = alias.name.as_ref() != own_name.as_str()
+        && alias.name.strip_suffix(own_name.as_str()).is_some_and(|prefix| prefix.ends_with('.'));
+    let display = if alias.enum_exported && !namespace_member {
         format!(
             "import({:?}).{own_name}",
             module_path_for_display(&alias.file_name)
         )
     } else {
-        own_name
+        own_name.clone()
     };
     let numeric = enum_resolution_is_numeric(&resolved.ty);
     let interned = intern_instantiation(ctx, decl_key, &[], resolved.ty.clone());
     let reference = make_type_reference(reference_id.to_string(), display, Vec::new(), interned);
-    let owner: std::sync::Arc<str> = format!("{}\0{enum_name}", alias.file_name).into();
+    // The enum is its own declaration's reference id: a member's id less
+    // its `.member` suffix, so two same-named enums of different namespaces
+    // stay distinct.
+    let member_suffix = own_name.strip_prefix(enum_name).filter(|suffix| !suffix.is_empty());
+    let owner: std::sync::Arc<str> = match member_suffix {
+        Some(suffix) => reference_id.strip_suffix(suffix).unwrap_or(reference_id).into(),
+        None => reference_id.into(),
+    };
+    let members = match member_suffix {
+        Some(suffix) => alias.name.strip_suffix(suffix).and_then(|enum_key| match ctx.lookup_type_declaration(enum_key) {
+            Some(TypeDeclarationInfo::Alias(enum_alias)) if enum_alias.enum_name.as_deref() == Some(enum_name) => {
+                Some(enum_members_of(enum_alias))
+            }
+            _ => None,
+        }),
+        None => Some(enum_members_of(alias)),
+    };
     let reference = match (numeric, reference) {
-        (true, Type::Reference(reference)) => {
-            Type::Reference(reference.numeric_enum().with_enum_owner(owner))
-        }
+        (true, Type::Reference(reference)) => Type::Reference(reference.numeric_enum().with_enum_owner(owner)),
         (false, Type::Reference(reference)) => Type::Reference(reference.with_enum_owner(owner)),
+        (_, reference) => reference,
+    };
+    let reference = match (members, reference) {
+        (Some(members), Type::Reference(reference)) => Type::Reference(reference.with_enum_members(members)),
         (_, reference) => reference,
     };
     ResolvedType {
         ty: reference,
         had_error: false,
     }
+}
+
+/// An enum's members as `isEnumTypeRelatedTo` reads them: each name with its
+/// constant value, or none for a computed member.
+fn enum_members_of(alias: &crate::symbols::TypeAliasInfo) -> std::sync::Arc<surge_ts_types::EnumMembers> {
+    let members = alias
+        .enum_members
+        .iter()
+        .map(|(name, ty)| {
+            let value = match ty {
+                ParsedType::NumberLiteral(value) => {
+                    Some(Type::NumberLiteral(surge_ts_types::NumberLiteralType { value: value.clone() }))
+                }
+                ParsedType::StringLiteral(value) => Some(Type::StringLiteral(value.clone())),
+                _ => None,
+            };
+            (std::sync::Arc::<str>::from(name.as_str()), value)
+        })
+        .collect();
+    std::sync::Arc::new(surge_ts_types::EnumMembers { regular: !alias.enum_is_const, members })
 }
 
 /// Whether a lowered `enum` body is numeric — every member (or, for the enum

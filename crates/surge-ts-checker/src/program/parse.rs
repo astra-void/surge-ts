@@ -292,6 +292,7 @@ pub(super) fn parse_program_file(
         commonjs_module: parsed.commonjs_module,
         import_call_specifiers: parsed.import_call_specifiers,
         import_calls: parsed.import_calls,
+        import_attributes: parsed.import_attributes,
         file_kind,
         module_reads: parsed.module_reads,
                 definite_writes: parsed.definite_writes,

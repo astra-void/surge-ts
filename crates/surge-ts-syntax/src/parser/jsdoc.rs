@@ -254,6 +254,8 @@ pub(crate) enum JsDocTypeExpression {
 
 #[derive(Clone, Debug)]
 pub(crate) struct JsDocParameterTag {
+    /// Where the tag's `@` is.
+    start: usize,
     /// The dotted name as written (`opts.name` is `["opts", "name"]`).
     name: Vec<String>,
     name_span: TextSpan,
@@ -828,6 +830,18 @@ impl<'s> TagParser<'s> {
         }
         let type_start = if has_brace { self.s.pos } else { self.s.token_start };
         let parsed = parse_type_text(self.s.text, type_start);
+        for end in &parsed.missing_types {
+            let bytes = self.s.text.as_bytes();
+            let mut start = *end;
+            while start < bytes.len() && bytes[start].is_ascii_whitespace() {
+                start += 1;
+            }
+            self.diagnostics.push(crate::ParsedGrammarDiagnostic {
+                kind: crate::ParsedGrammarDiagnosticKind::Ts(1110),
+                span: TextSpan { start, end: (start + 1).min(bytes.len()) },
+                name: None,
+            });
+        }
         self.s.pos = parsed.end.max(type_start);
         // tsgo's parser recovers through a malformed type up to the braces
         // that close it; oxc's gives up where it failed.
@@ -945,7 +959,7 @@ impl<'s> TagParser<'s> {
                 }
             }
         }
-        Some(JsDocParameterTag { name, name_span, bracketed, type_expression, name_first: is_name_first })
+        Some(JsDocParameterTag { start, name, name_span, bracketed, type_expression, name_first: is_name_first })
     }
 
     fn at_jsdoc_link(&mut self) -> bool {
@@ -1383,6 +1397,9 @@ fn matching_close_brace(text: &str, start: usize) -> Option<usize> {
 struct ParsedTypeText {
     ty: JsDocType,
     end: usize,
+    /// Where each lone `?` ends: tsgo's `parseJSDocNullableType` requires a
+    /// type after it and reports TS1110 at the next token.
+    missing_types: Vec<usize>,
 }
 
 /// tsgo's `parseJSDocType` over the text at `start`: the vendored oxc parser
@@ -1402,9 +1419,13 @@ fn parse_type_text(text: &str, start: usize) -> ParsedTypeText {
                 is_array: false,
             },
             end,
+            missing_types: Vec::new(),
         };
     };
     let span = ty.span();
+    let mut missing = MissingNullableTypes(Vec::new(), AstBuilder::new(&allocator));
+    missing.visit_ts_type(&mut ty);
+    let missing_types = missing.0;
     let (object_like, is_array) = object_or_object_array(&ty);
     let mut import_types = ImportTypeSpecifiers(Vec::new());
     import_types.visit_ts_type(&ty);
@@ -1421,6 +1442,22 @@ fn parse_type_text(text: &str, start: usize) -> ParsedTypeText {
             is_array,
         },
         end,
+        missing_types,
+    }
+}
+
+/// oxc reads a lone `?` as JSDoc's unknown type; tsgo reads a nullable type
+/// whose type is missing, which resolves to the error type.
+struct MissingNullableTypes<'a>(Vec<usize>, AstBuilder<'a>);
+
+impl<'a> VisitMut<'a> for MissingNullableTypes<'a> {
+    fn visit_ts_type(&mut self, ty: &mut TSType<'a>) {
+        if let TSType::JSDocUnknownType(unknown) = ty {
+            self.0.push(unknown.span.end as usize);
+            *ty = self.1.ts_type_any_keyword(unknown.span);
+            return;
+        }
+        walk_mut::walk_ts_type(self, ty);
     }
 }
 
@@ -1518,7 +1555,8 @@ fn lowered_with_optionality(ty: &JsDocType) -> ParsedType {
 /// tsgo's `reparseJSDocTypeLiteral`.
 fn type_of_expression(expression: &JsDocTypeExpression) -> Option<ParsedType> {
     match expression {
-        JsDocTypeExpression::Type(ty) => ty.ty.as_ref().map(|_| lowered(ty)),
+        // `T=` is the `JSDocOptionalType` whose type includes `undefined`.
+        JsDocTypeExpression::Type(ty) => ty.ty.as_ref().map(|_| lowered_with_optionality(ty)),
         JsDocTypeExpression::Literal(literal) => {
             let properties = literal
                 .properties
@@ -1549,6 +1587,7 @@ fn type_of_expression(expression: &JsDocTypeExpression) -> Option<ParsedType> {
                 construct_signature_overloads: Vec::new(),
                 non_primitive: false,
                 display_name: None,
+                abstract_construct_signature: false,
             }));
             Some(if literal.is_array { ParsedType::Array(std::sync::Arc::new(object)) } else { object })
         }
@@ -1643,6 +1682,9 @@ fn signature_type(signature: &JsDocSignature, type_parameters: Vec<ParsedTypePar
 pub(crate) struct JsDocParameter {
     pub(crate) ty: Option<(ParsedType, TextSpan)>,
     pub(crate) optional: bool,
+    /// `makeQuestionIfOptional`: the question token an optional `@param`
+    /// gives the parameter, located at the tag.
+    pub(crate) question: Option<TextSpan>,
 }
 
 #[derive(Default)]
@@ -1661,6 +1703,9 @@ pub(crate) struct JsDocIndex {
     /// The functions whose `@type` full signature is a type whose `this`
     /// parameter cannot be read off it (a named type), by the function's start.
     opaque_full_signatures: std::collections::HashSet<u32>,
+    /// The functions `reparseHosted` gives their `@type` as the full
+    /// signature, by the function's start.
+    full_signature_hosts: std::collections::HashSet<u32>,
     /// The `@type` of a variable, class field or accessor, by its start.
     declared: std::collections::HashMap<u32, (ParsedType, TextSpan)>,
     /// `/** @type {T} */ (e)` and `@satisfies`, by the parenthesized
@@ -1670,8 +1715,9 @@ pub(crate) struct JsDocIndex {
     initializer_satisfies: std::collections::HashMap<u32, (ParsedType, TextSpan)>,
     /// `/** @type {T} */ o.x = e`: an assignment declaration typed `T`, by
     /// the assigned value's span; likewise a property assignment's value
-    /// (`{ /** @type {T} */ x: e }`).
-    assignment_types: std::collections::HashMap<(u32, u32), (ParsedType, TextSpan)>,
+    /// (`{ /** @type {T} */ x: e }`). The last span is the node tsc reports
+    /// a mismatch on: the assignment's target, the property, or the value.
+    assignment_types: std::collections::HashMap<(u32, u32), (ParsedType, TextSpan, TextSpan)>,
     /// `/** @type {T} */ return e`: `e as T`, by the return statement's start.
     return_casts: std::collections::HashMap<u32, (ParsedType, TextSpan, bool)>,
     /// A class's `@augments` type arguments for its `extends` clause, by the
@@ -1684,6 +1730,10 @@ pub(crate) struct JsDocIndex {
     parse_errors: Vec<(u32, TextSpan)>,
     /// `@typedef` and `@callback` aliases.
     aliases: Vec<ParsedTypeAliasDeclaration>,
+    /// Beside each alias: the statement list its comment sits in, by that
+    /// list's first statement, or `None` for the file's own statements. tsgo's
+    /// reparser appends a typedef to the statement list being parsed.
+    alias_scopes: Vec<Option<u32>>,
     /// `@import` declarations.
     imports: Vec<crate::ParsedImportDeclaration>,
     /// Every `import("…")` specifier the file's JSDoc types name.
@@ -1772,7 +1822,7 @@ pub(crate) fn initializer_satisfies_at(start: u32) -> Option<(ParsedType, TextSp
     with_index(|index| index.initializer_satisfies.get(&start).cloned())
 }
 
-pub(crate) fn assignment_type_at(start: u32, end: u32) -> Option<(ParsedType, TextSpan)> {
+pub(crate) fn assignment_type_at(start: u32, end: u32) -> Option<(ParsedType, TextSpan, TextSpan)> {
     with_index(|index| index.assignment_types.get(&(start, end)).cloned())
 }
 
@@ -1874,15 +1924,34 @@ pub(crate) fn import_statements() -> Vec<ParsedStatement> {
     .unwrap_or_default()
 }
 
-/// The statements the file's `@typedef` and `@callback` tags declare; in a
-/// module each is exported (`IsImplicitlyExportedJSDocDeclaration`).
+/// The type aliases the `@typedef` and `@callback` tags inside the statement
+/// list starting at `first_statement` declare.
+pub(crate) fn statement_list_aliases(first_statement: u32) -> Vec<crate::ParsedFunctionBodyStatement> {
+    with_index(|index| {
+        Some(
+            index
+                .aliases
+                .iter()
+                .zip(&index.alias_scopes)
+                .filter(|(_, scope)| **scope == Some(first_statement))
+                .map(|(alias, _)| crate::ParsedFunctionBodyStatement::TypeAlias(Box::new(alias.clone())))
+                .collect(),
+        )
+    })
+    .unwrap_or_default()
+}
+
+/// The statements the file's own `@typedef` and `@callback` tags declare; in
+/// a module each is exported (`IsImplicitlyExportedJSDocDeclaration`).
 pub(crate) fn alias_statements(is_module: bool) -> Vec<ParsedStatement> {
     with_index(|index| {
         Some(
             index
                 .aliases
                 .iter()
-                .map(|alias| {
+                .zip(&index.alias_scopes)
+                .filter(|(_, scope)| scope.is_none())
+                .map(|(alias, _)| {
                     let statement = ParsedStatement::TypeAliasDeclaration(Box::new(alias.clone()));
                     if is_module {
                         ParsedStatement::ExportDeclaration(Box::new(ParsedExportDeclaration::Statement {
@@ -1908,8 +1977,22 @@ pub(crate) fn build_jsdoc_index(program: &Program<'_>, source_text: &str) -> JsD
         parsed: std::collections::HashMap::default(),
         unhosted_done: std::collections::HashSet::default(),
         index: JsDocIndex::default(),
+        alias_comment_starts: Vec::new(),
+        statement_lists: Vec::new(),
     };
     builder.visit_program(program);
+    builder.index.alias_scopes = builder
+        .alias_comment_starts
+        .iter()
+        .map(|&comment| {
+            builder
+                .statement_lists
+                .iter()
+                .filter(|(start, end, _)| *start <= comment && comment < *end)
+                .min_by_key(|(start, end, _)| end - start)
+                .map(|(_, _, first)| *first)
+        })
+        .collect();
     builder.index.import_type_specifiers =
         IMPORT_TYPE_SPECIFIERS.with(|specifiers| std::mem::take(&mut *specifiers.borrow_mut()));
     builder.index
@@ -1921,6 +2004,11 @@ struct IndexBuilder<'s, 'c> {
     parsed: std::collections::HashMap<u32, std::rc::Rc<JsDocComment>>,
     unhosted_done: std::collections::HashSet<u32>,
     index: JsDocIndex,
+    /// The comment each alias was declared by, beside `index.aliases`.
+    alias_comment_starts: Vec<u32>,
+    /// Every nested statement list: its container's span and its first
+    /// statement's start.
+    statement_lists: Vec<(u32, u32, u32)>,
 }
 
 /// The function-like node a JSDoc on some declaration applies to
@@ -2137,6 +2225,7 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
                     // `@typedef {T} A.B` declares `B` in a namespace `A`, which
                     // the type table keys by the qualified name.
                     let ty = type_of_expression(type_expression).unwrap_or(ParsedType::Unknown);
+                    self.alias_comment_starts.push(key);
                     self.index.aliases.push(ParsedTypeAliasDeclaration {
                         is_declare: false,
                         name: name.join("."),
@@ -2147,6 +2236,7 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
                         enum_name: None,
                         enum_exported: false,
                         enum_is_const: false,
+                        enum_members: Vec::new(),
                     });
                 }
                 JsDocTag::Import(import) => self.index.imports.push(import.clone()),
@@ -2158,6 +2248,7 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
                     if name.len() != 1 {
                         continue;
                     }
+                    self.alias_comment_starts.push(key);
                     self.index.aliases.push(ParsedTypeAliasDeclaration {
                         is_declare: false,
                         name: alias_name.clone(),
@@ -2168,6 +2259,7 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
                         enum_name: None,
                         enum_exported: false,
                         enum_is_const: false,
+                        enum_members: Vec::new(),
                     });
                 }
                 _ => {}
@@ -2177,16 +2269,41 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
 
     /// `reparseHosted` for the function-like tags of `comment` on `host`.
     fn host_function(&mut self, host: FunctionHost<'_, '_>, comment: &JsDocComment) {
+        self.host_function_tags(host, comment, false);
+    }
+
+    /// `reparseHosted` over a function's tags in order. For a host that can
+    /// take its `@type` as a full signature, that tag claims the signature
+    /// only when nothing of it is typed yet, and once claimed the later
+    /// `@param`, `@return` and `@template` tags are ignored.
+    fn host_function_tags(&mut self, host: FunctionHost<'_, '_>, comment: &JsDocComment, full_signature_host: bool) {
         let start = host.start();
         let mut parameter_tag_index = 0usize;
+        let mut full_signature = false;
         for tag in &comment.tags {
             match tag {
+                JsDocTag::Type(Some(ty))
+                    if full_signature_host
+                        && !full_signature
+                        && ty.ty.is_some()
+                        && !host.has_type_parameters()
+                        && !self.index.type_parameters.contains_key(&start)
+                        && !host.has_return_type()
+                        && !self.index.returns.contains_key(&start)
+                        && !self.has_typed_parameter(host) =>
+                {
+                    full_signature = true;
+                    self.index.full_signature_hosts.insert(start);
+                }
                 JsDocTag::Parameter(parameter_tag) => {
                     let tag_index = parameter_tag_index;
                     parameter_tag_index += 1;
                     let matched = matching_parameter(host.params(), parameter_tag, tag_index);
                     if matched.is_none() {
                         self.report_unmatched_parameter_tag(host, parameter_tag);
+                    }
+                    if full_signature {
+                        continue;
                     }
                     if let Some(parameter_start) = matched {
                         let entry = self.index.parameters.entry(parameter_start).or_default();
@@ -2197,13 +2314,19 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
                                 }
                             }
                         }
-                        entry.optional |= is_optional(parameter_tag);
+                        if is_optional(parameter_tag) {
+                            entry.optional = true;
+                            entry.question.get_or_insert(TextSpan {
+                                start: parameter_tag.start,
+                                end: parameter_tag.start + 1,
+                            });
+                        }
                         if entry.ty.is_some() {
                             self.mark_typed(host);
                         }
                     }
                 }
-                JsDocTag::Return(Some(ty)) if !host.has_return_type() => {
+                JsDocTag::Return(Some(ty)) if !host.has_return_type() && !full_signature => {
                     if let Some(parsed) = &ty.ty {
                         self.index.returns.entry(start).or_insert((parsed.clone(), ty.span));
                     }
@@ -2213,7 +2336,7 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
                         self.index.this_types.entry(start).or_insert(parsed.clone());
                     }
                 }
-                JsDocTag::Template { .. } if !host.has_type_parameters() => {
+                JsDocTag::Template { .. } if !host.has_type_parameters() && !full_signature => {
                     let parameters = template_parameters(&comment.tags, false);
                     if !parameters.is_empty() {
                         self.index.type_parameters.entry(start).or_insert(parameters);
@@ -2229,7 +2352,27 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
     /// `checkFunctionOrMethodDeclaration` reports TS8030 on that type when no
     /// call signature of it takes the function's required parameters
     /// (`getContextualCallSignature`).
+    /// Whether a parameter is typed by its annotation, its own `@type`
+    /// comment, or a `@param` tag already hosted.
+    fn has_typed_parameter(&mut self, host: FunctionHost<'_, '_>) -> bool {
+        let params = host.params();
+        let starts: Vec<(u32, bool)> = params
+            .items
+            .iter()
+            .map(|parameter| (parameter.span.start, parameter.type_annotation.is_some()))
+            .chain(params.rest.iter().map(|rest| (rest.span.start, rest.type_annotation.is_some())))
+            .collect();
+        starts.into_iter().any(|(start, annotated)| {
+            annotated
+                || self.index.parameters.get(&start).is_some_and(|entry| entry.ty.is_some())
+                || self.last_comment(start, true).is_some_and(|comment| Self::type_tag(&comment).is_some())
+        })
+    }
+
     fn check_full_signature(&mut self, host: FunctionHost<'_, '_>, comment: &JsDocComment) {
+        if !self.index.full_signature_hosts.contains(&host.start()) {
+            return;
+        }
         let Some(tag) = Self::type_tag(comment) else {
             return;
         };
@@ -2477,7 +2620,11 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
     fn visit_method_definition(&mut self, it: &MethodDefinition<'a>) {
         if let Some(comment) = self.last_comment(it.span.start, false) {
             self.host_modifiers(it.span.start, &comment);
-            self.host_function(FunctionHost::Function(&it.value), &comment);
+            self.host_function_tags(
+                FunctionHost::Function(&it.value),
+                &comment,
+                it.kind == MethodDefinitionKind::Method,
+            );
             // An accessor or a constructor keeps the full signature, but its
             // check never reads it (`checkAccessorDeclaration`,
             // `checkConstructorDeclaration`).
@@ -2486,7 +2633,7 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
             }
             if it.kind == MethodDefinitionKind::Get && it.value.return_type.is_none() {
                 if let Some(ty) = Self::type_tag(&comment) {
-                    let parsed = lowered(ty);
+                    let parsed = lowered_with_optionality(ty);
                     self.index.returns.entry(it.value.span.start).or_insert((parsed, ty.span));
                 }
             }
@@ -2514,7 +2661,7 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
         if let Some(comment) = self.last_comment(it.span.start, false) {
             if !it.shorthand {
                 if let Some(host) = function_of_expression(&it.value) {
-                    self.host_function(host, &comment);
+                    self.host_function_tags(host, &comment, it.method);
                     // A method is its own host; a property's `@type` types the
                     // property, and an accessor's is never checked.
                     if it.method {
@@ -2530,7 +2677,7 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
                 self.index
                     .assignment_types
                     .entry((value.start, value.end))
-                    .or_insert((lowered_with_optionality(ty), ty.span));
+                    .or_insert((lowered_with_optionality(ty), ty.span, super::spans::text_span_from_oxc_span(it.key.span())));
             }
         }
         walk::walk_object_property(self, it);
@@ -2564,7 +2711,7 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
                 self.index
                     .assignment_types
                     .entry((value.start, value.end))
-                    .or_insert((lowered_with_optionality(&ty), ty.span));
+                    .or_insert((lowered_with_optionality(&ty), ty.span, super::spans::text_span_from_oxc_span(assignment.left.span())));
             }
             if let Some(host) = function_of_expression(right_most_assigned_expression(&it.expression)) {
                 self.host_function(host, &comment);
@@ -2605,13 +2752,24 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
         if let Some(comment) = self.last_comment(it.span.start, false) {
             match &it.declaration {
                 ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
-                    self.host_function(FunctionHost::Function(function), &comment);
+                    self.host_function_tags(FunctionHost::Function(function), &comment, true);
                     self.check_full_signature(FunctionHost::Function(function), &comment);
                 }
                 ExportDefaultDeclarationKind::ClassDeclaration(class) => self.host_class(class, &comment),
                 other => {
                     if let Some(host) = other.as_expression().and_then(function_of_expression) {
                         self.host_function(host, &comment);
+                    }
+                    // `reparseHosted` types an export assignment by its `@type`,
+                    // and `checkExportAssignment` relates the expression to it.
+                    if let Some(expression) = other.as_expression()
+                        && let Some(ty) = Self::type_tag(&comment)
+                    {
+                        let value = expression.span();
+                        self.index
+                            .assignment_types
+                            .entry((value.start, value.end))
+                            .or_insert((lowered_with_optionality(ty), ty.span, super::spans::text_span_from_oxc_span(value)));
                     }
                 }
             }
@@ -2628,7 +2786,7 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
         match declaration {
             Some(Declaration::FunctionDeclaration(function)) => {
                 if let Some(comment) = self.last_comment(start, false) {
-                    self.host_function(FunctionHost::Function(function), &comment);
+                    self.host_function_tags(FunctionHost::Function(function), &comment, true);
                     self.check_full_signature(FunctionHost::Function(function), &comment);
                 }
             }
@@ -2654,6 +2812,26 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
             }
         }
         walk::walk_class(self, it);
+    }
+
+    fn visit_function_body(&mut self, it: &oxc_ast::ast::FunctionBody<'a>) {
+        self.record_statement_list(it.span, &it.statements);
+        walk::walk_function_body(self, it);
+    }
+
+    fn visit_block_statement(&mut self, it: &oxc_ast::ast::BlockStatement<'a>) {
+        self.record_statement_list(it.span, &it.body);
+        walk::walk_block_statement(self, it);
+    }
+
+    fn visit_static_block(&mut self, it: &oxc_ast::ast::StaticBlock<'a>) {
+        self.record_statement_list(it.span, &it.body);
+        walk::walk_static_block(self, it);
+    }
+
+    fn visit_switch_case(&mut self, it: &oxc_ast::ast::SwitchCase<'a>) {
+        self.record_statement_list(it.span, &it.consequent);
+        walk::walk_switch_case(self, it);
     }
 
     fn visit_program(&mut self, it: &Program<'a>) {
@@ -2683,6 +2861,12 @@ impl<'a> Visit<'a> for IndexBuilder<'_, '_> {
 }
 
 impl IndexBuilder<'_, '_> {
+    fn record_statement_list(&mut self, span: oxc_span::Span, statements: &[oxc_ast::ast::Statement<'_>]) {
+        if let Some(first) = statements.first() {
+            self.statement_lists.push((span.start, span.end, first.span().start));
+        }
+    }
+
     fn host_class(&mut self, class: &Class<'_>, comment: &JsDocComment) {
         // `reparseHosted` for `@augments`: the tag's type arguments fill an
         // `extends` clause that names the same class and writes none.

@@ -3372,7 +3372,14 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                     self.push(1470, meta.span, &[]);
                 }
             }
-            AstKind::TSThisType(this_type) => self.check_this_type(this_type.span),
+            // checker.go `checkTypePredicate` never types a `this` predicate's
+            // name, so it is no `this` type to check.
+            AstKind::TSThisType(this_type)
+                if !matches!(self.stack.last(), Some(AstKind::TSTypePredicate(predicate))
+                    if matches!(&predicate.parameter_name, oxc_ast::ast::TSTypePredicateName::This(name) if name.span == this_type.span)) =>
+            {
+                self.check_this_type(this_type.span)
+            }
             AstKind::TSInferType(infer) => self.check_infer_type(infer.span),
             AstKind::TSInterfaceDeclaration(declaration) => {
                 self.check_reserved_type_name(2427, &declaration.id);

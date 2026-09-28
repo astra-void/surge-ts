@@ -27,6 +27,7 @@ pub(crate) fn normalize_compiler_options(
     let mut explicit_use_define_for_class_fields = None;
     let mut explicit_strict_null_checks = None;
     let mut explicit_strict_bind_call_apply = None;
+    let mut explicit_strict_builtin_iterator_return = None;
     let mut explicit_strict_property_initialization = None;
     let mut explicit_use_unknown_in_catch_variables = None;
     let mut explicit_resolve_json_module = None;
@@ -53,6 +54,10 @@ pub(crate) fn normalize_compiler_options(
             }
             "strictBindCallApply" => {
                 explicit_strict_bind_call_apply =
+                    parse_bool_option(key, value, config_dir, diagnostics);
+            }
+            "strictBuiltinIteratorReturn" => {
+                explicit_strict_builtin_iterator_return =
                     parse_bool_option(key, value, config_dir, diagnostics);
             }
             "strictPropertyInitialization" => {
@@ -333,6 +338,8 @@ pub(crate) fn normalize_compiler_options(
     normalized.strict_null_checks = explicit_strict_null_checks.unwrap_or(normalized.strict);
     normalized.strict_bind_call_apply =
         explicit_strict_bind_call_apply.unwrap_or(normalized.strict);
+    normalized.strict_builtin_iterator_return =
+        explicit_strict_builtin_iterator_return.unwrap_or(normalized.strict);
     normalized.strict_property_initialization =
         explicit_strict_property_initialization.unwrap_or(normalized.strict);
     normalized.use_unknown_in_catch_variables =

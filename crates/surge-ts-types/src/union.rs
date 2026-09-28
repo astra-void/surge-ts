@@ -246,6 +246,7 @@ pub fn remove_definitely_falsy(ty: &Type) -> Type {
     }
     let Type::Union(union) = ty else {
         return match ty {
+            Type::Boolean => Type::BooleanLiteral(true),
             Type::BooleanLiteral(false) => Type::Never,
             Type::StringLiteral(value) if value.is_empty() => Type::Never,
             Type::NumberLiteral(literal) if literal.value == "0" => Type::Never,

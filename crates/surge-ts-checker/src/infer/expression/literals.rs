@@ -65,6 +65,68 @@ pub(crate) fn resolve_computed_property_names<'a>(
     std::borrow::Cow::Owned(resolved)
 }
 
+/// checker.go `checkObjectLiteral`: a computed name typed `string`, or
+/// `number` (which `any` is assignable to), adds no member but gives the
+/// literal that index signature, whose value is the union of the members
+/// after the last spread it applies to (`getObjectLiteralIndexInfo`).
+pub(crate) fn computed_key_index_signatures(
+    properties: &[ParsedObjectProperty],
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<(Option<Type>, Option<Type>)> {
+    if properties.iter().all(|property| property.computed_key.is_none()) {
+        return None;
+    }
+    // A key the parser could not name travels as an empty spread carrying
+    // the member's value; it is a member, not a spread.
+    let is_spread = |property: &ParsedObjectProperty| property.is_spread && property.unnamed_key_value.is_none();
+    let offset = properties.iter().rposition(is_spread).map_or(0, |index| index + 1);
+    let diagnostics_before = ctx.diagnostics().len();
+    let (mut string_index, mut number_index) = (false, false);
+    let (mut string_members, mut number_members) = (Vec::new(), Vec::new());
+    for property in &properties[offset..] {
+        if is_spread(property) {
+            continue;
+        }
+        // `Some(numeric)` for a member keyed by an index signature, `None` for
+        // a named one.
+        let (index_key, name) = match property.computed_key.as_deref() {
+            None => (None, property.name.clone()),
+            Some(key) => match infer_expression(key, symbols, ctx) {
+                InferredExpression::Known(key_type) => match key_type.peeled() {
+                    Type::String => (Some(false), String::new()),
+                    Type::Number | Type::Any => (Some(true), String::new()),
+                    Type::StringLiteral(name) => (None, name),
+                    Type::NumberLiteral(literal) => (None, literal.value),
+                    _ => continue,
+                },
+                _ => continue,
+            },
+        };
+        if index_key.is_none() && name.starts_with('[') {
+            continue;
+        }
+        let numeric = index_key.unwrap_or_else(|| surge_ts_types::is_numeric_key(&name));
+        string_index |= index_key == Some(false);
+        number_index |= index_key == Some(true);
+        let property_type = match property.unnamed_key_value.as_deref() {
+            Some(value) => infer_object_property_value(value, symbols, ctx),
+            None => infer_object_property_type(property, None, symbols, ctx),
+        };
+        if numeric {
+            number_members.push(property_type.clone());
+        }
+        string_members.push(property_type);
+    }
+    ctx.truncate_diagnostics(diagnostics_before);
+    (string_index || number_index).then(|| {
+        (
+            string_index.then(|| union_type(string_members)),
+            number_index.then(|| union_type(number_members)),
+        )
+    })
+}
+
 /// tsc's `checkObjectLiteral`. A member that reads its own `this` is handed
 /// the one `getContextualThisParameterType` gives it (see
 /// [`literal_member_this`]).
@@ -197,6 +259,7 @@ fn infer_object_literal_members(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Type {
+    let computed_index_signatures = computed_key_index_signatures(properties, symbols, ctx);
     let properties = &*resolve_computed_property_names(properties, symbols, ctx);
     let object_literal_start = Instant::now();
     // tsc's `getSpreadType` distributes over a spread union with more than one
@@ -263,8 +326,26 @@ fn infer_object_literal_members(
                 }
                 Type::Object(source) => {
                     spread_source_is_open |= source.synthetic_open_index;
+                    // `getSpreadSymbol`: a set-only accessor spreads as
+                    // `undefined`. Only a spread literal still says which
+                    // members are set-only.
+                    let set_only: Vec<&str> = match &property.value {
+                        ParsedExpression::ObjectLiteral { properties: spread, .. } => spread
+                            .iter()
+                            .filter(|member| {
+                                member.is_accessor
+                                    && !member.is_getter
+                                    && !spread.iter().any(|other| other.is_getter && other.name == member.name)
+                            })
+                            .map(|member| member.name.as_str())
+                            .collect(),
+                        _ => Vec::new(),
+                    };
                     for merged_properties in &mut alternatives {
                         merge_object_spread(&source, merged_properties);
+                        for name in &set_only {
+                            merged_properties.insert((*name).into(), ObjectProperty::required(Type::Undefined));
+                        }
                     }
                 }
                 // `{ ...(cond ? { list } : {}) }`: spreading a union contributes
@@ -329,6 +410,8 @@ fn infer_object_literal_members(
                     .with_intersection_operands(spread_variables.clone());
             }
             Type::Object(object)
+        } else if let Some((string_index, number_index)) = computed_index_signatures.clone() {
+            Type::Object(alloc_object_type(merged_properties, string_index).with_number_index_type(number_index))
         } else {
             Type::Object(alloc_object_type(merged_properties, None))
         }
@@ -852,6 +935,24 @@ pub(crate) fn template_expression_pattern_type(
         .iter()
         .map(|interpolation| match infer_expression(interpolation, symbols, ctx) {
             InferredExpression::Known(ty) if is_template_constraint(&ty) => ty,
+            // A type variable of the body being checked is kept when it is a
+            // `templateConstraintType` (`checkTemplateExpression`).
+            InferredExpression::Known(ty)
+                if surge_ts_types::type_variable::is_generic_index_type(&ty)
+                    && surge_ts_types::is_assignable_to(
+                        &ty,
+                        &surge_ts_types::union_type(vec![
+                            Type::String,
+                            Type::Number,
+                            Type::BigInt,
+                            Type::Boolean,
+                            Type::Null,
+                            Type::Undefined,
+                        ]),
+                    ) =>
+            {
+                ty
+            }
             // A type parameter is a generic placeholder tsc relates through
             // its constraint, which surge's placeholder does not carry; like a
             // value surge could not type, it stands as `any`, the placeholder

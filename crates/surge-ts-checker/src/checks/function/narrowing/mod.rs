@@ -175,8 +175,35 @@ fn narrow_type_for_identifier(
             scopes,
             operand_types,
             ctx,
-        ),
+        )
+        .or_else(|| narrow_by_property_truthiness(condition, var_name, ty, branch_is_true)),
     }
+}
+
+/// `narrowTypeByTruthiness` through a discriminant property of `var_name`
+/// (`value.type` in `value.type && …`): the members whose property the test
+/// rules out are dropped, down to `never`.
+fn narrow_by_property_truthiness(
+    condition: &ParsedExpression,
+    var_name: &str,
+    ty: &Type,
+    branch_is_true: bool,
+) -> Option<Type> {
+    let (base, path) = reference_path(condition)?;
+    if base != var_name || path.is_empty() {
+        return None;
+    }
+    let peeled = ty.peeled();
+    let members: &[Type] = match &peeled {
+        Type::Union(union) => union.types(),
+        other => std::slice::from_ref(other),
+    };
+    let kept: Vec<Type> = members
+        .iter()
+        .filter(|member| truthy::path_truthiness(member, &path) != Some(!branch_is_true))
+        .cloned()
+        .collect();
+    (kept.len() != members.len()).then(|| union_type(kept))
 }
 
 fn narrow_single_guard_for_identifier(
@@ -255,6 +282,17 @@ fn narrow_single_guard_for_identifier(
         })
         && name == var_name
     {
+        // The reference's declared type is its symbol's type (`getTypeOfSymbol`),
+        // which a binding with no recorded declaration still holds in scope;
+        // `ty` may already be narrowed by an earlier operand of the condition.
+        let declared = scopes
+            .visible_symbols()
+            .declared_type(name)
+            .cloned()
+            .or_else(|| scopes.resolve(name).map(|symbol| symbol.ty.clone()));
+        if !guards::narrows_by_discriminant(ty, declared.as_ref()) {
+            return None;
+        }
         let keep_matching = branch_is_true == eq;
         return narrow_discriminant_through_optional_chain(
             condition,
@@ -1423,6 +1461,9 @@ fn narrow_value_guards_by_guard(
             let Some(symbol) = scopes.resolve(name) else {
                 return;
             };
+            if !guards::narrows_by_discriminant(&symbol.ty, scopes.visible_symbols().declared_type(name)) {
+                return;
+            }
             let Some(narrowed) = narrow_discriminant_through_optional_chain(
                 condition,
                 &symbol.ty,

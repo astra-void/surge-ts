@@ -66,11 +66,14 @@ pub(crate) fn arbitrary_extension_resolution_allowed(importer_file_name: &str) -
 }
 
 /// tsc's `tryAddingExtensions` for an extension it does not know: `./x.html`
-/// names the declaration file `./x.d.html.ts`.
+/// names the declaration file `./x.d.html.ts`. `./x.json` tries `./x.d.json.ts`
+/// ahead of the JSON file itself.
 pub(crate) fn arbitrary_extension_declaration(joined: &str, specifier: &str) -> Option<String> {
-    if super::candidates::classify_relative_specifier(specifier)
-        != super::candidates::RelativeSpecifierShape::Extensionless
-    {
+    if !matches!(
+        super::candidates::classify_relative_specifier(specifier),
+        super::candidates::RelativeSpecifierShape::Extensionless
+            | super::candidates::RelativeSpecifierShape::ExplicitJson
+    ) {
         return None;
     }
     let (directory, base) = match joined.rsplit_once('/') {

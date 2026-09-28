@@ -231,10 +231,13 @@ pub(crate) fn parse_function_body_statement(
 pub(crate) fn parse_statement_list_as_function_body(
     statements: &[Statement<'_>],
 ) -> Vec<ParsedFunctionBodyStatement> {
-    statements
-        .iter()
-        .filter_map(parse_function_body_statement)
-        .flatten()
+    let aliases = statements
+        .first()
+        .map(|first| super::jsdoc::statement_list_aliases(first.span().start))
+        .unwrap_or_default();
+    aliases
+        .into_iter()
+        .chain(statements.iter().filter_map(parse_function_body_statement).flatten())
         .collect()
 }
 
@@ -791,6 +794,7 @@ fn parse_while_statement(while_statement: &WhileStatement<'_>) -> Option<ParsedW
         condition_span: Some(text_span_from_oxc_span(condition_span)),
         body,
         runs_at_least_once,
+        has_update: false,
     })
 }
 
@@ -816,9 +820,11 @@ fn parse_for_statement(for_statement: &ForStatement<'_>) -> Vec<ParsedFunctionBo
     }
 
     let mut body = parse_branch_body(&for_statement.body);
+    let mut has_update = false;
     if let Some(update) = &for_statement.update {
         let update = parse_for_clause_statements(update);
         if !update.is_empty() {
+            has_update = true;
             // The update clause runs in the header's scope: a `const c` the body
             // declares does not shadow the header's `c` there.
             body = vec![ParsedFunctionBodyStatement::Block(body)];
@@ -844,6 +850,7 @@ fn parse_for_statement(for_statement: &ForStatement<'_>) -> Vec<ParsedFunctionBo
             condition_span,
             body,
             runs_at_least_once,
+            has_update,
         },
     )));
 
@@ -864,6 +871,7 @@ fn parse_do_while_statement(
             condition_span: Some(text_span_from_oxc_span(condition_span)),
             body: parse_branch_body(&do_while_statement.body),
             runs_at_least_once: true,
+            has_update: false,
         },
     ))]
 }
@@ -1196,20 +1204,22 @@ pub(crate) fn parse_function_parameter(
         .initializer
         .as_ref()
         .map(|initializer| text_span_from_oxc_span(initializer.span()));
+    let written_optional = parameter.optional
+        || parameter.initializer.is_some()
+        || jsdoc.as_ref().is_some_and(|jsdoc| jsdoc.optional);
     // tsc's `isUntypedSignatureInJSFile`: a JavaScript signature no JSDoc
-    // types accepts any number of arguments.
+    // types accepts any number of arguments. It marks only the parameters
+    // nothing else makes optional, since a contextual type takes it away.
     let untyped_javascript = super::spans::lowering_javascript()
-        && !super::jsdoc::in_typed_signature(parameter.span.start);
+        && !super::jsdoc::in_typed_signature(parameter.span.start)
+        && !written_optional;
 
     Some(ParsedFunctionParameter {
         binding_name: parse_binding_name(&parameter.pattern),
         declared_type,
         initializer,
         initializer_span,
-        optional: parameter.optional
-            || parameter.initializer.is_some()
-            || jsdoc.is_some_and(|jsdoc| jsdoc.optional)
-            || untyped_javascript,
+        optional: written_optional || untyped_javascript,
         untyped_javascript,
         rest: false,
         is_parameter_property: parameter.accessibility.is_some() || parameter.readonly || parameter.r#override,

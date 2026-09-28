@@ -1079,6 +1079,7 @@ fn generic_function_no_implicit_any_still_checks_unannotated_param() {
             esm_module_files: Default::default(),
             strict_null_checks: true,
             strict_bind_call_apply: false,
+            strict_builtin_iterator_return: false,
             strict_property_initialization: false,
             no_implicit_returns: false,
             no_fallthrough_cases_in_switch: false,

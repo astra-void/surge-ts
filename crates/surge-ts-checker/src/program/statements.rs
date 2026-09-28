@@ -911,6 +911,7 @@ fn check_program_statement_itself(
         ParsedStatement::Block(statements) => check_module_block(statements, ctx),
         ParsedStatement::TypeAliasDeclaration(alias) => {
             crate::checks::function::check_type_parameter_declarations(&alias.type_parameters, ctx);
+            crate::checks::function::check_alias_mapped_type_constraints(&alias.type_parameters, &alias.ty, ctx);
         }
         ParsedStatement::InterfaceDeclaration(interface) => {
             crate::checks::function::check_type_parameter_declarations(

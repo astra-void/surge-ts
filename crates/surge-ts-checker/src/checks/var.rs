@@ -59,6 +59,14 @@ pub(crate) fn check_variable_declaration_with_symbols(
     .then(|| variable.initializer.clone().filter(may_read_enum_member))
     .flatten();
 
+    let boolean_initializer = match variable.initializer.as_ref() {
+        Some(ParsedExpression::BooleanLiteral(value))
+            if matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Let | surge_ts_syntax::ParsedVariableKind::Var) =>
+        {
+            Some(*value)
+        }
+        _ => None,
+    };
     let symbol = check_variable_declaration_against_symbols(variable, symbols, ctx, options)?;
     crate::semantic::record_declaration_type(variable_name_span, &symbol.ty, ctx);
 
@@ -74,8 +82,16 @@ pub(crate) fn check_variable_declaration_with_symbols(
         }
     }
 
-    let narrowed = enum_probe
-        .and_then(|initializer| enum_member_initializer_narrowing(&initializer, &symbol.ty, symbols, ctx));
+    // `getAssignmentReducedType` of the declaration by its literal initializer,
+    // as a function body's declaration narrows (`boolean` is `true | false`).
+    let literal_narrowed = boolean_initializer
+        .filter(|_| matches!(symbol.ty, Type::Boolean))
+        .map(Type::BooleanLiteral);
+    let narrowed = literal_narrowed.or_else(|| {
+        enum_probe.and_then(|initializer| {
+            enum_member_initializer_narrowing(&initializer, &symbol.ty, symbols, ctx)
+        })
+    });
     match narrowed {
         Some(narrowed) => {
             let _ = symbols.insert_narrowed(
@@ -186,6 +202,7 @@ pub(crate) fn report_assignability_failure(
 pub(crate) struct ExpandoInitializerMember {
     target: ParsedExpression,
     declared_type: Option<surge_ts_syntax::ParsedType>,
+    value: ParsedExpression,
 }
 
 /// [`install_expando_initializer_members`] for a module's statements.
@@ -207,7 +224,7 @@ pub(crate) fn module_expando_initializer_members(
             },
             _ => None,
         })
-        .filter(|variable| is_annotated_expando_initializer(variable, javascript))
+        .filter(|variable| is_expando_initializer(variable, javascript))
         .collect();
     if declarations.is_empty() {
         return std::collections::HashMap::new();
@@ -246,7 +263,7 @@ pub(crate) fn install_expando_initializer_members(
             Statement::VariableDeclaration(variable) => Some(variable.as_ref()),
             _ => None,
         })
-        .filter(|variable| is_annotated_expando_initializer(variable, javascript))
+        .filter(|variable| is_expando_initializer(variable, javascript))
         .collect();
     if declarations.is_empty() {
         return None;
@@ -273,12 +290,11 @@ pub(crate) fn install_expando_initializer_members(
 }
 
 /// `getInitializerSymbol`: a `const` (any variable in JavaScript) initialized
-/// with a function expression or an arrow (`IsExpandoInitializer`). An
-/// unannotated one is typed by its initializer, which the expando collection
-/// already extends; an annotated one needs its writes where it is checked.
-fn is_annotated_expando_initializer(variable: &ParsedVariableDeclaration, javascript: bool) -> bool {
-    variable.declared_type.is_some()
-        && variable.name_span.is_some()
+/// with a function expression or an arrow (`IsExpandoInitializer`). The binder
+/// declares every write's member on it wherever the write sits, so the
+/// variable has them from its declaration on.
+fn is_expando_initializer(variable: &ParsedVariableDeclaration, javascript: bool) -> bool {
+    variable.name_span.is_some()
         && !variable.from_binding_pattern
         && (javascript || matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const))
         && matches!(variable.initializer, Some(ParsedExpression::ArrowFunction(_)))
@@ -315,6 +331,7 @@ fn expando_members_by_declaration(
             })
             .map(|write| ExpandoInitializerMember {
                 target: write.target.clone(),
+                value: write.value.clone(),
                 declared_type: match &write.value {
                     ParsedExpression::TypeAssertion {
                         ty,
@@ -409,6 +426,73 @@ fn annotated_expando_initializer_type(
                 Some(member_type) => member_type,
                 None => continue,
             },
+        };
+        properties.insert(name.as_str().into(), surge_ts_types::ObjectProperty::required(member_type));
+    }
+    if properties.is_empty() {
+        return None;
+    }
+    Some(Type::Object(
+        crate::metrics::alloc_object_type(properties, None).with_call_signature(function.clone()),
+    ))
+}
+
+/// The type of an unannotated expando declaration's function: its signature
+/// with the members its writes declare (`getTypeOfFuncClassEnumModule`), each
+/// typed by the first write's JSDoc `@type`, else by the union of the written
+/// values (`getWidenedTypeForAssignmentDeclaration`).
+fn unannotated_expando_initializer_type(
+    name_start: usize,
+    function: &surge_ts_types::FunctionType,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let writes = ctx.expando_initializer_members.get(&name_start)?.clone();
+    let mut named: Vec<(String, Vec<&ExpandoInitializerMember>)> = Vec::new();
+    for write in &writes {
+        let name = match &write.target {
+            ParsedExpression::PropertyAccess { property_name, .. } => property_name.clone(),
+            ParsedExpression::IndexAccess { index, .. } => {
+                match crate::modules::exports::element_access_member_name(index, symbols, ctx) {
+                    Some(name) => name,
+                    None => continue,
+                }
+            }
+            _ => continue,
+        };
+        match named.iter_mut().find(|(existing, _)| *existing == name) {
+            Some((_, members)) => members.push(write),
+            None => named.push((name, vec![write])),
+        }
+    }
+    let mut properties = surge_ts_types::PropertyMap::default();
+    for (name, members) in named {
+        let member_type = match members.iter().find_map(|member| member.declared_type.as_ref()) {
+            Some(written) => {
+                let saved_symbols = std::mem::replace(&mut ctx.symbols, symbols.clone());
+                let resolved = map_parsed_type(written.clone(), ctx);
+                ctx.symbols = saved_symbols;
+                resolved
+            }
+            None => {
+                let values: Option<Vec<Type>> = members
+                    .iter()
+                    .map(|member| {
+                        crate::modules::exports::expando_member_type(
+                            &crate::modules::exports::ExpandoValue::Assigned(&member.value),
+                            symbols,
+                            ctx,
+                        )
+                        .map(|(ty, _)| ty)
+                    })
+                    .collect();
+                // `getWidenedType` of the declarations' union widens their
+                // object literals together (`getWidenedTypeOfObjectLiteral`).
+                match values {
+                    Some(values) => normalize_object_literal_union(&surge_ts_types::union_type(values)),
+                    None => continue,
+                }
+            }
         };
         properties.insert(name.as_str().into(), surge_ts_types::ObjectProperty::required(member_type));
     }
@@ -684,12 +768,16 @@ pub(crate) fn check_variable_declaration_against_symbols(
                 } else {
                     inferred_initializer_type
                 };
-                Some(widen_implicit_variable_initializer_type(
-                    symbol_kind,
-                    initializer,
-                    initializer_type,
-                    auto_array,
-                ))
+                if reads_regular_literal(initializer, initializer_type, symbols) {
+                    Some(initializer_type.clone())
+                } else {
+                    Some(widen_implicit_variable_initializer_type(
+                        symbol_kind,
+                        initializer,
+                        initializer_type,
+                        auto_array,
+                    ))
+                }
             } else {
                 declared_type.clone().or(Some(Type::Unknown))
             }
@@ -705,6 +793,13 @@ pub(crate) fn check_variable_declaration_against_symbols(
 
     if declared_type.is_none() && variable.initializer.is_none() {
         inferred_symbol_type = Some(Type::Any);
+    }
+    if declared_type.is_none()
+        && let Some(Type::Function(function)) = inferred_symbol_type.as_ref()
+        && let Some(name_span) = variable.name_span
+        && let Some(expando) = unannotated_expando_initializer_type(name_span.start, function, symbols, ctx)
+    {
+        inferred_symbol_type = Some(expando);
     }
     if let Some(start) = variable.array_rest_start
         && let Some(Type::Tuple(elements)) = inferred_symbol_type.as_ref().map(Type::peeled)
@@ -932,6 +1027,46 @@ pub(crate) fn is_auto_array_candidate(
             &variable.initializer,
             Some(ParsedExpression::ArrayLiteral { elements, .. }) if elements.is_empty()
         )
+}
+
+/// tsc widens only a fresh literal. A bare literal read from a mutable binding
+/// or parameter whose declared type names that very literal is the declared,
+/// regular type (flow narrowing filters the declared union), so
+/// `let a: "foo" = "foo"; let b = a` stays `"foo"`. A union keeps the regular
+/// literal over a fresh duplicate (`removeRedundantLiteralTypes`), so either
+/// operand of a logical or conditional expression supplying it is enough.
+fn reads_regular_literal(expression: &ParsedExpression, ty: &Type, symbols: &SymbolTable) -> bool {
+    let enum_base = match ty {
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => None,
+        Type::Reference(reference) if reference.enum_base.is_some() => reference.enum_base.as_deref(),
+        _ => return false,
+    };
+    match expression {
+        ParsedExpression::Identifier { name, .. } => {
+            let Some(symbol) = symbols.get(name) else {
+                return false;
+            };
+            if !matches!(symbol.kind, SymbolKind::Let | SymbolKind::Var | SymbolKind::Parameter) {
+                return false;
+            }
+            // An enum member is a member of its enum's union.
+            let names = |declared: &Type| declared == ty || enum_base.is_some_and(|base| declared == base);
+            match symbols.declared_type(name).unwrap_or(&symbol.ty) {
+                Type::Union(union) => union.types().iter().any(names),
+                declared => names(declared),
+            }
+        }
+        ParsedExpression::Logical { left, right, .. }
+        | ParsedExpression::NullishCoalescing { left, right, .. } => {
+            reads_regular_literal(left, ty, symbols) || reads_regular_literal(right, ty, symbols)
+        }
+        ParsedExpression::Conditional {
+            when_true,
+            when_false,
+            ..
+        } => reads_regular_literal(when_true, ty, symbols) || reads_regular_literal(when_false, ty, symbols),
+        _ => false,
+    }
 }
 
 pub(crate) fn widen_implicit_variable_initializer_type(
@@ -1450,11 +1585,25 @@ fn iterated_array_pattern_element(
         }
         _ => (array_pattern_source(initializer)?, None),
     };
-    let InferredExpression::Known(Type::Reference(reference)) = crate::infer::infer_expression(&source, symbols, ctx)
-    else {
+    let InferredExpression::Known(source_type) = crate::infer::infer_expression(&source, symbols, ctx) else {
         return None;
     };
-    let element = crate::checks::function::iterable_reference_element_type(&reference)?;
+    // `checkArrayLiteralDestructuringElementAssignment`: a source that is not
+    // array-like is read through its iteration protocol.
+    let iterated = || {
+        crate::checks::expr::iteration_types_of_iterable(
+            &source_type,
+            crate::checks::expr::IterationUse::sync(ctx.options.strict_builtin_iterator_return),
+        )
+        .map(|types| types.yield_type)
+    };
+    let element = match &source_type {
+        Type::Reference(reference) => {
+            crate::checks::function::iterable_reference_element_type(reference).or_else(iterated)?
+        }
+        Type::Object(_) => iterated()?,
+        _ => return None,
+    };
     if element.is_unmodelled() {
         return None;
     }

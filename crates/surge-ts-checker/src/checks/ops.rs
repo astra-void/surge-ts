@@ -20,6 +20,8 @@ pub(crate) fn evaluate_binary_expression(
         ParsedBinaryOperator::Add => evaluate_add_binary(
             left_result,
             right_result,
+            // The lowering of `x += v` to `x = x + v` writes no operator span.
+            operator_span.is_none(),
             left_span.or(fallback_span),
             operator_span.or(fallback_span),
             right_span.or(fallback_span),
@@ -95,7 +97,7 @@ pub(crate) fn evaluate_logical_expression(
     else {
         return InferredExpression::Unknown;
     };
-    if left_ty.is_unknown() || right_ty.is_unknown() {
+    if left_ty.is_unmodelled() || right_ty.is_unmodelled() {
         return InferredExpression::Unknown;
     }
 
@@ -138,7 +140,7 @@ pub(crate) fn evaluate_conditional_expression(
     true_result: InferredExpression,
     false_result: InferredExpression,
 ) -> InferredExpression {
-    if !is_known_non_unknown(&condition_result) {
+    if !matches!(&condition_result, InferredExpression::Known(ty) if !ty.is_unmodelled()) {
         return InferredExpression::Unknown;
     }
 
@@ -149,7 +151,7 @@ pub(crate) fn evaluate_conditional_expression(
         return InferredExpression::Unknown;
     };
 
-    if true_type.is_unknown() || false_type.is_unknown() {
+    if true_type.is_unmodelled() || false_type.is_unmodelled() {
         return InferredExpression::Unknown;
     }
 
@@ -193,15 +195,26 @@ pub(crate) fn evaluate_unary_expression(
                 return InferredExpression::Unknown;
             }
 
-            if matches!(operand_type, Type::Any) {
-                return InferredExpression::Known(Type::Any);
-            }
-
-            // Unary `+` is always `number`; it rejects a bigint operand instead.
-            if !matches!(operator, ParsedUnaryOperator::Plus)
-                && matches!(operand_type.base_primitive(), Some(Type::BigInt))
-            {
-                return InferredExpression::Known(Type::BigInt);
+            // Unary `+` is always `number`, `any` operand included; it rejects
+            // a bigint operand instead. `-`/`~` are `getUnaryResultType`.
+            if !matches!(operator, ParsedUnaryOperator::Plus) {
+                let peeled = operand_type.peeled();
+                if matches!(peeled.base_primitive(), Some(Type::BigInt)) {
+                    return InferredExpression::Known(Type::BigInt);
+                }
+                if let Type::Union(union) = &peeled
+                    && union.types().iter().any(|member| matches!(member, Type::BigInt))
+                {
+                    let number_like = union
+                        .types()
+                        .iter()
+                        .any(|member| matches!(member.base_primitive(), Some(Type::Number)));
+                    return InferredExpression::Known(if number_like {
+                        surge_ts_types::union_type(vec![Type::Number, Type::BigInt])
+                    } else {
+                        Type::BigInt
+                    });
+                }
             }
 
             InferredExpression::Known(Type::Number)
@@ -212,15 +225,20 @@ pub(crate) fn evaluate_unary_expression(
 fn evaluate_add_binary(
     left_result: InferredExpression,
     right_result: InferredExpression,
+    compound_assignment: bool,
     left_span: Option<SyntaxTextSpan>,
     fallback_span: Option<SyntaxTextSpan>,
     right_span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    let Some(left_type) = inferred_type(&left_result) else {
+    let operand_type = |result: &InferredExpression| match result {
+        InferredExpression::MissingProperty { .. } => Some(Type::ErrorType),
+        other => inferred_type(other).cloned(),
+    };
+    let Some(left_type) = operand_type(&left_result) else {
         return InferredExpression::Unknown;
     };
-    let Some(right_type) = inferred_type(&right_result) else {
+    let Some(right_type) = operand_type(&right_result) else {
         return InferredExpression::Unknown;
     };
 
@@ -231,6 +249,14 @@ fn evaluate_add_binary(
     let left_type = left_type.peeled();
     let right_type = right_type.peeled();
 
+    // tsc's error type is an `any`: beside a string operand the result is
+    // still `string`.
+    let string_beside_error = |error: &Type, other: &Type| {
+        matches!(error, Type::ErrorType) && is_strictly_assignable_to(other, &Type::String)
+    };
+    if string_beside_error(&left_type, &right_type) || string_beside_error(&right_type, &left_type) {
+        return InferredExpression::Known(Type::String);
+    }
     if is_unmodelled(&left_type) || is_unmodelled(&right_type) {
         return InferredExpression::Unknown;
     }
@@ -254,8 +280,14 @@ fn evaluate_add_binary(
     } else {
         None
     };
+    let operator_text = if compound_assignment { "+=" } else { "+" };
     if let Some(result) = result {
-        report_symbol_operand("+", &left_type, &right_type, left_span, right_span, ctx);
+        // `+=` checks its assignment only when no symbol operand was reported.
+        if report_symbol_operand(operator_text, &left_type, &right_type, left_span, right_span, ctx)
+            && compound_assignment
+        {
+            return InferredExpression::Unknown;
+        }
         return InferredExpression::Known(result);
     }
 
@@ -276,7 +308,7 @@ fn evaluate_add_binary(
     let file_name = ctx.file_name.clone();
     push_diagnostic(
         ctx,
-        Diagnostic::ts2365("+", &left_name, &right_name, file_name),
+        Diagnostic::ts2365(operator_text, &left_name, &right_name, file_name),
         fallback_span,
     );
     InferredExpression::Unknown
@@ -574,10 +606,6 @@ pub(crate) fn inferred_type(result: &InferredExpression) -> Option<&Type> {
         | InferredExpression::MissingProperty { .. }
         | InferredExpression::Unknown => None,
     }
-}
-
-fn is_known_non_unknown(result: &InferredExpression) -> bool {
-    matches!(result, InferredExpression::Known(ty) if !ty.is_unknown())
 }
 
 fn is_number_like_for_arithmetic(ty: &Type) -> bool {

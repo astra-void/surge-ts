@@ -1129,6 +1129,7 @@ fn syntactic_initializer_type(initializer: &surge_ts_syntax::ParsedExpression, k
                 construct_signature_overloads: Vec::new(),
                 non_primitive: false,
                 display_name: None,
+                abstract_construct_signature: false,
             }))
         }
         _ => return None,
@@ -1202,6 +1203,16 @@ fn class_construct_signature(
     // `declarationBelongsToPrivateAmbientMember`: a private constructor of an
     // ambient class reports no implicit `any` for its parameters.
     let ambient = class.is_declare || crate::modules::is_declaration_file_name(&ctx.file_name);
+    let declared_accessibility = overloads.first().map(|constructor| match constructor.accessibility {
+        Some(surge_ts_syntax::ParsedMemberAccessibility::Private) => surge_ts_types::ConstructorAccessibility::Private,
+        Some(surge_ts_syntax::ParsedMemberAccessibility::Protected) => {
+            surge_ts_types::ConstructorAccessibility::Protected
+        }
+        None => surge_ts_types::ConstructorAccessibility::Public,
+    });
+    // checker.go `getDefaultConstructSignatures`: the signature is abstract
+    // exactly when this class is, whatever it inherits.
+    let modifiers = |accessibility| surge_ts_types::ConstructModifiers::new(class.is_abstract, accessibility);
     let mut signatures = overloads.iter().map(|constructor| {
         let private_ambient = ambient
             && matches!(constructor.accessibility, Some(surge_ts_syntax::ParsedMemberAccessibility::Private));
@@ -1228,30 +1239,35 @@ fn class_construct_signature(
         signature
     });
     if let Some(first) = signatures.next() {
-        return signatures.fold(first, |group, signature| {
+        let group = signatures.fold(first, |group, signature| {
             crate::checks::function::merge_overload_group_signatures(&group, &signature)
         });
+        let accessibility = declared_accessibility.unwrap_or(surge_ts_types::ConstructorAccessibility::Public);
+        return group.with_construct_modifiers(modifiers(accessibility));
     }
 
     if !class.extends.is_empty() {
         if let Some(signature) = generic_base_construct_signature(class, &instance_type, scope, ctx) {
-            return signature;
+            return signature.with_construct_modifiers(modifiers(surge_ts_types::ConstructorAccessibility::Undeclared));
         }
         if let Some(base_signature) = base_static_side(class, scope, ctx)
             .and_then(|base_static| base_static.construct_signature().cloned())
         {
-            return inherited_construct_signature(&base_signature, &instance_type);
+            let inherited = base_signature.construct_modifiers().with_abstract(class.is_abstract);
+            return inherited_construct_signature(&base_signature, &instance_type).with_construct_modifiers(inherited);
         }
         // A base whose value is not an object here — a generic class with no
         // signature the clause's arguments fit, an expression, one not bound
         // yet — has no signature to inherit. Accept any argument list rather
         // than report the base's arity as zero: `new ZodString({ … })` on a
         // derived class was TS2554 "Expected 0 arguments".
-        return FunctionType::new(vec![Type::Any], instance_type, true, 0);
+        return FunctionType::new(vec![Type::Any], instance_type, true, 0)
+            .with_construct_modifiers(modifiers(surge_ts_types::ConstructorAccessibility::Undeclared));
     }
 
     // A class with no explicit constructor is constructible with zero arguments.
     FunctionType::new(vec![], instance_type, false, 0)
+        .with_construct_modifiers(modifiers(surge_ts_types::ConstructorAccessibility::Undeclared))
 }
 
 /// Type-checks a class's constructor and method bodies, binding `this` to the

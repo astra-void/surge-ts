@@ -86,17 +86,18 @@ fn lower_jsdoc_cast(
 pub(crate) fn parse_expression(expression: &Expression<'_>) -> (ParsedExpression, Span) {
     let (lowered, span) = parse_expression_unannotated(expression);
     // A JSDoc-typed assignment declaration's value is checked against its
-    // type, which is what the declared member then has.
-    // Its mismatch is reported at the value, so the assertion names no pattern.
+    // type, which is what the declared member then has, and a mismatch is
+    // reported where tsc's `checkTypeAssignableToAndOptionallyElaborate` puts
+    // it: the assignment's target, the property, or an export's expression.
     if super::spans::lowering_javascript()
-        && let Some((ty, _)) = super::jsdoc::assignment_type_at(expression.span().start, expression.span().end)
+        && let Some((ty, _, anchor)) = super::jsdoc::assignment_type_at(expression.span().start, expression.span().end)
     {
         return (
             ParsedExpression::TypeAssertion {
                 expression: Box::new(lowered),
                 expression_span: Some(text_span_from_oxc_span(span)),
                 ty,
-                type_span: None,
+                type_span: Some(anchor),
                 annotation: true,
             },
             span,

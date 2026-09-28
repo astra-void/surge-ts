@@ -458,6 +458,7 @@ pub(crate) fn resolve_type_alias(
                 | "Required"
                 | "Readonly"
                 | "NoInfer"
+                | "BuiltinIteratorReturn"
                 | "Uppercase"
                 | "Lowercase"
                 | "Capitalize"
@@ -605,6 +606,16 @@ pub(crate) fn resolve_builtin_utility_alias(
     ctx: &mut CheckerContext,
 ) -> Option<ResolvedType> {
     match alias_name {
+        // A source that is neither an object nor a type variable maps through
+        // the lib's mapped body (`instantiateMappedType`'s primitive, array and
+        // tuple constituents).
+        "Partial" | "Required"
+            if substitution.get("T").is_some_and(|source| {
+                !source.is_type_variable() && !source.is_unknown() && !matches!(source.peeled(), Type::Object(_))
+            }) =>
+        {
+            None
+        }
         "Partial" => Some(resolve_partial_utility_type(substitution)),
         "Required" => Some(resolve_required_utility_type(substitution)),
         "Readonly" => Some(resolve_readonly_utility_type(substitution)),
@@ -612,6 +623,12 @@ pub(crate) fn resolve_builtin_utility_alias(
         // intrinsic` in the lib); in type position it is `T`.
         "NoInfer" => Some(ResolvedType {
             ty: substitution.get("T").cloned().unwrap_or(Type::Unknown),
+            had_error: false,
+        }),
+        // checker.go `getDeclaredTypeOfTypeAlias`: the intrinsic marker of
+        // this alias is `getBuiltinIteratorReturnType`.
+        "BuiltinIteratorReturn" => Some(ResolvedType {
+            ty: if ctx.options.strict_builtin_iterator_return { Type::Undefined } else { Type::Any },
             had_error: false,
         }),
         // `type Uppercase<S extends string> = intrinsic` and its three
@@ -622,7 +639,7 @@ pub(crate) fn resolve_builtin_utility_alias(
             // A named argument is judged by what it names; a pattern keeps its
             // own shape rather than resolving to `string`.
             let argument = surge_ts_types::peel_to_pattern_literal(&argument);
-            if argument.is_unknown() {
+            if argument.is_unmodelled() {
                 return None;
             }
             Some(ResolvedType {
@@ -814,6 +831,24 @@ pub(crate) fn resolve_record_utility_type(
         };
     };
 
+    if key_type.is_type_variable() {
+        let value_type = substitution.get("T").cloned().unwrap_or(Type::Unknown);
+        let modifiers = surge_ts_types::type_variable::MappedModifiers {
+            readonly: 0,
+            optional: 0,
+        };
+        let name = format!("Record<{}, {}>", key_type.name(), value_type.name());
+        if !value_type.is_unmodelled()
+            && let Some(mapped) =
+                surge_ts_types::type_variable::mapped_constant_variable(&key_type, &value_type, modifiers, name)
+        {
+            return ResolvedType {
+                ty: mapped,
+                had_error: false,
+            };
+        }
+    }
+
     if record_key_is_open(&key_type) {
         return ResolvedType {
             ty: Type::Object(alloc_object_type(
@@ -855,6 +890,29 @@ pub(crate) fn resolve_pick_utility_type(
             had_error: false,
         };
     };
+
+    // `Pick<T, K>` is `{ [P in K]: T[P] }`: over generic keys it is a generic
+    // mapped type, whose modifiers type is `T` (the declared `K extends
+    // keyof T`).
+    if let Some(key_type) = substitution.get("K")
+        && key_type.is_type_variable()
+        && source_type.is_type_variable()
+        && let Some(mapped) = surge_ts_types::type_variable::mapped_variable(
+            key_type,
+            &source_type,
+            surge_ts_types::type_variable::MappedModifiers {
+                readonly: 0,
+                optional: 0,
+            },
+            Some(&source_type),
+            format!("Pick<{}, {}>", source_type.name(), key_type.name()),
+        )
+    {
+        return ResolvedType {
+            ty: mapped,
+            had_error: false,
+        };
+    }
 
     let Type::Object(object_type) = source_type.peeled() else {
         return ResolvedType {

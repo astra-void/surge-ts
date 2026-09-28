@@ -182,10 +182,12 @@ fn deferred_element_read(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
-    let InferredExpression::Known(index_type) = infer_expression(index, symbols, ctx) else {
+    let InferredExpression::Known(index_type) = super::infer_element_access_argument(index, symbols, ctx) else {
         return InferredExpression::Unknown;
     };
-    deferred_element_access(receiver_type, &index_type).map_or(InferredExpression::Unknown, InferredExpression::Known)
+    deferred_element_access(receiver_type, &index_type)
+        .or_else(|| crate::checks::expr::constraint_element_read(receiver_type, index, &index_type, symbols, ctx))
+        .map_or(InferredExpression::Unknown, InferredExpression::Known)
 }
 
 fn infer_object_element_read(
@@ -407,7 +409,15 @@ pub(crate) fn infer_property_access(
             Type::Any => InferredExpression::Known(Type::Any),
             Type::ErrorType => InferredExpression::Known(Type::ErrorType),
             Type::TypeParameter(parameter) if object_type.is_type_variable() => {
-                type_variable_member(parameter, &object_type, property_name, *property_span)
+                match type_variable_member(parameter, &object_type, property_name, *property_span, 0) {
+                    InferredExpression::Known(member) => InferredExpression::Known(widen_index_signature_read(
+                        &object_type,
+                        property_name,
+                        member,
+                        ctx,
+                    )),
+                    other => other,
+                }
             }
             Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) => {
                 InferredExpression::Unknown
@@ -422,7 +432,7 @@ pub(crate) fn infer_property_access(
                 if union_type
                     .types()
                     .iter()
-                    .any(surge_ts_types::Type::is_unknown)
+                    .any(surge_ts_types::Type::is_unmodelled)
                 {
                     return InferredExpression::Unknown;
                 }
@@ -446,6 +456,23 @@ pub(crate) fn infer_property_access(
                             result_types.push(Type::Undefined);
                         }
                         continue;
+                    }
+                    // A type variable member reads through its apparent type.
+                    if let Type::TypeParameter(parameter) = ty {
+                        match type_variable_member(parameter, ty, property_name, *property_span, 0) {
+                            InferredExpression::Known(member) => {
+                                result_types.push(widen_index_signature_read(ty, property_name, member, ctx));
+                                continue;
+                            }
+                            InferredExpression::MissingProperty { .. } => {
+                                return InferredExpression::MissingProperty {
+                                    property_name: property_name.to_string(),
+                                    object_type: object_type.clone(),
+                                    span: *property_span,
+                                };
+                            }
+                            _ => return InferredExpression::Unknown,
+                        }
                     }
                     match ty.get_property_access_type(property_name) {
                         Some(property_type) => result_types.push(
@@ -474,7 +501,10 @@ pub(crate) fn infer_property_access(
                 InferredExpression::Known(surge_ts_types::union_type(result_types))
             }
             _ => (!lib_lacks_builtin_member(&object_type, property_name, ctx))
-                .then(|| object_type.get_property_access_type(property_name))
+                .then(|| {
+                    global_object_member(&object_type, property_name, ctx)
+                        .or_else(|| object_type.get_property_access_type(property_name))
+                })
                 .flatten()
                 .or_else(|| lib_builtin_member_type(&object_type, property_name, ctx))
                 .map(|property_type| {
@@ -542,8 +572,21 @@ fn widen_index_signature_read(
     property_type: Type,
     ctx: &CheckerContext,
 ) -> Type {
+    // A type variable is read through its apparent type, its constraint.
+    let mut apparent = receiver.clone();
+    for _ in 0..8 {
+        match &apparent {
+            Type::TypeParameter(parameter) if surge_ts_types::type_variable::deferred_type(parameter).is_none() => {
+                match surge_ts_types::type_variable::active_constraint(parameter) {
+                    Some(Some(constraint)) => apparent = constraint,
+                    _ => break,
+                }
+            }
+            _ => break,
+        }
+    }
     if ctx.options.no_unchecked_indexed_access
-        && receiver.reads_unnarrowed_string_index(property_name)
+        && apparent.reads_unnarrowed_string_index(property_name)
     {
         unchecked_index_read(property_type, ctx)
     } else {
@@ -652,6 +695,7 @@ pub(crate) fn infer_property_call(
             return InferredExpression::Unknown;
         }
     };
+    let object_type = crate::checks::call::type_variable_call_receiver(object_type, property_name);
 
     if matches!(
         object_type,
@@ -934,6 +978,33 @@ pub(crate) fn lib_builtin_member_type(
         }
         _ => return None,
     };
+    lib_interface_member(interface_name, element, name, ctx)
+}
+
+/// checker.go `getPropertyOfType`: an object type without call or construct
+/// signatures reads a member it does not declare from the global `Object`
+/// type (`constructor: Function`), before any index signature answers.
+fn global_object_member(receiver: &Type, name: &str, ctx: &mut CheckerContext) -> Option<Type> {
+    surge_ts_types::object_prototype_member_type(name)?;
+    let Type::Object(object) = receiver.peeled() else {
+        return None;
+    };
+    if object.properties.contains_key(name)
+        || object.synthetic_open_index
+        || object.call_signature().is_some()
+        || object.construct_signature().is_some()
+    {
+        return None;
+    }
+    lib_interface_member("Object", None, name, ctx)
+}
+
+fn lib_interface_member(
+    interface_name: &str,
+    element: Option<Type>,
+    name: &str,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
     let (member_type, optional, scope) = match ctx.lookup_type_declaration(interface_name)? {
         crate::symbols::TypeDeclarationInfo::Interface(info) => {
             let mut declared = info.body.members.iter().filter(|member| member.name == name);
@@ -1154,6 +1225,11 @@ pub(crate) fn infer_optional_property_access(
     let base_type = surge_ts_types::remove_nullish(&object_type);
 
     let result_type = match base_type {
+        // A type variable of the body being checked reads its member off its
+        // apparent type, as the non-optional access does.
+        Type::TypeParameter(ref parameter) if base_type.is_type_variable() => {
+            type_variable_member(parameter, &base_type, property_name, *property_span, 0)
+        }
         Type::Unknown
         | Type::GenuineUnknown
         | Type::TypeParameter(_)
@@ -1164,6 +1240,25 @@ pub(crate) fn infer_optional_property_access(
             let mut saw_known = false;
 
             for ty in union_type.types() {
+                if let Type::TypeParameter(parameter) = ty
+                    && ty.is_type_variable()
+                {
+                    match type_variable_member(parameter, ty, property_name, *property_span, 0) {
+                        InferredExpression::Known(member) => {
+                            saw_known = true;
+                            result_types.push(member);
+                            continue;
+                        }
+                        InferredExpression::MissingProperty { .. } => {
+                            return InferredExpression::MissingProperty {
+                                property_name: property_name.to_string(),
+                                object_type: base_type.clone(),
+                                span: *property_span,
+                            };
+                        }
+                        _ => return InferredExpression::Unknown,
+                    }
+                }
                 if *ty == Type::Undefined || ty.is_unknown() {
                     continue;
                 }
@@ -1246,10 +1341,25 @@ pub(crate) fn infer_new_expression(
         return InferredExpression::Known(result_type);
     }
 
-    match infer_expression(callee, symbols, ctx) {
-        InferredExpression::Known(Type::Function(function_type)) => {
-            InferredExpression::Known(function_type.return_type().clone())
-        }
+    // `resolveNewExpression` reads the construct signatures of the callee's
+    // apparent type, through a named reference (`DateConstructor`).
+    let callee_type = match infer_expression(callee, symbols, ctx) {
+        InferredExpression::Known(ty @ Type::Reference(_)) => match ty.peeled() {
+            Type::Object(object)
+                if object
+                    .construct_signature()
+                    .is_some_and(|signature| signature.type_parameter_head().is_none()) =>
+            {
+                InferredExpression::Known(Type::Object(object))
+            }
+            _ => InferredExpression::Known(ty),
+        },
+        other => other,
+    };
+    match callee_type {
+        // `checkCallExpression`: `new` of a function that only has a call
+        // signature (TS7009/TS2350) is `any`, whatever the function returns.
+        InferredExpression::Known(Type::Function(_)) => InferredExpression::Known(Type::Any),
         InferredExpression::Known(Type::Object(object))
             if object.construct_signature().is_some() =>
         {
@@ -1291,6 +1401,7 @@ fn type_variable_member(
     variable: &Type,
     property_name: &str,
     property_span: Option<TextSpan>,
+    depth: usize,
 ) -> InferredExpression {
     const OBJECT_MEMBERS: &[&str] = &[
         "constructor",
@@ -1312,6 +1423,20 @@ fn type_variable_member(
     let Some(constraint) = constraint else {
         return if OBJECT_MEMBERS.contains(&property_name) { InferredExpression::Unknown } else { missing() };
     };
+    // `getApparentType` follows a constraint that is itself a variable
+    // (`U extends T, T extends A`).
+    if let Type::TypeParameter(next) = &constraint
+        && constraint.is_type_variable()
+        && surge_ts_types::type_variable::deferred_type(next).is_none()
+    {
+        if depth >= 8 {
+            return InferredExpression::Unknown;
+        }
+        return match type_variable_member(next, &constraint, property_name, property_span, depth + 1) {
+            InferredExpression::MissingProperty { .. } => missing(),
+            other => other,
+        };
+    }
     // A reference typed by a variable with a union constraint is narrowed as
     // that union where its members are read (tsgo's
     // `getNarrowableTypeForReference`), which surge does not do: whatever a

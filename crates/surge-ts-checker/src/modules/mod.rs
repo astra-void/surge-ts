@@ -214,6 +214,7 @@ mod tests {
                     commonjs_module: parsed.commonjs_module,
                     import_call_specifiers: parsed.import_call_specifiers,
                     import_calls: parsed.import_calls,
+                    import_attributes: parsed.import_attributes,
                     file_kind: FileKind::RootSource,
                     module_reads: parsed.module_reads,
                 definite_writes: parsed.definite_writes,

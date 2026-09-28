@@ -104,6 +104,14 @@ fn evaluate_contextually(
             ctx,
         );
     }
+    // A type variable of the body being checked is a template literal
+    // context for a template expression like any string-like target.
+    if let Some(expected) = expected_type.filter(|expected| expected.is_type_variable())
+        && let Some(template) = contextual_template_literal_type(expression, expected, symbols, ctx)
+    {
+        let _ = evaluate_expression(expression, fallback_span, symbols, ctx);
+        return InferredExpression::Known(template);
+    }
     if expected_type.is_some_and(expectation_is_degraded) {
         ctx.degraded_expected_type_depth += 1;
         let result = evaluate_expression_with_expected_type_inner(
@@ -197,11 +205,11 @@ fn expectation_is_degraded(expected_type: &Type) -> bool {
         // A deferred reference whose expansion is the sentinel carries no more
         // than the sentinel does.
         Type::Reference(_) => matches!(expected_type.peeled(), Type::Unknown),
+        // A type variable of the body being checked is a member like any
+        // other; the rest of the union still types the expression.
         Type::Union(union) => union.types().iter().any(|member| {
-            matches!(
-                member,
-                Type::Unknown | Type::ErrorType | Type::TypeParameter(_)
-            )
+            matches!(member, Type::Unknown | Type::ErrorType)
+                || matches!(member, Type::TypeParameter(parameter) if !parameter.is_active_variable())
         }),
         _ => false,
     }
@@ -364,11 +372,43 @@ fn evaluate_expression_with_expected_type_inner(
             None => InferredExpression::Unknown,
         };
     }
+    if let ParsedExpression::OptionalPropertyCall {
+        object,
+        object_span,
+        property_name,
+        property_span,
+        call_span,
+        type_arguments,
+        arguments,
+    } = expression
+    {
+        return match super::call::check_optional_property_call(
+            object,
+            *object_span,
+            property_name,
+            *property_span,
+            *call_span,
+            type_arguments,
+            arguments,
+            Some(expected_type),
+            symbols,
+            ctx,
+        ) {
+            Some(return_type) => InferredExpression::Known(return_type),
+            None => InferredExpression::Unknown,
+        };
+    }
 
     // A generic expected type (`Props`, `Box<T>`, …) is a nominal
     // `Type::Reference`; peel it to its structural shape so the contextual-typing
     // dispatch below (function/tuple/array/object/union) sees the real form
     // instead of falling through to context-free evaluation.
+    // Under `exactOptionalPropertyTypes` an optional element's slot carries no
+    // `undefined`, so only the recorded `minLength` says it may be absent.
+    let exact_optional_min_length = (surge_ts_types::strict_null_checks()
+        && surge_ts_types::exact_optional_property_types())
+    .then(|| surge_ts_types::fixed_tuple_parts(expected_type).map(|(_, min_length)| min_length))
+    .flatten();
     let peeled_expected;
     let expected_type = match expected_type {
         Type::Reference(reference) => {
@@ -462,6 +502,44 @@ fn evaluate_expression_with_expected_type_inner(
         // `EventListenerOrEventListenerObject`). Members of *differing* arity
         // are a genuinely ambiguous union, which tsc also refuses to type — the
         // implicit-any there is real, so it still reports.
+        // `getContextualSignature` over a union: members whose signatures are
+        // identical but for their return types combine into one
+        // (`createUnionSignature`) that returns the union of theirs. Only an
+        // expression body takes its own return type from under it; a block
+        // body keeps the contextual one, which no single member accepts.
+        if callable.len() > 1
+            && let ParsedExpression::ArrowFunction(arrow) = expression
+            && matches!(arrow.body, surge_ts_syntax::ParsedArrowFunctionBody::Expression(_))
+        {
+            let signatures: Vec<surge_ts_types::FunctionType> =
+                callable.iter().filter_map(|member| contextual_call_signature(member)).collect();
+            if let Some(first) = signatures.first()
+                && signatures.len() == callable.len()
+                && signatures.iter().all(|signature| {
+                    signature.type_parameter_head().is_none()
+                        && signature.overloads().is_none()
+                        && signature.parameters() == first.parameters()
+                        && signature.required_parameter_count() == first.required_parameter_count()
+                        && signature.is_variadic() == first.is_variadic()
+                })
+            {
+                let combined = first.with_signature_types(
+                    first.parameters().to_vec(),
+                    surge_ts_types::union_type(
+                        signatures.iter().map(|signature| signature.return_type().clone()).collect(),
+                    ),
+                );
+                return evaluate_expression_with_expected_type_anchored(
+                    expression,
+                    fallback_span,
+                    target_span,
+                    Some(&Type::Function(combined)),
+                    _expected_diagnostic,
+                    symbols,
+                    ctx,
+                );
+            }
+        }
         if callable.len() > 1 && callable_members_share_arity(&callable) {
             ctx.degraded_expected_type_depth += 1;
             let result = evaluate_expression(expression, fallback_span, symbols, ctx);
@@ -521,13 +599,14 @@ fn evaluate_expression_with_expected_type_inner(
     } = expression
     {
         let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
+        let right_symbols = crate::checks::expr::logical_right_operand_symbols(left, operator, symbols, ctx);
         let right_result = evaluate_expression_with_expected_type_anchored(
             right,
             right_span.or(fallback_span),
             target_span,
             Some(expected_type),
             _expected_diagnostic,
-            symbols,
+            right_symbols.as_ref().unwrap_or(symbols),
             ctx,
         );
         return crate::checks::ops::evaluate_logical_expression(
@@ -629,6 +708,7 @@ fn evaluate_expression_with_expected_type_inner(
         return evaluate_tuple_literal_with_expected_type(
             elements,
             expected_elements,
+            exact_optional_min_length,
             choose_span(*span, fallback_span),
             target_span,
             matches!(_expected_diagnostic, ExpectedTypeDiagnostic::ArgumentNotAssignable),
@@ -729,7 +809,7 @@ fn evaluate_expression_with_expected_type_inner(
             .collect();
         let mut array_members = members
             .iter()
-            .filter(|member| matches!(member, Type::Array(_) | Type::Tuple(_)));
+            .filter(|member| matches!(member, Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)));
         if let (Some(member), None) = (array_members.next(), array_members.next()) {
             return evaluate_expression_with_expected_type_anchored(
                 expression,
@@ -1120,8 +1200,17 @@ fn contextual_template_literal_type(
             ctx,
         );
     }
+    // `isTemplateLiteralContextualType`: a literal or template target, or a
+    // type variable whose base constraint may be a string.
     let is_template_context = |ty: &Type| {
-        matches!(ty, Type::StringLiteral(_)) || surge_ts_types::is_template_literal_type(ty)
+        matches!(ty, Type::StringLiteral(_))
+            || surge_ts_types::is_template_literal_type(ty)
+            || surge_ts_types::type_variable::template_literal_variable_parts(ty).is_some()
+            || ty.is_type_variable()
+                && match surge_ts_types::type_variable::base_constraint_or_type(ty) {
+                    Type::Union(union) => union.types().iter().any(is_string_like_constraint),
+                    other => is_string_like_constraint(&other),
+                }
     };
     let in_template_context = match expected_type {
         Type::Union(union) => flattened_union_members(union).iter().any(is_template_context),
@@ -1131,6 +1220,12 @@ fn contextual_template_literal_type(
         return None;
     }
     crate::infer::expression::template_expression_pattern_type(expressions, quasis, symbols, ctx)
+}
+
+fn is_string_like_constraint(ty: &Type) -> bool {
+    matches!(ty, Type::String | Type::StringLiteral(_))
+        || surge_ts_types::is_template_literal_type(ty)
+        || surge_ts_types::string_mapping_parts(ty).is_some()
 }
 
 /// Whether `member` declares `name` as a real property.
@@ -2291,6 +2386,7 @@ fn evaluate_open_tuple_literal_with_expected_type(
             evaluate_tuple_literal_with_expected_type(
                 leading,
                 &open.leading,
+                None,
                 fallback_span,
                 None,
                 false,
@@ -2373,9 +2469,17 @@ fn evaluate_open_tuple_literal_with_expected_type(
     InferredExpression::Known(literal_type)
 }
 
+fn expected_tuple_name(expected_elements: &[Type], exact_optional_min_length: Option<usize>) -> String {
+    match exact_optional_min_length {
+        Some(min_length) => surge_ts_types::written_tuple_type(expected_elements.to_vec(), min_length).name(),
+        None => Type::Tuple(expected_elements.to_vec()).name(),
+    }
+}
+
 fn evaluate_tuple_literal_with_expected_type(
     elements: &[surge_ts_syntax::ParsedArrayElement],
     expected_elements: &[Type],
+    exact_optional_min_length: Option<usize>,
     fallback_span: Option<SyntaxTextSpan>,
     target_span: Option<SyntaxTextSpan>,
     is_argument: bool,
@@ -2383,10 +2487,11 @@ fn evaluate_tuple_literal_with_expected_type(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     let mut reported_element = false;
+    let mut unresolved_element = false;
     let mut omitted_mismatch = false;
     for (index, element) in elements.iter().enumerate() {
         if index >= expected_elements.len() {
-            if reported_element {
+            if reported_element || unresolved_element {
                 return InferredExpression::Unknown;
             }
             // The literal is longer than the tuple allows. tsc names the source by
@@ -2395,7 +2500,7 @@ fn evaluate_tuple_literal_with_expected_type(
             // neither side truthfully.
             let source_type_name =
                 Type::Tuple(literal_element_types(elements, symbols, ctx)).name();
-            let target_type_name = Type::Tuple(expected_elements.to_vec()).name();
+            let target_type_name = expected_tuple_name(expected_elements, exact_optional_min_length);
             // The lengths disagree, so no element is at fault: tsc reports the
             // whole value, as the argument it is or on the target it initializes.
             let (diagnostic, span) = if is_argument {
@@ -2413,11 +2518,25 @@ fn evaluate_tuple_literal_with_expected_type(
             return InferredExpression::Unknown;
         }
 
-        let expected_element_type = &expected_elements[index];
+        let optional_slot = exact_optional_min_length.is_some_and(|min_length| index >= min_length);
+        if optional_slot && element.omitted {
+            continue;
+        }
+        // Elementwise elaboration reads the slot (`getIndexedAccessType`),
+        // which an optional element widens with `undefined`.
+        let read_slot;
+        let expected_element_type = if optional_slot {
+            read_slot = surge_ts_types::union_type(vec![expected_elements[index].clone(), Type::Undefined]);
+            &read_slot
+        } else {
+            &expected_elements[index]
+        };
+        // The contextual type is the element's own (`removeMissingType` in
+        // `getTypeOfPropertyOfContextualType`); only the relation reads the slot.
         let inferred_element = evaluate_expression_with_expected_type(
             &element.expression,
             element.span,
-            Some(expected_element_type),
+            Some(&expected_elements[index]),
             ExpectedTypeDiagnostic::TypeNotAssignable,
             symbols,
             ctx,
@@ -2459,28 +2578,36 @@ fn evaluate_tuple_literal_with_expected_type(
                     reported_element = true;
                     continue;
                 }
+                if optional_slot && !is_assignable_to(&actual_type, &expected_elements[index]) {
+                    omitted_mismatch = true;
+                }
             }
+            // `elaborateElementwise` goes on to the remaining elements after one
+            // it could not relate.
             InferredExpression::UnresolvedIdentifier { .. }
             | InferredExpression::MissingProperty { .. }
             | InferredExpression::Unknown => {
-                return InferredExpression::Unknown;
+                unresolved_element = true;
             }
         }
     }
-    if reported_element {
+    if reported_element || unresolved_element {
         return InferredExpression::Unknown;
     }
 
     // A literal may stop short of trailing slots that accept `undefined` —
     // how an optional element (`[string[], Opts?]`) is represented.
-    let trailing_optional = expected_elements[elements.len().min(expected_elements.len())..]
-        .iter()
-        .all(|slot| is_assignable_to(&Type::Undefined, slot));
+    let trailing_optional = match exact_optional_min_length {
+        Some(min_length) => elements.len() >= min_length,
+        None => expected_elements[elements.len().min(expected_elements.len())..]
+            .iter()
+            .all(|slot| is_assignable_to(&Type::Undefined, slot)),
+    };
     // A mismatch only an omitted element carries is reported on the whole
     // literal, as a length mismatch is.
     if omitted_mismatch || (elements.len() != expected_elements.len() && !trailing_optional) {
         let source_type_name = Type::Tuple(literal_element_types(elements, symbols, ctx)).name();
-        let target_type_name = Type::Tuple(expected_elements.to_vec()).name();
+        let target_type_name = expected_tuple_name(expected_elements, exact_optional_min_length);
         let (diagnostic, span) = if is_argument {
             (
                 Diagnostic::ts2345(&source_type_name, &target_type_name, ctx.file_name.clone()),
@@ -2603,6 +2730,8 @@ fn evaluate_object_literal_with_expected_type(
         symbols,
         ctx,
     );
+    let computed_index_signatures =
+        crate::infer::expression::computed_key_index_signatures(properties, symbols, ctx);
     let properties =
         &*crate::infer::expression::resolve_computed_property_names(properties, symbols, ctx);
     let object_start = Instant::now();
@@ -2617,6 +2746,30 @@ fn evaluate_object_literal_with_expected_type(
     // required-property scan below (conservative: under-check rather than emit a
     // false `TS2353`/`TS2741`).
     let has_spread = properties.iter().any(|property| property.is_spread);
+    // A property a later spread always writes is not a property of the
+    // literal's type (`getSpreadType`), so `elaborateObjectLiteral` relates
+    // the spread's member there, never the value written before it.
+    let overwritten_by_spread: Vec<bool> = if has_spread {
+        let mut spreads_after: Vec<Type> = Vec::new();
+        let mut overwritten = vec![false; properties.len()];
+        for (index, property) in properties.iter().enumerate().rev() {
+            if property.is_spread {
+                if property.unnamed_key_value.is_none()
+                    && let InferredExpression::Known(spread) =
+                        crate::infer::infer_expression(&property.value, symbols, ctx)
+                {
+                    spreads_after.push(spread);
+                }
+            } else if !property.is_accessor && property.computed_key.is_none() {
+                overwritten[index] = spreads_after
+                    .iter()
+                    .any(|spread| super::expr::spread_always_writes(spread, &property.name));
+            }
+        }
+        overwritten
+    } else {
+        Vec::new()
+    };
 
     // Set when a property the literal *writes* is compared against an expected
     // member surge could not model. tsc reports the written properties that
@@ -2634,7 +2787,7 @@ fn evaluate_object_literal_with_expected_type(
     // not reported (no excess or missing property).
     let mut elaborated_property_failure = false;
 
-    for property in properties {
+    for (property_index, property) in properties.iter().enumerate() {
         if property.is_spread {
             if property.unnamed_key_value.is_none() && !explicit_properties.is_empty() {
                 let spread = crate::infer::infer_expression(&property.value, symbols, ctx);
@@ -2644,6 +2797,18 @@ fn evaluate_object_literal_with_expected_type(
         }
         if !property.is_accessor && property.computed_key.is_none() {
             explicit_properties.push((&property.name, property.name_span));
+        }
+        if overwritten_by_spread.get(property_index).copied().unwrap_or(false) {
+            let contextual = expected_object_type.get_property_type(&property.name).cloned();
+            let _ = evaluate_expression_with_expected_type(
+                &property.value,
+                property.value_span.or(property.span),
+                contextual.as_ref(),
+                ExpectedTypeDiagnostic::ContextOnly,
+                symbols,
+                ctx,
+            );
+            continue;
         }
         record_object_literal_property_check();
         // `getIndexedAccessTypeOrUndefined(target, nameType)`: a numeric name
@@ -2703,7 +2868,16 @@ fn evaluate_object_literal_with_expected_type(
         // so the contextual type has to carry it. A conditional value is checked
         // branch by branch against the contextual type, and `flag ? x : undefined`
         // fails on its `undefined` branch otherwise.
-        let contextual_property_type = expected_property_type.clone();
+        // With it, `getTypeOfPropertyOfContextualType` removes the missing type
+        // an optional property carries.
+        let contextual_property_type = if expected_property.is_optional()
+            && surge_ts_types::strict_null_checks()
+            && surge_ts_types::exact_optional_property_types()
+        {
+            with_type_copy_reason(TypeCopyReason::ExpectedType, || expected_property.ty.clone())
+        } else {
+            expected_property_type.clone()
+        };
 
         // A `get`/`set` accessor is written as a function but *is* the property:
         // contextually type it as one returning the expected type, then compare
@@ -2742,7 +2916,9 @@ fn evaluate_object_literal_with_expected_type(
                     .as_ref()
                     .unwrap_or(&contextual_property_type),
             ),
-            if method_target {
+            // A literal that is only contextually typed relates none of its
+            // members either.
+            if method_target || expected_diagnostic == ExpectedTypeDiagnostic::ContextOnly {
                 ExpectedTypeDiagnostic::ContextOnly
             } else {
                 ExpectedTypeDiagnostic::TypeNotAssignable
@@ -2888,6 +3064,52 @@ fn evaluate_object_literal_with_expected_type(
         return InferredExpression::Unknown;
     }
 
+    // `checkObjectLiteral` folds every spread into the literal's type
+    // (`getSpreadType`) and the whole is related to the target; a spread member
+    // the target rejects is no written property `elaborateObjectLiteral` can
+    // descend into, so the literal is reported as a whole.
+    if has_spread
+        && !degraded_property_comparison
+        && union_target.is_none()
+        && matches!(
+            expected_diagnostic,
+            ExpectedTypeDiagnostic::TypeNotAssignable | ExpectedTypeDiagnostic::ArgumentNotAssignable
+        )
+    {
+        let literal = ParsedExpression::ObjectLiteral {
+            properties: properties.to_vec(),
+            span: fallback_span,
+        };
+        let diagnostics_before = ctx.diagnostics().len();
+        let spread_type = crate::infer::infer_expression(&literal, symbols, ctx);
+        ctx.truncate_diagnostics(diagnostics_before);
+        let expected = Type::Object(with_type_copy_reason(TypeCopyReason::ExpectedType, || {
+            expected_object_type.clone()
+        }));
+        if let InferredExpression::Known(spread_type) = spread_type
+            && matches!(spread_type, Type::Object(_))
+            && !crate::checks::function::type_contains_unknown(&spread_type)
+            && !crate::checks::function::type_contains_unknown(&expected)
+            && !is_assignable_to(&spread_type, &expected)
+        {
+            let reported_target = crate::checks::expr::reported_relation_target(&spread_type, &expected);
+            let source_name = crate::checks::expr::source_display_name(&spread_type, &reported_target);
+            let diagnostic = crate::checks::expr::assignability_mismatch_diagnostic(
+                &spread_type,
+                &reported_target,
+                &source_name,
+                &reported_target.name(),
+                expected_diagnostic == ExpectedTypeDiagnostic::ArgumentNotAssignable,
+                ctx.file_name.clone(),
+            );
+            ctx.push(diagnostic_with_syntax_span(
+                diagnostic,
+                choose_span(target_span, fallback_span),
+            ));
+            return InferredExpression::Unknown;
+        }
+    }
+
     let missing_property_names: Vec<String> = if has_spread || degraded_property_comparison {
         Vec::new()
     } else {
@@ -2972,6 +3194,38 @@ fn evaluate_object_literal_with_expected_type(
         ));
         record_object_literal_own_type(properties, &inferred_property_types, expected_object_type, fallback_span, ctx);
         return InferredExpression::Unknown;
+    }
+
+    // A computed member keyed by an index signature has no name to elaborate
+    // at (`elaborateObjectLiteral`), so the literal as a whole relates through
+    // the index signature it carries.
+    if expected_diagnostic != ExpectedTypeDiagnostic::ContextOnly
+        && !elaborated_property_failure
+        && !has_spread
+        && let Some((string_index, number_index)) = computed_index_signatures
+    {
+        let source_properties: surge_ts_types::PropertyMap = inferred_property_types
+            .iter()
+            .map(|(name, ty)| (std::sync::Arc::<str>::from(name.as_str()), surge_ts_types::ObjectProperty::required(ty.clone())))
+            .collect();
+        let source = crate::checks::expr::widen_type(&Type::Object(
+            crate::metrics::alloc_object_type(source_properties, string_index).with_number_index_type(number_index),
+        ));
+        let target = Type::Object(expected_object_type.clone());
+        if !is_assignable_to(&source, &target) {
+            let target_type_name = union_target.as_ref().map_or_else(|| target.name(), |union| union.name());
+            let diagnostic = match expected_diagnostic {
+                ExpectedTypeDiagnostic::ArgumentNotAssignable => {
+                    Diagnostic::ts2345(source.name(), &target_type_name, ctx.file_name.clone())
+                }
+                ExpectedTypeDiagnostic::SatisfiesNotAssignable => {
+                    Diagnostic::ts1360(source.name(), &target_type_name, ctx.file_name.clone())
+                }
+                _ => Diagnostic::ts2322(source.name(), &target_type_name, ctx.file_name.clone()),
+            };
+            ctx.push(diagnostic_with_syntax_span(diagnostic, choose_span(target_span, fallback_span)));
+            return InferredExpression::Unknown;
+        }
     }
 
     // `reportRelationError` heads the literal's report TS2375, or TS2379 for an
@@ -3286,7 +3540,7 @@ fn check_returned_conditional_branch(
             } else {
                 branch_type
             };
-            if branch_type.is_unknown() || is_assignable_to(&branch_type, expected_type) {
+            if branch_type.is_unmodelled() || is_assignable_to(&branch_type, expected_type) {
                 return false;
             }
             push_expected_type_mismatch(&branch_type, expected_type, branch_span, expected_diagnostic, ctx);
@@ -3308,6 +3562,21 @@ fn evaluate_conditional_branch(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    // An arrow branch is typed by the contextual signature and keeps the
+    // return its body gives: the union of the branches is what gets related.
+    if matches!(branch, ParsedExpression::ArrowFunction(_)) {
+        crate::checks::function::NEXT_ARROW_NOT_ELABORATED.set(true);
+        let contextual = evaluate_expression_with_expected_type(
+            branch,
+            branch_span,
+            Some(expected_type),
+            expected_diagnostic,
+            symbols,
+            ctx,
+        );
+        crate::checks::function::NEXT_ARROW_NOT_ELABORATED.set(false);
+        return contextual;
+    }
     let checkpoint = ctx.diagnostics().len();
     let contextual = evaluate_expression_with_expected_type(
         branch,

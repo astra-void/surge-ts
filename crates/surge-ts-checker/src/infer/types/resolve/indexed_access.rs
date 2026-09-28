@@ -256,6 +256,23 @@ pub(super) fn resolve_indexed_access_type(
         };
     }
 
+    // The key parameter of a generic mapped type indexes by its constraint,
+    // which the mapped type's own declaration check validates; here the
+    // access is simply deferred (`shouldDeferIndexedAccessType`).
+    if let Type::TypeParameter(index) = &resolved_index.ty
+        && matches!(
+            surge_ts_types::type_variable::deferred_type(index),
+            Some(surge_ts_types::type_variable::DeferredType::MappedKey { .. })
+        )
+        && let Some(deferred) =
+            surge_ts_types::type_variable::indexed_access_variable(&resolved_object.ty, &resolved_index.ty)
+    {
+        return ResolvedType {
+            ty: deferred,
+            had_error: false,
+        };
+    }
+
     // `getIndexedAccessTypeOrUndefined`: a literal key naming a private or
     // protected member of a type parameter's class constraint is not in
     // `keyof T`, and tsc says why (TS4105) rather than reporting the index.

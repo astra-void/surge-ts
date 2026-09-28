@@ -219,12 +219,15 @@ pub(super) fn evaluate_index_access(
     match &receiver_type {
         Type::Any => InferredExpression::Known(Type::Any),
         Type::TypeParameter(_) => {
-            let InferredExpression::Known(index_type) = infer_expression(index, symbols, ctx) else {
+            let InferredExpression::Known(index_type) =
+                crate::infer::expression::infer_element_access_argument(index, symbols, ctx)
+            else {
                 return InferredExpression::Unknown;
             };
             let Some(deferred) = crate::infer::expression::deferred_element_access(&receiver_type, &index_type)
             else {
-                return InferredExpression::Unknown;
+                return constraint_element_read(&receiver_type, index, &index_type, symbols, ctx)
+                    .map_or(InferredExpression::Unknown, InferredExpression::Known);
             };
             if report_invalid_deferred_index(
                 &receiver_type,
@@ -470,7 +473,7 @@ pub(super) fn evaluate_index_access(
             // `record[1]` reads a `Record<number, T>` and a `Record<string, T>`
             // alike. Only a receiver that declares neither is a real TS2339.
             if let Type::Object(object_type) = receiver_type.peeled() {
-                if let Some(member) = object_type.get_property_access_type(&key) {
+                if let Some(member) = literal_key_member_read(&object_type, &key, ctx) {
                     return InferredExpression::Known(member);
                 }
                 if let Some(index_value) = object_type.applicable_index_type(index_is_numeric) {
@@ -668,6 +671,8 @@ pub(crate) fn object_element_read(
     let peeled = receiver_type.peeled();
     let index_is_numeric =
         is_assignable_to(index_type, &Type::Number) || indexes_as_number(index, symbols);
+    let well_known = well_known_symbol_key_type(index, symbols);
+    let index_type = well_known.as_ref().unwrap_or(index_type);
     let Some(key) = literal_index_key(index_type) else {
         let Type::Object(object_type) = &peeled else {
             return None;
@@ -683,11 +688,43 @@ pub(crate) fn object_element_read(
     let Type::Object(object_type) = &peeled else {
         return None;
     };
-    object_type.get_property_access_type(&key).or_else(|| {
+    literal_key_member_read(object_type, &key, ctx).or_else(|| {
         object_type
             .applicable_index_type(index_is_numeric)
             .map(|index_value| crate::infer::unchecked_index_read(index_value.clone(), ctx))
     })
+}
+
+/// A literal key's member, which under `noUncheckedIndexedAccess` includes
+/// `undefined` when only an index signature answers it
+/// (`getPropertyTypeForIndexType` with `AccessFlagsIncludeUndefined`).
+fn literal_key_member_read(object_type: &surge_ts_types::ObjectType, key: &str, ctx: &CheckerContext) -> Option<Type> {
+    let member = object_type.get_property_access_type(key)?;
+    let from_index_signature = object_type.properties.get(key).is_none()
+        && !object_type.synthetic_open_index
+        && !surge_ts_types::private_name::is_private_name_key(key)
+        && object_type.applicable_index_type(surge_ts_types::is_numeric_key(key)).is_some();
+    Some(if from_index_signature {
+        crate::infer::unchecked_index_read(member, ctx)
+    } else {
+        member
+    })
+}
+
+/// tsc resolves `x["k"]` on a type variable `x` eagerly through its apparent
+/// type (only a generic index defers the access).
+pub(crate) fn constraint_element_read(
+    receiver_type: &Type,
+    index: &ParsedExpression,
+    index_type: &Type,
+    symbols: &SymbolTable,
+    ctx: &CheckerContext,
+) -> Option<Type> {
+    if !receiver_type.is_type_variable() || index_type.is_type_variable() {
+        return None;
+    }
+    let constraint = crate::checks::call::type_variable_apparent_type(receiver_type)?;
+    object_element_read(&constraint, index, index_type, symbols, ctx)
 }
 
 fn indexes_as_number(index: &ParsedExpression, symbols: &SymbolTable) -> bool {
@@ -763,8 +800,38 @@ fn literal_index_key(index_type: &Type) -> Option<String> {
         Type::StringLiteral(value) => Some(value.clone()),
         Type::NumberLiteral(NumberLiteralType { value }) => Some(value.clone()),
         Type::BooleanLiteral(value) => Some(value.to_string()),
+        // Only a well-known symbol's key names its member as written
+        // (`[Symbol.iterator]`); a declared unique symbol's members are named
+        // by the expression each declaration wrote.
+        Type::Reference(reference) if reference.is_unique_symbol() => reference
+            .unique_symbol_name()
+            .filter(|name| name.starts_with("Symbol."))
+            .map(|name| format!("[{name}]")),
         _ => None,
     }
+}
+
+/// The type of a `Symbol.<name>` key naming one of the lib's well-known
+/// symbols: a unique symbol, which names the member a class or interface
+/// declares as `[Symbol.<name>]`. surge types the lib's `unique symbol`
+/// members as `symbol`, so the key is recognised by what it reads.
+pub(crate) fn well_known_symbol_key_type(index: &ParsedExpression, symbols: &SymbolTable) -> Option<Type> {
+    let ParsedExpression::PropertyAccess {
+        object,
+        property_name,
+        is_bracketed: false,
+        ..
+    } = index
+    else {
+        return None;
+    };
+    let ParsedExpression::Identifier { name, .. } = object.as_ref() else {
+        return None;
+    };
+    (name == "Symbol"
+        && symbols.get(name).is_some()
+        && crate::program::WELL_KNOWN_SYMBOLS.contains(&property_name.as_str()))
+    .then(|| surge_ts_types::unique_symbol_type("", &format!("Symbol.{property_name}")))
 }
 
 pub(super) fn report_tuple_index_out_of_bounds(

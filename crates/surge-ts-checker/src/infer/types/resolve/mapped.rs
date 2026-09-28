@@ -52,6 +52,131 @@ fn mapped_literal_keys(constraint: &Type) -> Option<Vec<(String, Type)>> {
     }
 }
 
+/// `instantiateMappedType`'s `instantiateConstituent` for a homomorphic
+/// mapping whose type variable was instantiated to something other than an
+/// object or a union: a primitive maps to itself, and without an `as` clause
+/// an array or fixed tuple maps element by element (`instantiateMappedArrayType`,
+/// `instantiateMappedTupleType`).
+fn instantiate_homomorphic_constituent(
+    mapped: &ParsedMappedType,
+    operand: &ResolvedType,
+    ctx: &mut CheckerContext,
+    resolving: &mut Vec<DeclarationResolutionKey>,
+    substitution: &TypeParameterSubstitution,
+) -> Option<ResolvedType> {
+    if operand.ty.is_unknown() || operand.ty.is_type_variable() {
+        return None;
+    }
+    let (readonly_source, shape) = match &operand.ty {
+        Type::Reference(reference) if reference.is_readonly_array() => (true, operand.ty.peeled()),
+        _ => (false, operand.ty.clone()),
+    };
+    let peeled = shape.peeled();
+    if matches!(
+        peeled,
+        Type::String
+            | Type::Number
+            | Type::Boolean
+            | Type::BigInt
+            | Type::Symbol
+            | Type::Undefined
+            | Type::Null
+            | Type::Void
+            | Type::Never
+            | Type::StringLiteral(_)
+            | Type::NumberLiteral(_)
+            | Type::BooleanLiteral(_)
+    ) {
+        return Some(ResolvedType {
+            ty: operand.ty.clone(),
+            had_error: operand.had_error,
+        });
+    }
+    if mapped.name_type.is_some() {
+        return None;
+    }
+    let optional = mapped_modifier(mapped.optional);
+    let readonly = match mapped.readonly {
+        MappedOptionality::Keep => readonly_source,
+        MappedOptionality::Add => true,
+        MappedOptionality::Remove => false,
+    };
+    let mut had_error = operand.had_error;
+    let mut template = |key: Type, is_optional: bool, ctx: &mut CheckerContext, had_error: &mut bool| {
+        let mut key_substitution = substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+        key_substitution.insert(mapped.key_name.clone(), key);
+        // Array and tuple elements are instantiated eagerly (`createTupleType`),
+        // not as deferred members, so a template re-entering the mapping here
+        // is a cycle.
+        let resolved = resolve_parsed_type(*mapped.value_type.clone(), ctx, resolving, &key_substitution);
+        *had_error |= resolved.had_error;
+        // `instantiateMappedTypeTemplate`.
+        if surge_ts_types::strict_null_checks() && optional > 0 && !type_admits_undefined(&resolved.ty) {
+            union_type(vec![resolved.ty, Type::Undefined])
+        } else if surge_ts_types::strict_null_checks() && optional < 0 && is_optional {
+            surge_ts_types::remove_undefined(&resolved.ty)
+        } else {
+            resolved.ty
+        }
+    };
+    let ty = if let Some((elements, min_length)) = surge_ts_types::fixed_tuple_parts(&shape) {
+        let arity = elements.len();
+        let mapped_elements = (0..arity)
+            .map(|index| template(Type::StringLiteral(index.to_string()), index >= min_length, ctx, &mut had_error))
+            .collect::<Vec<_>>();
+        let min_length = match optional {
+            1 => 0,
+            -1 => mapped_elements.len(),
+            _ => min_length,
+        };
+        surge_ts_types::written_tuple_type(mapped_elements, min_length)
+    } else if let Type::Array(_) = peeled {
+        Type::Array(Box::new(template(Type::Number, true, ctx, &mut had_error)))
+    } else {
+        return None;
+    };
+    Some(ResolvedType {
+        ty: if readonly { readonly_reference(ty) } else { ty },
+        had_error,
+    })
+}
+
+fn type_admits_undefined(ty: &Type) -> bool {
+    match ty {
+        Type::Undefined | Type::Void => true,
+        Type::Union(union) => union.types().iter().any(type_admits_undefined),
+        _ => false,
+    }
+}
+
+/// How tsc prints a generic mapped type written without an alias.
+fn generic_mapped_display(
+    readonly: MappedOptionality,
+    optional: MappedOptionality,
+    key_name: &str,
+    keys: &Type,
+    name_type: Option<&Type>,
+    template: &Type,
+) -> String {
+    format!(
+        "{{ {}[{} in {}{}]{}: {}; }}",
+        match readonly {
+            MappedOptionality::Keep => "",
+            MappedOptionality::Add => "readonly ",
+            MappedOptionality::Remove => "-readonly ",
+        },
+        key_name,
+        keys.name(),
+        name_type.map(|name_type| format!(" as {}", name_type.name())).unwrap_or_default(),
+        match optional {
+            MappedOptionality::Keep => "",
+            MappedOptionality::Add => "?",
+            MappedOptionality::Remove => "-?",
+        },
+        template.name(),
+    )
+}
+
 fn mapped_modifier(modifier: MappedOptionality) -> i8 {
     match modifier {
         MappedOptionality::Keep => 0,
@@ -113,11 +238,16 @@ pub(crate) fn resolve_mapped_type(
             resolving,
             substitution,
         );
+        if let Some(instantiated) =
+            instantiate_homomorphic_constituent(&mapped, &operand, ctx, resolving, substitution)
+        {
+            return instantiated;
+        }
         if let Type::Union(union) = operand.ty.peeled() {
             let mut members = Vec::with_capacity(union.types().len());
             let mut had_error = operand.had_error;
             for member in union.types() {
-                if !matches!(member.peeled(), Type::Object(_)) {
+                if !matches!(member.peeled(), Type::Object(_) | Type::Array(_) | Type::Tuple(_)) {
                     members.push(member.clone());
                     continue;
                 }
@@ -217,6 +347,117 @@ pub(crate) fn resolve_mapped_type(
         }
     }
 
+    // `{ [P in K]: X }` over a generic key set whose template does not read
+    // `P` (`Record<K, T>`) is generic too; its template is the same type for
+    // every key.
+    if resolved_constraint.ty.is_type_variable()
+        && keyof_operand.is_none()
+        && mapped.name_type.is_none()
+        && !parsed_type_names_key(mapped.value_type.as_ref(), &mapped.key_name)
+    {
+        let template = resolve_parsed_type(mapped.value_type.as_ref().clone(), ctx, resolving, substitution);
+        if !template.had_error && !template.ty.is_unmodelled() {
+            let modifiers = surge_ts_types::type_variable::MappedModifiers {
+                readonly: mapped_modifier(mapped.readonly),
+                optional: mapped_modifier(mapped.optional),
+            };
+            let name = generic_mapped_display(
+                mapped.readonly,
+                mapped.optional,
+                &mapped.key_name,
+                &resolved_constraint.ty,
+                None,
+                &template.ty,
+            );
+            if let Some(mapped_variable) = surge_ts_types::type_variable::mapped_constant_variable(
+                &resolved_constraint.ty,
+                &template.ty,
+                modifiers,
+                name,
+            ) {
+                return ResolvedType {
+                    ty: mapped_variable,
+                    had_error: false,
+                };
+            }
+        }
+    }
+
+    // Any other mapping over a generic key set is generic in its general
+    // shape: the template and `as` clause are read over a key parameter `P`
+    // constrained to the keys.
+    let generic_key_set = resolved_constraint.ty.is_type_variable()
+        || matches!(&resolved_constraint.ty, Type::Object(object)
+            if object.properties.is_empty()
+                && object.intersection_operands.as_deref().is_some_and(|operands| operands.iter().any(Type::is_type_variable)));
+    // A homomorphic mapping over an array or tuple variable maps to an array
+    // or tuple once instantiated (`instantiateMappedArrayType`), which the
+    // general generic shape does not model.
+    let array_like_source = keyof_operand.is_some()
+        && surge_ts_types::type_variable::mapped_modifiers_type(&resolved_constraint.ty).is_some_and(|source| {
+            surge_ts_types::type_variable::generic_tuple(&source).is_some()
+                || matches!(
+                    surge_ts_types::type_variable::base_constraint_or_type(&source).peeled(),
+                    Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)
+                )
+        });
+    if generic_key_set && !array_like_source {
+        let declaration: (std::sync::Arc<str>, u32) = (
+            std::sync::Arc::from(ctx.file_name.as_str()),
+            mapped.key_span.map_or(0, |span| span.start as u32),
+        );
+        if let Some(key) =
+            surge_ts_types::type_variable::mapped_key_variable(&resolved_constraint.ty, declaration, &mapped.key_name)
+        {
+            let mut key_substitution = substitution.clone_with_reason(TypeCopyReason::SubstitutionChanged);
+            key_substitution.insert(mapped.key_name.clone(), key.clone());
+            let name_type = mapped
+                .name_type
+                .as_deref()
+                .map(|name_type| resolve_parsed_type(name_type.clone(), ctx, resolving, &key_substitution));
+            let template = resolve_parsed_type(mapped.value_type.as_ref().clone(), ctx, resolving, &key_substitution);
+            let modelled = |resolved: &ResolvedType| {
+                !resolved.had_error
+                    && !(resolved.ty.is_unmodelled() && !matches!(resolved.ty, Type::GenuineUnknown | Type::ErrorType))
+            };
+            if modelled(&template) && name_type.as_ref().is_none_or(modelled) {
+                let modifiers_type = match keyof_operand.as_ref() {
+                    Some(operand) => Some(resolve_parsed_type(operand.clone(), ctx, resolving, substitution).ty),
+                    None => surge_ts_types::type_variable::mapped_modifiers_type(&resolved_constraint.ty),
+                };
+                let name = generic_mapped_display(
+                    mapped.readonly,
+                    mapped.optional,
+                    &mapped.key_name,
+                    &resolved_constraint.ty,
+                    name_type.as_ref().map(|name_type| &name_type.ty),
+                    &template.ty,
+                );
+                if let Some(mapped_variable) = surge_ts_types::type_variable::mapped_generic_variable(
+                    surge_ts_types::type_variable::DeferredMapped {
+                        key,
+                        keys: resolved_constraint.ty.clone(),
+                        name_type: name_type.map(|name_type| name_type.ty),
+                        template: template.ty,
+                        modifiers: surge_ts_types::type_variable::MappedModifiers {
+                            readonly: mapped_modifier(mapped.readonly),
+                            optional: mapped_modifier(mapped.optional),
+                        },
+                        modifiers_optionality: modifiers_type
+                            .as_ref()
+                            .map_or(0, surge_ts_types::type_variable::combined_mapped_optionality),
+                    },
+                    name,
+                ) {
+                    return ResolvedType {
+                        ty: mapped_variable,
+                        had_error: false,
+                    };
+                }
+            }
+        }
+    }
+
     // A non-literal key constraint maps to an index signature: `{ [P in string]: T }`
     // is `{ [k: string]: T }`, and `number`/`symbol` are as open as `string`
     // (`keyof any` is all three). This is how `Record<K, T>` resolves when it
@@ -224,7 +465,30 @@ pub(crate) fn resolve_mapped_type(
     // `{ [P in K]: T }` — rather than the built-in `resolve_record_utility_type`
     // fast path. Without this the mapped type collapsed to `unknown`, which
     // surfaced as a spurious missing-property error on every read.
-    if mapped_key_is_open(&resolved_constraint.ty) {
+    // `resolveMappedTypeMembers` over a homomorphic mapping of an object:
+    // the keys are its properties' names (and its index signatures, handled
+    // below), not the reduced `keyof` union an index signature absorbs them
+    // into.
+    // A constraint naming the mapping's own key (`[P in keyof P]`) is circular
+    // (TS2313) and has no source object to read.
+    let homomorphic_object = keyof_operand.as_ref().filter(|_| !names_own_key).and_then(|operand| {
+        let resolved = resolve_parsed_type(operand.clone(), ctx, resolving, substitution);
+        match crate::program::with_dts_expansion_reason(crate::program::DtsExpansionReason::MappedType, || {
+            resolved.ty.peeled()
+        }) {
+            Type::Object(object) if object.string_index_type.is_some() && !object.synthetic_open_index => Some(object),
+            _ => None,
+        }
+    });
+    let homomorphic_keys: Option<Vec<(String, Type)>> = homomorphic_object.map(|object| {
+        object
+            .properties
+            .iter()
+            .filter(|(key, property)| !key.starts_with('[') && is_public_key(key, property))
+            .map(|(key, _)| (key.to_string(), Type::StringLiteral(key.to_string())))
+            .collect()
+    });
+    if homomorphic_keys.is_none() && mapped_key_is_open(&resolved_constraint.ty) {
         // The literal-key branch below budgets its expansion; this one resolves
         // the template just the same and needs the same ceiling. It went
         // unguarded only because an open key used to be rare — once `any` keys
@@ -254,7 +518,7 @@ pub(crate) fn resolve_mapped_type(
         };
     }
 
-    let Some(keys) = mapped_literal_keys(&resolved_constraint.ty) else {
+    let Some(keys) = homomorphic_keys.or_else(|| mapped_literal_keys(&resolved_constraint.ty)) else {
         return ResolvedType {
             ty: Type::Unknown,
             had_error: false,

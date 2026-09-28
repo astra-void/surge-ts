@@ -53,6 +53,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                 construct_signature_overloads: Vec::new(),
                 non_primitive: true,
                 display_name: None,
+                abstract_construct_signature: false,
             },
         ))),
         // `symbol` and `bigint` have no modelled representation; degrade to
@@ -95,6 +96,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                     construct_signature_overloads: Vec::new(),
                     non_primitive: false,
                     display_name: None,
+                    abstract_construct_signature: constructor_type.r#abstract,
                 }))
             })
         }
@@ -674,6 +676,15 @@ fn variadic_tuple_elements_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("SURGE_VARIADIC_TUPLES").as_deref() != Ok("0"))
 }
 
+/// The spread type of a rest element; a labeled one (`...rest: T[]`) holds
+/// it inside the label.
+fn rest_type_annotation<'b, 'a>(rest: &'b oxc_ast::ast::TSRestType<'a>) -> Option<&'b TSType<'a>> {
+    match &rest.type_annotation {
+        TSType::TSNamedTupleMember(member) => member.element_type.as_ts_type(),
+        other => Some(other),
+    }
+}
+
 fn variadic_tuple_elements(tuple_type: &TSTupleType<'_>) -> Option<Vec<ParsedTupleElement>> {
     let mut elements = Vec::with_capacity(tuple_type.element_types.len());
 
@@ -681,7 +692,7 @@ fn variadic_tuple_elements(tuple_type: &TSTupleType<'_>) -> Option<Vec<ParsedTup
         match element {
             TSTupleElement::TSRestType(rest) => {
                 elements.push(ParsedTupleElement::Rest(
-                    parse_type(&rest.type_annotation)?,
+                    parse_type(rest_type_annotation(rest)?)?,
                     Some(text_span_from_oxc_span(rest.span)),
                 ));
             }
@@ -745,8 +756,8 @@ fn homogeneous_variadic_tuple(tuple_type: &TSTupleType<'_>) -> ParsedType {
                 },
                 other => other.as_ts_type(),
             },
-            TSTupleElement::TSRestType(rest) => match &rest.type_annotation {
-                TSType::TSArrayType(array) => Some(&array.element_type),
+            TSTupleElement::TSRestType(rest) => match rest_type_annotation(rest) {
+                Some(TSType::TSArrayType(array)) => Some(&array.element_type),
                 _ => return ParsedType::Unknown,
             },
             TSTupleElement::TSOptionalType(optional) => Some(&optional.type_annotation),
@@ -904,6 +915,7 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
         },
         non_primitive: false,
         display_name: None,
+        abstract_construct_signature: false,
     }))
 }
 
@@ -1425,5 +1437,6 @@ pub(crate) fn parse_type_alias_declaration(
         enum_name: None,
         enum_exported: false,
         enum_is_const: false,
+        enum_members: Vec::new(),
     })
 }

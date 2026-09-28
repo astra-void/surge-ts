@@ -16,47 +16,169 @@ pub(crate) fn widen_type(ty: &Type) -> Type {
         // A named interface/type-alias object is not a fresh literal; preserve
         // it (and its alias name) as-is rather than widening its members.
         Type::Object(obj) if obj.alias_name.is_some() => ty.clone(),
-        Type::Object(obj) => {
-            let mut new_props = surge_ts_types::PropertyMap::default();
-            for (k, v) in obj.properties.iter() {
-                new_props.insert(
-                    k.clone(),
-                    surge_ts_types::ObjectProperty {
-                        ty: widen_type(&v.ty),
-                        optional: v.optional,
-                        method: v.method,
-                        readonly: v.readonly,
-                        restriction: v.restriction.clone(),
-                        index_slot: v.index_slot,
-                    },
-                );
-            }
-            // Widening only touches fresh literals; the index signature, the
-            // openness marker and the signatures still describe the value.
-            let mut widened = alloc_object_type(
-                new_props,
-                obj.string_index_type.as_deref().map(widen_type),
-            );
-            if obj.synthetic_open_index {
-                widened = widened.with_open_index_marker();
-            }
-            if obj.non_primitive {
-                widened = widened.with_non_primitive_marker();
-            }
-            if let Some(call_signature) = obj.call_signature() {
-                widened = widened.with_call_signature(call_signature.clone());
-            }
-            if let Some(construct_signature) = obj.construct_signature() {
-                widened = widened.with_construct_signature(construct_signature.clone());
-            }
-            Type::Object(widened)
-        }
+        Type::Object(obj) => widen_object_type(obj, |_, property| widen_type(property)),
         Type::Array(inner) => Type::Array(Box::new(widen_type(inner))),
         Type::Union(types) => {
             let widened: Vec<_> = types.types().iter().map(widen_type).collect();
             surge_ts_types::union_type(widened)
         }
         _ => ty.clone(),
+    }
+}
+
+fn widen_object_type(
+    obj: &surge_ts_types::ObjectType,
+    widen_property: impl Fn(&str, &Type) -> Type,
+) -> Type {
+    let mut new_props = surge_ts_types::PropertyMap::default();
+    for (k, v) in obj.properties.iter() {
+        new_props.insert(
+            k.clone(),
+            surge_ts_types::ObjectProperty {
+                ty: widen_property(k, &v.ty),
+                optional: v.optional,
+                method: v.method,
+                readonly: v.readonly,
+                restriction: v.restriction.clone(),
+                index_slot: v.index_slot,
+            },
+        );
+    }
+    // Widening only touches fresh literals; the index signature, the
+    // openness marker and the signatures still describe the value.
+    let mut widened = alloc_object_type(new_props, obj.string_index_type.as_deref().map(widen_type))
+        .with_number_index_type(obj.number_index_type.as_deref().map(widen_type))
+        .with_readonly_indexes(obj.string_index_readonly, obj.number_index_readonly);
+    if obj.synthetic_open_index {
+        widened = widened.with_open_index_marker();
+    }
+    if obj.non_primitive {
+        widened = widened.with_non_primitive_marker();
+    }
+    if let Some(call_signature) = obj.call_signature() {
+        widened = widened.with_call_signature(call_signature.clone());
+    }
+    if let Some(construct_signature) = obj.construct_signature() {
+        widened = widened.with_construct_signature(construct_signature.clone());
+    }
+    Type::Object(widened)
+}
+
+/// `getWidenedType` of a fresh literal expression's type, guided by the
+/// expression: only what the literal wrote widens (its literal members, and
+/// nested object and array literals), each against its contextual type
+/// (`getWidenedLiteralLikeTypeForContextualType`). A member whose value is not
+/// a literal keeps the type it has, which is not fresh.
+pub(crate) fn widen_fresh_literal_expression_type(
+    expression: &surge_ts_syntax::ParsedExpression,
+    ty: &Type,
+    contextual: Option<&Type>,
+) -> Type {
+    use surge_ts_syntax::ParsedExpression as E;
+    let widen_literal = |ty: &Type| match contextual {
+        Some(contextual) if crate::checks::function::is_literal_of_contextual_type(ty, contextual) => ty.clone(),
+        _ => widen_type(ty),
+    };
+    match (expression, ty) {
+        (E::StringLiteral(_) | E::NumberLiteral(_) | E::BooleanLiteral(_), _) => widen_literal(ty),
+        (E::ObjectLiteral { properties, .. }, Type::Object(object)) if object.alias_name.is_none() => {
+            widen_object_type(object, |name, property| {
+                match properties.iter().rev().find(|written| !written.is_spread && written.name == name) {
+                    Some(written) => {
+                        let contextual_member = contextual.and_then(|contextual| contextual_property_type(contextual, name));
+                        widen_fresh_literal_expression_type(&written.value, property, contextual_member.as_ref())
+                    }
+                    None => property.clone(),
+                }
+            })
+        }
+        (E::ArrayLiteral { elements, .. }, Type::Array(element)) => {
+            let contextual_element = contextual.and_then(|contextual| match contextual.peeled() {
+                Type::Array(element) => Some(*element),
+                _ => None,
+            });
+            let members: Vec<Type> = match element.as_ref() {
+                Type::Union(union) => union.types().to_vec(),
+                other => vec![other.clone()],
+            };
+            let writes_literals = elements.iter().any(|element| {
+                !element.spread
+                    && matches!(
+                        element.expression,
+                        E::StringLiteral(_) | E::NumberLiteral(_) | E::BooleanLiteral(_) | E::ObjectLiteral { .. } | E::ArrayLiteral { .. }
+                    )
+            });
+            if !writes_literals {
+                return ty.clone();
+            }
+            let widened: Vec<Type> = members
+                .iter()
+                .map(|member| match member {
+                    Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => match &contextual_element {
+                        Some(contextual) if crate::checks::function::is_literal_of_contextual_type(member, contextual) => {
+                            member.clone()
+                        }
+                        _ => widen_type(member),
+                    },
+                    other => other.clone(),
+                })
+                .collect();
+            Type::Array(Box::new(surge_ts_types::union_type(widened)))
+        }
+        _ => ty.clone(),
+    }
+}
+
+/// tsc's `getWidenedLiteralLikeTypeForContextualType` for an expression surge
+/// typed without its contextual type: a literal survives where the contextual
+/// type names a literal of its kind, and an object literal's members are
+/// widened against the contextual type's members of the same name.
+pub(crate) fn widen_type_for_contextual_type(ty: &Type, contextual: &Type) -> Type {
+    match ty {
+        Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_) => {
+            if crate::checks::function::is_literal_of_contextual_type(ty, contextual) {
+                ty.clone()
+            } else {
+                widen_type(ty)
+            }
+        }
+        Type::Reference(reference) if reference.enum_base.is_some() => {
+            if crate::checks::function::is_literal_of_contextual_type(ty, contextual) {
+                ty.clone()
+            } else {
+                widen_type(ty)
+            }
+        }
+        Type::Object(obj) if obj.alias_name.is_none() => widen_object_type(obj, |name, property| {
+            match contextual_property_type(contextual, name) {
+                Some(contextual) => widen_type_for_contextual_type(property, &contextual),
+                None => widen_type(property),
+            }
+        }),
+        Type::Union(types) => surge_ts_types::union_type(
+            types
+                .types()
+                .iter()
+                .map(|member| widen_type_for_contextual_type(member, contextual))
+                .collect(),
+        ),
+        _ => widen_type(ty),
+    }
+}
+
+/// `getTypeOfPropertyOfContextualType`, mapped over a union's members.
+fn contextual_property_type(contextual: &Type, name: &str) -> Option<Type> {
+    match contextual.peeled() {
+        Type::Object(object) => object.get_property_type(name).cloned(),
+        Type::Union(union) => {
+            let members: Vec<Type> = union
+                .types()
+                .iter()
+                .filter_map(|member| contextual_property_type(member, name))
+                .collect();
+            (!members.is_empty()).then(|| surge_ts_types::union_type(members))
+        }
+        _ => None,
     }
 }
 

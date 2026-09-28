@@ -1526,6 +1526,27 @@ fn check_new_like_unrecorded(
                 .construct_signature()
                 .expect("construct signature present")
                 .clone();
+            // `resolveNewExpression`: an abstract construct signature cannot be
+            // instantiated, whatever names the value. A stopped resolution is
+            // `resolveErrorCall`: the arguments are checked and nothing else,
+            // though tsgo 7.0.2 still reads the expression as the instance.
+            // A class named directly was judged by its declaration above: the
+            // value a duplicate class binds is the later declaration's, while
+            // the symbol tsc reads is the first's.
+            if !resolution_stopped
+                && class_info.is_none()
+                && construct_signature.construct_modifiers().is_abstract()
+            {
+                ctx.push(diagnostic_with_syntax_span(
+                    Diagnostic::ts2511(ctx.file_name.clone()),
+                    call_span.or(callee_span),
+                ));
+                resolution_stopped = true;
+            }
+            if resolution_stopped {
+                property::evaluate_arguments_on_error_type(arguments, symbols, ctx);
+                return Some(construct_signature.return_type().clone());
+            }
             if !type_arguments.is_empty()
                 && report_type_argument_arity(
                     &Type::Function(construct_signature.clone()),
@@ -3228,6 +3249,20 @@ fn rest_parameter_element_type(parameter_type: &Type, rest_offset: usize) -> Typ
                 .collect(),
         ),
         Type::Reference(_) => rest_parameter_element_type(&parameter_type.peeled(), rest_offset),
+        // A generic tuple places an argument only in its leading fixed
+        // elements; past a variadic one the position depends on what the
+        // variable is instantiated with.
+        Type::TypeParameter(_) => match surge_ts_types::type_variable::generic_tuple(parameter_type) {
+            Some((elements, _)) => {
+                use surge_ts_types::type_variable::TupleElementKind;
+                elements
+                    .iter()
+                    .take_while(|(kind, _)| matches!(kind, TupleElementKind::Required | TupleElementKind::Optional))
+                    .nth(rest_offset)
+                    .map_or(Type::Unknown, |(_, ty)| ty.clone())
+            }
+            None => parameter_type.clone(),
+        },
         other => other.clone(),
     }
 }
@@ -3372,7 +3407,14 @@ pub(crate) fn check_function_type_call(
                 ctx.degraded_expected_type_depth -= 1;
             }
         }
-        return None;
+        // `getCandidateForOverloadFailure`: a lone non-generic candidate is
+        // the signature the rejected call resolves to, so its return type is
+        // still the call's.
+        let lone_candidate = function_type.overloads().is_none()
+            && own_type_parameter_names(function_type).is_empty()
+            && type_arguments.is_empty()
+            && !type_contains_unknown(function_type.return_type());
+        return lone_candidate.then(|| function_type.return_type().clone());
     }
 
     // tsc's `isSignatureApplicable`: a rest parameter whose type is not an
@@ -3443,9 +3485,11 @@ pub(crate) fn check_function_type_call(
                         .chain(std::iter::once((tuple.rest.as_ref().clone(), false)))
                         .chain(tuple.trailing.iter().map(|element| (element.clone(), false)))
                         .collect(),
+                    // `getSpreadArgumentType`: any spread that is not a
+                    // tuple is a variable run of its iterated type.
                     other => {
                         let element = crate::checks::function::for_of_element_type(&other);
-                        vec![(element, matches!(other, Type::Array(_)))]
+                        vec![(element, true)]
                     }
                 },
                 _ => vec![(Type::Unknown, false)],
@@ -3601,8 +3645,21 @@ pub(crate) fn check_function_type_call(
             InferredExpression::Known(argument_type) => {
                 // The sentinel and an open type parameter say nothing about
                 // the source; the `unknown` keyword does — tsc rejects it for
-                // every parameter that is not `unknown`/`any`.
-                if matches!(argument_type, Type::Unknown | Type::TypeParameter(_))
+                // every parameter that is not `unknown`/`any`. A type variable
+                // of the body being checked is a type like any other.
+                if matches!(argument_type, Type::Unknown)
+                    || matches!(&argument_type, Type::TypeParameter(parameter) if !parameter.is_active_variable())
+                    // surge narrows the variable, not its constraint, so such
+                    // a reference's flow type under this contextual type is
+                    // not modelled.
+                    || (surge_ts_types::type_variable::is_generic_with_union_constraint(&argument_type)
+                        && !surge_ts_types::type_variable::mentions_type_variable(&parameter_type)
+                        && matches!(
+                            argument.expression,
+                            ParsedExpression::Identifier { .. }
+                                | ParsedExpression::PropertyAccess { .. }
+                                | ParsedExpression::ElementAccess { .. }
+                        ))
                     || mismatch_reported
                     || gathered.is_some()
                 {

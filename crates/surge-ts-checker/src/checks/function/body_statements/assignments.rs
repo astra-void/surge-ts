@@ -587,12 +587,53 @@ fn union_index_write_target_type(
     (!targets.is_empty()).then(|| crate::infer::types::merge_intersection_members(targets))
 }
 
+/// `checkPropertyAccessExpressionOrQualifiedName` widens the receiver of a
+/// write (`getWidenedType`), so the `{}` of `(o || {}).p = v` is a plain empty
+/// object there, not the fallback a read sees carrying `o`'s names as
+/// `undefined`.
+fn widened_write_receiver(
+    object: &ParsedExpression,
+    span: Option<surge_ts_syntax::TextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<InferredExpression> {
+    let ParsedExpression::Logical {
+        left,
+        left_span,
+        operator: surge_ts_syntax::ParsedLogicalOperator::Or,
+        right,
+        ..
+    } = object
+    else {
+        return None;
+    };
+    if !matches!(right.as_ref(), ParsedExpression::ObjectLiteral { properties, .. } if properties.is_empty()) {
+        return None;
+    }
+    let left_result = evaluate_expression(left, left_span.or(span), symbols, ctx);
+    let InferredExpression::Known(left_type) = &left_result else {
+        return Some(left_result);
+    };
+    if left_type.is_unmodelled() {
+        return Some(InferredExpression::Unknown);
+    }
+    let empty = Type::Object(crate::metrics::alloc_object_type(Default::default(), None));
+    Some(InferredExpression::Known(union_type(vec![crate::infer::truthy_part(left_type), empty])))
+}
+
 /// The property name a literal index names. A numeric key indexes an object by
 /// its string form, which is why `record[1]` reaches a string index signature.
 fn literal_index_key(index_type: &Type) -> Option<String> {
     match index_type {
         Type::StringLiteral(value) => Some(value.clone()),
         Type::NumberLiteral(literal) => Some(literal.value.clone()),
+        // Only a well-known symbol's key names its member as written
+        // (`[Symbol.iterator]`); a declared unique symbol's members are named
+        // by the expression each declaration wrote.
+        Type::Reference(reference) if reference.is_unique_symbol() => reference
+            .unique_symbol_name()
+            .filter(|name| name.starts_with("Symbol."))
+            .map(|name| format!("[{name}]")),
         _ => None,
     }
 }
@@ -614,12 +655,9 @@ fn check_element_assignment(
     // tsc checks the index and then the value whatever the receiver or the
     // index turned out to be (`checkElementAccessExpression`,
     // `checkBinaryLikeExpression`).
-    let object_type = match evaluate_expression(
-        object,
-        object_span.or(assignment.target_span),
-        &visible_symbols,
-        ctx,
-    ) {
+    let object_type = match widened_write_receiver(object, object_span.or(assignment.target_span), &visible_symbols, ctx)
+        .unwrap_or_else(|| evaluate_expression(object, object_span.or(assignment.target_span), &visible_symbols, ctx))
+    {
         InferredExpression::Known(ty) => ty,
         receiver => {
             let _ = evaluate_expression(
@@ -640,6 +678,9 @@ fn check_element_assignment(
         ctx,
     ) {
         InferredExpression::Known(ty) => ty,
+        // A key that names nothing is tsc's error type, an `any`, which still
+        // indexes the receiver's number or string index signature.
+        InferredExpression::UnresolvedIdentifier { .. } | InferredExpression::MissingProperty { .. } => Type::Any,
         index_result => {
             check_value_without_target(assignment, index_result.flowing_type().as_ref(), &visible_symbols, ctx);
             return;
@@ -653,6 +694,8 @@ fn check_element_assignment(
         check_value_without_target(assignment, None, &visible_symbols, ctx);
         return;
     }
+    let index_type =
+        crate::checks::expr::well_known_symbol_key_type(index, &visible_symbols).unwrap_or(index_type);
 
     // `errorIfWritingToReadonlyIndex` reads the index signature off the
     // receiver as flow left it. A key of any other kind (`symbol`) falls back
@@ -687,8 +730,36 @@ fn check_element_assignment(
     // indexed-access type — `shouldDeferIndexedAccessType` returns before the
     // index-signature lookup, which is why zod's
     // `defineLazy<T, K extends keyof T>` writes without complaint.
+    let open_keys = match &index_type {
+        Type::Union(union) => {
+            union.types().iter().all(|key| matches!(key, Type::String | Type::Number | Type::Symbol))
+        }
+        key => matches!(key, Type::String | Type::Number | Type::Symbol),
+    };
+    // `getPropertyTypeForIndexType` over the receiver's apparent type: with
+    // no index signature there to land on, the key is an implicit `any`
+    // (TS7053) rather than a write refused through the constraint.
+    if receiver_type.is_type_variable()
+        && open_keys
+        && let Type::Object(apparent) =
+            surge_ts_types::type_variable::base_constraint_or_type(&receiver_type).peeled()
+        && !apparent.synthetic_open_index
+        && apparent.string_index_type.is_none()
+        && apparent.number_index_type.is_none()
+        && !crate::checks::function::type_contains_degradation(&Type::Object(apparent.clone()))
+    {
+        if ctx.options.no_implicit_any {
+            let diagnostic = Diagnostic::ts7053(index_type.name(), Type::Object(apparent).name(), ctx.file_name.clone());
+            ctx.push(match crate::checks::expr::element_access_span(object_span, index_span).or(assignment.target_span) {
+                Some(span) => diagnostic.with_span(convert_span(span)),
+                None => diagnostic,
+            });
+        }
+        check_value_without_target(assignment, None, &visible_symbols, ctx);
+        return;
+    }
     if let Type::TypeParameter(type_parameter) = &receiver_type
-        && matches!(index_type, Type::String | Type::Number | Type::Symbol)
+        && open_keys
     {
         let diagnostic = Diagnostic::ts2862(type_parameter.name.clone(), ctx.file_name.clone());
         ctx.push(match object_span.or(assignment.target_span) {
@@ -736,7 +807,14 @@ fn check_element_assignment(
     ) {
         return;
     }
+    // `isAssignmentToReadonlyEntity`: a constructor writes its own class's
+    // `readonly` members through `this`, by an element access as well.
     if let Some(key) = literal_index_key(&index_type)
+        && !(matches!(object, ParsedExpression::This { .. })
+            && ctx
+                .constructor_writable_members
+                .as_ref()
+                .is_some_and(|members| members.contains(&key)))
         && report_readonly_property_write(&readonly_receiver, &key, property_span, ctx)
     {
         return;
@@ -788,17 +866,36 @@ fn check_element_assignment(
         return;
     }
 
+    // `getIndexedAccessType` on an element access: a type variable receiver
+    // indexed by a key that is not generic resolves eagerly through its
+    // apparent type, for writing. A key landing on an index signature is left
+    // to the checks above (`AccessFlags.NoIndexSignatures`).
+    let apparent_receiver = (receiver_type.is_type_variable()
+        && crate::infer::expression::deferred_element_access(&receiver_type, &index_type).is_none())
+    .then(|| surge_ts_types::type_variable::base_constraint_or_type(&receiver_type))
+    .filter(|apparent| {
+        let keys: Vec<&Type> = match &index_type {
+            Type::Union(union) => union.types().iter().collect(),
+            other => vec![other],
+        };
+        !apparent.is_type_variable()
+            && !crate::checks::function::type_contains_degradation(apparent)
+            && matches!(apparent.peeled(), Type::Object(ref object) if keys.iter().all(|key| {
+                literal_index_key(key).is_some_and(|key| object.get_property(&key).is_some())
+            }))
+    });
+    let write_receiver = apparent_receiver.as_ref().unwrap_or(&receiver_type);
     let target_type = out_of_bounds_target
         .or_else(|| crate::infer::expression::deferred_element_access(&receiver_type, &index_type))
         .or_else(|| {
             literal_index_key(&index_type)
-                .and_then(|key| accessor_write_type(&receiver_type, &key, ctx))
+                .and_then(|key| accessor_write_type(write_receiver, &key, ctx))
         })
-        .or_else(|| union_receiver_write_target_type(&receiver_type, &index_type, ctx))
-        .or_else(|| union_index_write_target_type(&receiver_type, &index_type, ctx))
+        .or_else(|| union_receiver_write_target_type(write_receiver, &index_type, ctx))
+        .or_else(|| union_index_write_target_type(write_receiver, &index_type, ctx))
         .or_else(|| {
             element_write_target_type(
-                &receiver_type,
+                write_receiver,
                 // A `for…in` key over a numerically-keyed object writes through
                 // the numeric index signature, as it reads through it.
                 if index_indexes_as_number {
@@ -1243,12 +1340,9 @@ fn check_member_assignment_itself(
     // would. The written member itself is only reported below on a union
     // receiver, so a value surge models incompletely
     // (`Component.getInitialProps = …`) is not a false TS2339 here.
-    let object_type = match evaluate_expression(
-        object,
-        object_span.or(assignment.target_span),
-        &visible_symbols,
-        ctx,
-    ) {
+    let object_type = match widened_write_receiver(object, object_span.or(assignment.target_span), &visible_symbols, ctx)
+        .unwrap_or_else(|| evaluate_expression(object, object_span.or(assignment.target_span), &visible_symbols, ctx))
+    {
         InferredExpression::Known(ty) => ty,
         receiver => {
             if !*is_bracketed
@@ -1382,6 +1476,26 @@ fn check_member_assignment_itself(
                     .get_property_access_type(property_name)
                     .map(|narrowed| widen_narrowed_literals(&narrowed))
             })
+            // A type variable receiver writes through its apparent type
+            // (`getApparentType` of its base constraint).
+            .or_else(|| {
+                object_type
+                    .is_type_variable()
+                    .then(|| surge_ts_types::type_variable::base_constraint_or_type(&object_type))
+                    .filter(|apparent| {
+                        !apparent.is_type_variable() && !crate::checks::function::type_contains_degradation(apparent)
+                    })
+                    .and_then(|apparent| match apparent.peeled() {
+                        Type::Object(object) => object.get_property(property_name).map(|property| {
+                            if property.optional {
+                                union_type(vec![property.ty.clone(), Type::Undefined])
+                            } else {
+                                property.ty.clone()
+                            }
+                        }),
+                        _ => None,
+                    })
+            })
     }) else {
         // `decl.id = x` on `A | B` where `B` has no `id`: tsc reports the
         // member on the union. Only a union of fully modelled objects is
@@ -1475,10 +1589,25 @@ fn check_member_assignment_itself(
     if is_expando_receiver(object, &visible_symbols, ctx) {
         hand_off_assigned_function_this(&assignment, object, &object_type, ctx);
     }
+    // A JSDoc `@type` on the write types the member an assignment declaration
+    // declares; a member the receiver already has keeps its own type, and the
+    // value relates to that (`checkAssignmentOperator` against the left side).
+    let (value, value_span) = match &assignment.value {
+        ParsedExpression::TypeAssertion {
+            expression,
+            expression_span,
+            annotation: true,
+            type_span: Some(_),
+            ..
+        } if surge_ts_syntax::is_javascript_file_name(&ctx.file_name) => {
+            (expression.as_ref(), expression_span.or(assignment.value_span))
+        }
+        value => (value, assignment.value_span),
+    };
     let inferred_value = crate::checks::expr::with_property_write_target(*property_span, || {
         crate::checks::expected::evaluate_expression_with_expected_type_anchored(
-            &assignment.value,
-            assignment.value_span,
+            value,
+            value_span,
             assignment.target_span,
             Some(&target_type),
             crate::checks::expected::ExpectedTypeDiagnostic::TypeNotAssignable,

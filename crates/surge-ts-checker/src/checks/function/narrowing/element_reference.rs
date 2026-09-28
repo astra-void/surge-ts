@@ -170,7 +170,7 @@ pub(super) fn narrowed_element_references(
             crate::infer::InferredExpression::Known(ty) => ty,
             _ => continue,
         };
-        if declared.is_unknown() {
+        if declared.is_unmodelled() {
             continue;
         }
         let Some((narrowed_ty, _)) = guard.narrow_leaf(&declared, false) else {
@@ -221,7 +221,7 @@ fn narrowed_element_property_references(
             continue;
         }
         let declared = match crate::infer::infer_expression(access, symbols, ctx) {
-            crate::infer::InferredExpression::Known(ty) if !ty.is_unknown() => ty,
+            crate::infer::InferredExpression::Known(ty) if !ty.is_unmodelled() => ty,
             _ => continue,
         };
         let Some(narrowed_ty) = super::narrowed_reference_type(&declared, &path, guard) else {
@@ -331,7 +331,7 @@ fn narrowed_element_predicate_references(
                 return;
             };
             let declared = match crate::infer::infer_expression(access, symbols, ctx) {
-                crate::infer::InferredExpression::Known(ty) if !ty.is_unknown() => ty,
+                crate::infer::InferredExpression::Known(ty) if !ty.is_unmodelled() => ty,
                 _ => return,
             };
             let Some(target) =

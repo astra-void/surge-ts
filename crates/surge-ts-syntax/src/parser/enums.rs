@@ -58,6 +58,7 @@ fn member_type_aliases<'a>(
         enum_name: Some(type_alias.name.clone()),
         enum_exported: type_alias.enum_exported,
         enum_is_const: type_alias.enum_is_const,
+        enum_members: Vec::new(),
     })
 }
 
@@ -151,6 +152,7 @@ fn lower_enum_declaration(
             enum_name: Some(declaration.id.name.to_string()),
             enum_exported: exported,
             enum_is_const: declaration.r#const,
+            enum_members: properties.iter().map(|property| (property.name.clone(), property.ty.clone())).collect(),
         },
         ParsedVariableDeclaration {
             // The object side has no written initializer to check, and an `enum`
@@ -176,6 +178,7 @@ fn lower_enum_declaration(
                 construct_signature_overloads: Vec::new(),
                 non_primitive: false,
                 display_name: Some(format!("typeof {}", declaration.id.name)),
+                abstract_construct_signature: false,
             }))),
             initializer: None,
             initializer_span: None,
@@ -275,6 +278,7 @@ pub(crate) fn merge_lowered_enum_declarations(statements: &mut Vec<ParsedStateme
         let mut properties: Vec<ParsedObjectTypeProperty> = Vec::new();
         let mut reverse_mapping = None;
         let mut member_types: Vec<ParsedType> = Vec::new();
+        let mut named_members: Vec<(String, ParsedType)> = Vec::new();
         let mut enum_members: Vec<ParsedEnumBody> = Vec::new();
         for index in rest {
             match peel_exported(&statements[*index]) {
@@ -289,6 +293,7 @@ pub(crate) fn merge_lowered_enum_declarations(statements: &mut Vec<ParsedStateme
                 }
                 ParsedStatement::TypeAliasDeclaration(alias) => {
                     push_union_members(&alias.ty, &mut member_types);
+                    named_members.extend(alias.enum_members.iter().cloned());
                 }
                 _ => {}
             }
@@ -318,6 +323,11 @@ pub(crate) fn merge_lowered_enum_declarations(statements: &mut Vec<ParsedStateme
                 }
             }
             ParsedStatement::TypeAliasDeclaration(alias) => {
+                for (name, ty) in named_members {
+                    if !alias.enum_members.iter().any(|(kept, _)| *kept == name) {
+                        alias.enum_members.push((name, ty));
+                    }
+                }
                 let mut merged = Vec::new();
                 push_union_members(&alias.ty, &mut merged);
                 for member in member_types {

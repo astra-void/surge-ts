@@ -238,6 +238,7 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
                 commonjs_module: parsed.commonjs_module,
                 import_call_specifiers: parsed.import_call_specifiers,
                 import_calls: Vec::new(),
+                import_attributes: Vec::new(),
                 file_kind: FileKind::GeneratedDeclaration,
                 module_reads: parsed.module_reads,
                 definite_writes: parsed.definite_writes,
@@ -1399,7 +1400,8 @@ fn collect_namespace_type_declarations_prefixed(
                         alias.enum_name.as_deref(),
                         alias.enum_exported,
                         alias.enum_is_const,
-                    );
+                    )
+                    .with_enum_members(&alias.enum_members);
                     let _ = ctx
                         .type_declarations
                         .insert(key, TypeDeclarationInfo::Alias(info));
@@ -1928,7 +1930,8 @@ pub(crate) fn collect_type_alias(
         alias.enum_name.as_deref(),
         alias.enum_exported,
         alias.enum_is_const,
-    );
+    )
+    .with_enum_members(&alias.enum_members);
 
     let previous = ctx
         .type_declarations

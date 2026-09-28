@@ -827,7 +827,8 @@ fn collect_body_local_type_declarations(
                     alias.enum_name.as_deref(),
                     alias.enum_exported,
                     alias.enum_is_const,
-                );
+                )
+                .with_enum_members(&alias.enum_members);
                 (alias.name.clone(), TypeDeclarationInfo::Alias(info))
             }
             ParsedFunctionBodyStatement::Interface(interface) => {
@@ -1107,7 +1108,8 @@ fn check_function_body_statement_itself(
                 ctx,
             );
         }
-        ParsedFunctionBodyStatement::Continue | ParsedFunctionBodyStatement::Break => {}
+        ParsedFunctionBodyStatement::Continue => super::body_statements::record_continue_edge(scopes),
+        ParsedFunctionBodyStatement::Break => {}
         ParsedFunctionBodyStatement::Assignment(assignment) => {
             let start = Instant::now();
             check_function_assignment(*assignment, statement_index, scopes, flow_state, ctx);

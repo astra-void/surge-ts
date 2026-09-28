@@ -29,6 +29,8 @@ pub struct NormalizedCompilerOptions {
     pub strict_null_checks: bool,
     /// `compilerOptions.strictBindCallApply`. Defaults to `strict`.
     pub strict_bind_call_apply: bool,
+    /// `compilerOptions.strictBuiltinIteratorReturn`. Defaults to `strict`.
+    pub strict_builtin_iterator_return: bool,
     /// `compilerOptions.strictPropertyInitialization`. Defaults to `strict`.
     pub strict_property_initialization: bool,
     pub use_unknown_in_catch_variables: bool,
@@ -160,6 +162,7 @@ impl Default for NormalizedCompilerOptions {
             no_implicit_this: true,
             strict_null_checks: true,
             strict_bind_call_apply: true,
+            strict_builtin_iterator_return: true,
             strict_property_initialization: true,
             use_unknown_in_catch_variables: true,
             no_implicit_returns: false,

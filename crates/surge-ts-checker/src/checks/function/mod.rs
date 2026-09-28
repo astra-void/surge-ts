@@ -96,6 +96,12 @@ thread_local! {
     /// `pushTypeResolution` and answers `any` for the cycle.
     static BODY_RETURNS_IN_PROGRESS: std::cell::RefCell<Vec<std::sync::Arc<str>>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// The next arrow checked takes its expected type only as its contextual
+    /// type: the value is related where `elaborateError` does not descend into
+    /// it — the operand of `x as T` / `<T>x` (compared by
+    /// `checkAssertionDeferred`) or a branch of a conditional.
+    pub(crate) static NEXT_ARROW_NOT_ELABORATED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 /// An unannotated declaration's return type, read from its body on first demand.
@@ -840,6 +846,15 @@ fn inferred_declaration_return_type(
         .map(|returned| promised_if_async(returned, function.is_async, ctx))
 }
 
+/// `getReturnTypeFromBody` for a declaration none of whose `return`s carries
+/// a value: `void` (a declaration never `mayReturnNever`), promised when async.
+fn no_value_return_type(function: &ParsedFunctionDeclaration, ctx: &mut CheckerContext) -> Option<Type> {
+    let reads_body =
+        function.return_type.is_none() && !function.is_declare && function.has_body && !function.is_generator;
+    (reads_body && !crate::flow::analyze_function_body_flow(&function.body).contains_return_with_value)
+        .then(|| promised_if_async(Type::Void, function.is_async, ctx))
+}
+
 /// tsc's `createPromiseReturnType`: an async function's inferred return is a
 /// promise of what its body's `return`s await to. With the lib promise
 /// collapsed to its value the awaited value is the answer as it is.
@@ -1223,7 +1238,9 @@ pub(crate) fn collect_function_declaration_signature(
             infer_declaration_return_types(&ctx.file_name)
                 .then(|| inferred_declaration_return_type(function, &function_type, ctx))
                 .flatten()
-        }) {
+        })
+        .or_else(|| no_value_return_type(function, ctx))
+    {
         Some(return_type) => FunctionType::new(
             function_type.parameters().to_vec(),
             return_type,
@@ -1390,11 +1407,14 @@ pub(crate) fn bind_arguments_object(scopes: &mut ScopeStack, ctx: &mut CheckerCo
         })),
         ctx,
     );
+    // `argumentsSymbol` is a property, not a constant: a write is checked
+    // against `IArguments`. It is no declaration either, so a local
+    // `var arguments` is the first declaration of its name, not a redeclaration.
     scopes.insert_current(
         "arguments",
         crate::symbols::SymbolInfo {
             ty,
-            kind: crate::symbols::SymbolKind::Const,
+            kind: crate::symbols::SymbolKind::Parameter,
             function_signature: None,
         },
     );
@@ -2032,7 +2052,7 @@ fn contextual_iteration_type(contextual: &Type, index: usize) -> Option<Type> {
     }
 }
 
-fn is_literal_of_contextual_type(candidate: &Type, contextual: &Type) -> bool {
+pub(crate) fn is_literal_of_contextual_type(candidate: &Type, contextual: &Type) -> bool {
     // An enum member is the number or string literal it stands for.
     if let Type::Reference(reference) = candidate
         && reference.enum_base.is_some()
@@ -2061,6 +2081,7 @@ fn is_literal_of_contextual_type(candidate: &Type, contextual: &Type) -> bool {
 fn report_contextual_body_mismatch(
     body_type: &Type,
     contextual_return_type: &Type,
+    expected_type: &FunctionType,
     body_span: Option<surge_ts_syntax::TextSpan>,
     ctx: &mut CheckerContext,
 ) -> bool {
@@ -2071,8 +2092,18 @@ fn report_contextual_body_mismatch(
         contextual_return_type,
         Type::Any | Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Void
     ) || surge_ts_types::is_assignable_to(body_type, contextual_return_type)
-        || type_contains_unknown(body_type)
-        || type_contains_unknown(contextual_return_type)
+        // The same degradation test the enclosing relation applies, which
+        // reports the whole value when this does not report the body.
+        || crate::checks::assign::type_contains_unknown(body_type)
+        || crate::checks::assign::type_contains_unknown(contextual_return_type)
+    {
+        return false;
+    }
+    // `elaborateError` tries `elaborateDidYouMeanToCallOrConstruct` before the
+    // arrow elaboration: when calling the arrow would produce something that fits
+    // the whole expected type, the mismatch stays on the arrow itself.
+    if !matches!(body_type, Type::Any | Type::Never)
+        && surge_ts_types::is_assignable_to(body_type, &Type::Function(expected_type.clone()))
     {
         return false;
     }
@@ -2113,8 +2144,24 @@ pub(crate) fn check_arrow_function_expression_anchored(
         body_span,
         span: arrow_span,
     } = arrow;
+    // tsc's `isUntypedSignatureInJSFile` holds only for a function with no
+    // contextual type; a contextually typed one requires its parameters.
+    let parameters = match expected_type {
+        Some(_) if parameters.iter().any(|parameter| parameter.untyped_javascript) => parameters
+            .into_iter()
+            .map(|mut parameter| {
+                if parameter.untyped_javascript {
+                    parameter.optional = parameter.initializer.is_some();
+                    parameter.untyped_javascript = false;
+                }
+                parameter
+            })
+            .collect(),
+        _ => parameters,
+    };
     let is_argument = std::mem::take(&mut ctx.next_arrow_is_argument);
     let context_only = std::mem::take(&mut ctx.next_arrow_context_only);
+    let not_elaborated = NEXT_ARROW_NOT_ELABORATED.replace(false);
     // What an object literal hands its member (tsc's
     // `getContextualThisParameterType`); an arrow has no `this` to take it.
     let literal_this = ctx
@@ -2442,7 +2489,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                             _ => None,
                         };
                         if let Some((body_type, return_type_for_body)) = related_sides
-                            && !body_type.is_unknown()
+                            && !body_type.is_unmodelled()
                             && !surge_ts_types::is_assignable_to(body_type, return_type_for_body)
                             && !type_contains_unknown(body_type)
                             && !type_contains_unknown(return_type_for_body)
@@ -2477,17 +2524,20 @@ pub(crate) fn check_arrow_function_expression_anchored(
                         } else if !body_type.is_unknown() {
                             // An argument after a call's first failing one is
                             // related to nothing, its body included.
-                            let withheld_argument = context_only
-                                && ctx.suppressed_argument_mismatch_span.is_some();
+                            let withheld_argument = not_elaborated
+                                || context_only
+                                    && ctx.suppressed_argument_mismatch_span.is_some();
                             if expected_type.is_some()
                                 && !is_async
                                 && !withheld_argument
                                 && parameters
                                     .iter()
                                     .all(|parameter| parameter.declared_type.is_none())
+                                && let Some(expected_type) = expected_type
                                 && report_contextual_body_mismatch(
                                     &body_type,
                                     &return_type,
+                                    expected_type,
                                     body_span,
                                     ctx,
                                 )
@@ -2496,13 +2546,39 @@ pub(crate) fn check_arrow_function_expression_anchored(
                                 // contextual return so the enclosing relation
                                 // does not report it again.
                             } else {
-                                return_type = widen_unit_return_type(
-                                    body_type,
-                                    expected_type.map(|expected| expected.return_type()),
-                                );
+                                // `getReturnTypeFromBody` ends in `getWidenedType`: a
+                                // fresh object or array literal's members widen as
+                                // `checkExpressionForMutableLocation` widened them.
+                                let body_type = if matches!(
+                                    &*expression,
+                                    surge_ts_syntax::ParsedExpression::ObjectLiteral { .. }
+                                        | surge_ts_syntax::ParsedExpression::ArrayLiteral { .. }
+                                ) {
+                                    crate::checks::expr::widen_fresh_literal_expression_type(
+                                        &expression,
+                                        &body_type,
+                                        expected_type.map(|expected| expected.return_type()),
+                                    )
+                                } else {
+                                    body_type
+                                };
                                 if is_async && !is_generator {
+                                    // `getReturnTypeFromBody` awaits an async body
+                                    // (`getAwaitedTypeNoAlias`) before promising it.
+                                    let contextual = expected_type.map(|expected| {
+                                        crate::checks::call::awaited_type(expected.return_type())
+                                    });
+                                    return_type = widen_unit_return_type(
+                                        crate::checks::call::awaited_type(&body_type),
+                                        contextual.as_ref(),
+                                    );
                                     return_type =
                                         crate::checks::call::promise_of(&return_type, ctx);
+                                } else {
+                                    return_type = widen_unit_return_type(
+                                        body_type,
+                                        expected_type.map(|expected| expected.return_type()),
+                                    );
                                 }
                             }
                         }
@@ -2658,9 +2734,18 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 // as one whole-signature mismatch on the assignment, with the leaf
                 // as nested elaboration. Take the leaf verdicts back and render
                 // that instead.
-                if let Some(returned_types) = ctx.take_contextual_return_mismatch()
+                let contextual_return_mismatch = ctx.take_contextual_return_mismatch();
+                // Not elaborated, the mismatch is the enclosing relation's to
+                // report, so the arrow keeps the return its body gives.
+                // Taking the verdicts took the returned types with them.
+                let unelaborated_returns = (not_elaborated || context_only)
+                    .then(|| contextual_return_mismatch.clone())
+                    .flatten();
+                let unelaborated_mismatch = unelaborated_returns.is_some();
+                if let Some(returned_types) = contextual_return_mismatch
                     && let Some(expected_type) = expected_type
                     && !context_only
+                    && !not_elaborated
                 {
                     emit_contextual_signature_mismatch(
                         &parameter_types,
@@ -2694,9 +2779,10 @@ pub(crate) fn check_arrow_function_expression_anchored(
                 if infer_block_body_return_types()
                     && !has_explicit_return_type
                     && !is_generator
-                    && contextual_return_is_open
+                    && (contextual_return_is_open || unelaborated_mismatch)
                 {
-                    let returned = ctx.body_return_types().to_vec();
+                    let returned =
+                        unelaborated_returns.unwrap_or_else(|| ctx.body_return_types().to_vec());
                     if !returned.is_empty()
                         && returned
                             .iter()
@@ -2720,6 +2806,35 @@ pub(crate) fn check_arrow_function_expression_anchored(
                             return_type = crate::checks::call::promise_of(&return_type, ctx);
                         }
                     }
+                }
+                // `getReturnTypeFromBody` with no `return <expr>`: `never` when
+                // the end is unreachable and nothing returns (a function
+                // expression or object-literal method `mayReturnNever`), else
+                // `void`, or `undefined` for a contextual return admitting it.
+                if !has_explicit_return_type
+                    && !is_generator
+                    && !body_flow.contains_return_with_value
+                    && ctx.body_return_types().is_empty()
+                {
+                    let empty_return = if body_flow.guarantees_exit && !body_flow.contains_return {
+                        Type::Never
+                    } else {
+                        let contextual_admits_undefined = contextual_return.as_ref().is_some_and(|ty| {
+                            let unwrapped =
+                                if is_async { crate::checks::call::awaited_type(ty) } else { ty.clone() };
+                            match unwrapped.peeled() {
+                                Type::Undefined => true,
+                                Type::Union(union) => union.types().iter().any(|member| matches!(member, Type::Undefined)),
+                                _ => false,
+                            }
+                        });
+                        if contextual_admits_undefined { Type::Undefined } else { Type::Void }
+                    };
+                    return_type = if is_async {
+                        crate::checks::call::promise_of(&empty_return, ctx)
+                    } else {
+                        empty_return
+                    };
                 }
                 let returned = ctx.body_return_types().to_vec();
                 if is_generator
