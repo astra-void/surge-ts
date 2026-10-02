@@ -3049,9 +3049,15 @@ mod distributive_member_guard_tests {
     /// diagnostics that the pinned tsc does not emit.
     #[test]
     fn any_member_degrades_no_more_than_a_concrete_member() {
-        // Safety: set before any checker thread is spawned in this test
-        // process (nextest: one process per test); the counters gate is
-        // re-derived from this env var at the start of every run.
+        if crate::test_support::run_in_own_process(
+            module_path!(),
+            "any_member_degrades_no_more_than_a_concrete_member",
+        ) {
+            return;
+        }
+        // Safety: set before any checker thread is spawned in this isolated,
+        // single-test process; the counters gate is re-derived from this env
+        // var at the start of every run.
         unsafe { std::env::set_var("SURGE_TIMINGS", "1") };
 
         let (baseline_attempts, baseline_degraded) = interface_resolutions("string");

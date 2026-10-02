@@ -1885,13 +1885,19 @@ mod signature_context_cache_tests {
 
     /// The zero-hit regression: repeated identical user-generic instantiations
     /// inside generic signatures must produce nonzero signature-context stores
-    /// and hits, and hits must dominate once the tuple repeats. nextest runs
-    /// each test in its own process, so the global counters are isolated.
+    /// and hits, and hits must dominate once the tuple repeats. The test runs
+    /// in its own process, so the global counters are isolated.
     #[test]
     fn repeated_signature_context_instantiations_hit_after_first_store() {
-        // Safety: set before any checker thread is spawned in this test process
-        // (nextest: one process per test). `check_program` re-derives the
-        // counters gate from this env var at the start of every run.
+        if crate::test_support::run_in_own_process(
+            module_path!(),
+            "repeated_signature_context_instantiations_hit_after_first_store",
+        ) {
+            return;
+        }
+        // Safety: set before any checker thread is spawned in this isolated,
+        // single-test process. `check_program` re-derives the counters gate
+        // from this env var at the start of every run.
         unsafe { std::env::set_var("SURGE_TIMINGS", "1") };
         let result =
             check_program_with_stats_and_jobs(fixture(10), crate::CheckerOptions::default(), 1);
@@ -1918,9 +1924,15 @@ mod signature_context_cache_tests {
     /// stored in or read from the signature-context tier.
     #[test]
     fn placeholder_argument_tuples_are_never_cached() {
-        // Safety: set before any checker thread is spawned in this test process
-        // (nextest: one process per test). `check_program` re-derives the
-        // counters gate from this env var at the start of every run.
+        if crate::test_support::run_in_own_process(
+            module_path!(),
+            "placeholder_argument_tuples_are_never_cached",
+        ) {
+            return;
+        }
+        // Safety: set before any checker thread is spawned in this isolated,
+        // single-test process. `check_program` re-derives the counters gate
+        // from this env var at the start of every run.
         unsafe { std::env::set_var("SURGE_TIMINGS", "1") };
         let mut files = vec![SourceFileInput {
             file_name: "core.ts".to_string(),

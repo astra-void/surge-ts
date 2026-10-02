@@ -32,6 +32,8 @@ mod semantic;
 mod spans;
 mod speculative;
 mod symbols;
+#[cfg(test)]
+mod test_support;
 
 pub use api::{CheckResult, Checker};
 pub use context::{
