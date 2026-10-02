@@ -1,3 +1,4 @@
+// @noImplicitAny: true
 interface User {
   id: string;
 }

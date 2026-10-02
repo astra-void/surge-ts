@@ -10,73 +10,36 @@ Only small cases are copied here when the current checker can meaningfully run t
 
 Rules:
 
-- Active upstream cases must be copied from the upstream repository.
-- Active cases must include the original upstream path in `manifest.toml`.
-- Pending cases are tracked but not executed.
-- Custom local tests belong in `tests/smoke`, not in this directory.
+- Vendored cases must be copied from the upstream repository unchanged.
+- Every vendored case records its upstream path and baseline in
+  `manifest.toml` under `[[case]]`; `tests/upstream.test.ts` fails when a file
+  under `cases/` has no entry or an entry has no file.
+- Custom local tests belong in `tests/smoke` or `tests/checker`, not in this
+  directory.
 - Do not rewrite upstream tests to fit this checker.
 
-## Eligibility for an active case
+## How cases run
 
-The pool is `testdata/tests/cases/compiler` at the pinned upstream commit. The
-rule for making a case active is a single one: the checker's diagnostic codes
-must equal the upstream baseline exactly, in baseline order. A case that drifts
-by one code, one file, or one ordering is not added.
+`tests/upstream.test.ts` runs every vendored case through the fixture harness
+([tests/README.md](../../README.md)): the case's own `// @filename:` markers
+split it into files and its compiler-option directives become the scratch
+project's tsconfig, so an upstream `@strict`, `@module`, `@allowJs`, … applies
+as written. surge and the pinned tsc 7.0.2 check that project and must report
+the same diagnostics. The expectation is tsc run live, not the upstream baseline
+file, and a fixture that upstream runs once per option variant is run once with
+the first variant.
 
-For a fixture with an `.errors.txt` baseline, `expected_diagnostics` repeats
-that baseline's codes. A fixture with no `.errors.txt` baseline is an upstream
-no-error case: it carries an empty `expected_diagnostics` and pins the case as
-false-positive free, and its `upstream_baseline_path` points at the `.types`
-baseline, which is the reference baseline that does exist for it.
+## Pending records
 
-Matching exactly is not the same as being run the way upstream runs it, and the
-`reason` field of each case says so where it applies:
+`[[pending]]` entries are upstream cases that are *not* vendored. Each carries
+the upstream baseline's codes (`baseline_diagnostics`) and a `reason` naming
+what surge reported. **Those reasons were measured by the Rust smoke harness
+retired at `110bbac4` (2026-09-28)**, which ignored compiler-option headers and
+did no package resolution; they are a record of the gap at that point, not of
+current behaviour. To take a case up, vendor its file, move its entry to
+`[[case]]`, and let the live comparison decide.
 
-- The test-only splitter matches `// @filename:` in lower case with a space. A
-  fixture written with `@Filename:` or `//@filename:` is not split, so it is
-  checked as a single source.
-- `package.json`, `tsconfig.json`, and `node_modules` virtual files are passed
-  through as program sources. The harness performs no package resolution and
-  reads no tsconfig.
-- The fixture's compiler-option header is not applied. Options that gate what
-  is checked upstream — `strict`, `allowJs`/`checkJs`, `jsx`, `module`,
-  `moduleResolution`, `experimentalDecorators`, `isolatedDeclarations`,
-  `exactOptionalPropertyTypes` — have no effect here, and a fixture that
-  upstream runs once per setting is run once.
-
-So a green case is a pinned diagnostic-code match against that baseline, not a
-claim of upstream baseline compatibility.
-
-## Pending cases
-
-Every fixture in the pool that does *not* match its baseline is recorded with
-`status = "pending"`. Pending cases are not executed; they carry the upstream
-baseline's codes in `expected_diagnostics` and a `reason` naming both what
-upstream reports and what surge currently reports, so the gap is tracked rather
-than described. They fall in four groups:
-
-- **Checker false positive** — surge reports diagnostics upstream does not.
-- **Checker false negative** — surge misses diagnostics upstream reports; most
-  of these are checks that do not exist here yet.
-- **Checker wrong code** — both report, with a different code.
-- **Harness, package resolution** — the fixture resolves through `node_modules`
-  or a package manifest, which the harness does not do. These are not checker
-  defects and would move only with harness work.
-
-A pending case graduates by being measured against the baseline again and, when
-it matches, flipping to `status = "active"`.
-
-## Current limitations
-
-Some upstream TypeScript compiler fixtures use `// @filename:` comments to describe virtual multi-file test cases.
-
-The compatibility test harness still includes a small test-only splitter for these fixtures. In `virtual_files` mode, the split files are passed to the program checker so shared global-script declarations can be checked across file boundaries.
-
-This is useful for early diagnostic-code compatibility, but it is not full upstream baseline compatibility.
-
-The checker now parses import/export syntax and treats files with import/export syntax as module files. Module files remain isolated from the global-script prepass in this phase.
-
-### Historical milestone notes
+## Historical milestone notes
 
 **The `v0.5x`/`v0.6x` paragraphs below are historical milestone notes and do
 not describe current behavior.** In particular, package resolution,

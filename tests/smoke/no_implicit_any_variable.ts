@@ -1,1 +1,2 @@
+// @noImplicitAny: true
 let value;
