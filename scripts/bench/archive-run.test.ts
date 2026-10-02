@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import test from 'node:test';
-import assert from 'node:assert';
+
+import { expect, test } from 'vitest';
 
 import {
   parseArgs,
@@ -25,25 +25,25 @@ const packageManagerArgsPrefix = ['exec', 'tsx'];
 
 test('timestampSlug produces a filesystem-safe path segment', () => {
   const slug = timestampSlug(new Date('2026-06-16T12:30:15.123Z'));
-  assert.strictEqual(slug, '2026-06-16T12-30-15');
-  assert.ok(!/[:.]/.test(slug), 'slug should not contain colons or dots');
+  expect(slug).toBe('2026-06-16T12-30-15');
+  expect(slug, 'slug should not contain colons or dots').not.toMatch(/[:.]/);
 });
 
 test('defaultOutDir nests under .bench/runs/<timestamp>', () => {
   const dir = defaultOutDir('/repo', '2026-06-16T12-30-15');
-  assert.strictEqual(dir, path.join('/repo', '.bench', 'runs', '2026-06-16T12-30-15'));
+  expect(dir).toBe(path.join('/repo', '.bench', 'runs', '2026-06-16T12-30-15'));
 });
 
 test('sanitizeLabel strips unsafe characters', () => {
-  assert.strictEqual(sanitizeLabel('builtin-removal-before'), 'builtin-removal-before');
-  assert.strictEqual(sanitizeLabel('feature/new perf!!'), 'feature-new-perf');
-  assert.strictEqual(sanitizeLabel('  ../../etc/passwd  '), 'etc-passwd');
-  assert.strictEqual(sanitizeLabel('--weird--'), 'weird');
+  expect(sanitizeLabel('builtin-removal-before')).toBe('builtin-removal-before');
+  expect(sanitizeLabel('feature/new perf!!')).toBe('feature-new-perf');
+  expect(sanitizeLabel('  ../../etc/passwd  ')).toBe('etc-passwd');
+  expect(sanitizeLabel('--weird--')).toBe('weird');
 });
 
 test('parseArgs defaults are all off and parses flags', () => {
   const empty = parseArgs([]);
-  assert.deepStrictEqual(empty, {
+  expect(empty).toStrictEqual({
     bench: false,
     label: null,
     out: null,
@@ -51,24 +51,24 @@ test('parseArgs defaults are all off and parses flags', () => {
   });
 
   const parsed = parseArgs(['--', '--bench', '--label', 'x', '--out', 'p', '--dryRun']);
-  assert.strictEqual(parsed.bench, true);
-  assert.strictEqual(parsed.label, 'x');
-  assert.strictEqual(parsed.out, 'p');
-  assert.strictEqual(parsed.dryRun, true);
+  expect(parsed.bench).toBe(true);
+  expect(parsed.label).toBe('x');
+  expect(parsed.out).toBe('p');
+  expect(parsed.dryRun).toBe(true);
 });
 
 test('parseArgs rejects unknown flags', () => {
-  assert.throws(() => parseArgs(['--nope']), /Unknown argument/);
+  expect(() => parseArgs(['--nope'])).toThrow(/Unknown argument/);
 });
 
 test('buildPlan emits only requested steps with bench JSON output', () => {
   const benchOnly = buildPlan({ bench: true }, '/out');
-  assert.strictEqual(benchOnly.length, 1);
-  assert.strictEqual(benchOnly[0].name, 'bench-compilers');
-  assert.ok(benchOnly[0].argv.includes('bench:compilers'));
-  assert.strictEqual(benchOnly[0].jsonFile, path.join('/out', 'bench-compilers.json'));
+  expect(benchOnly.length).toBe(1);
+  expect(benchOnly[0].name).toBe('bench-compilers');
+  expect(benchOnly[0].argv).toContain('bench:compilers');
+  expect(benchOnly[0].jsonFile).toBe(path.join('/out', 'bench-compilers.json'));
 
-  assert.deepStrictEqual(buildPlan({ bench: false }, '/out'), []);
+  expect(buildPlan({ bench: false }, '/out')).toStrictEqual([]);
 });
 
 test('extractBenchMedians pulls medians per tool', () => {
@@ -82,16 +82,16 @@ test('extractBenchMedians pulls medians per tool', () => {
       },
     },
   ]);
-  assert.strictEqual(medians.length, 1);
-  assert.strictEqual(medians[0].project, 'demo');
-  assert.strictEqual(medians[0].medians.tsc, 1.23);
-  assert.strictEqual(medians[0].medians['surge-ts'], 0.21);
-  assert.strictEqual(medians[0].medians.tsgo, null);
+  expect(medians.length).toBe(1);
+  expect(medians[0].project).toBe('demo');
+  expect(medians[0].medians.tsc).toBe(1.23);
+  expect(medians[0].medians['surge-ts']).toBe(0.21);
+  expect(medians[0].medians.tsgo).toBe(null);
 });
 
 test('extractBenchMedians handles non-array input gracefully', () => {
-  assert.deepStrictEqual(extractBenchMedians(null), []);
-  assert.deepStrictEqual(extractBenchMedians({}), []);
+  expect(extractBenchMedians(null)).toStrictEqual([]);
+  expect(extractBenchMedians({})).toStrictEqual([]);
 });
 
 test('extractBenchMedians accepts the { meta, results } document shape', () => {
@@ -106,9 +106,9 @@ test('extractBenchMedians accepts the { meta, results } document shape', () => {
       },
     ],
   });
-  assert.strictEqual(medians.length, 1);
-  assert.strictEqual(medians[0].project, 'demo');
-  assert.strictEqual(medians[0].medians.tsc, 1.5);
+  expect(medians.length).toBe(1);
+  expect(medians[0].project).toBe('demo');
+  expect(medians[0].medians.tsc).toBe(1.5);
 });
 
 test('buildSummary produces the expected JSON shape', () => {
@@ -124,15 +124,15 @@ test('buildSummary produces the expected JSON shape', () => {
     parseWarnings: [],
   });
 
-  assert.strictEqual(summary.timestamp, '2026-06-16T12-30-15');
-  assert.strictEqual(summary.label, 'test-run');
-  assert.strictEqual(summary.git.branch, 'main');
-  assert.strictEqual(summary.commands.length, 1);
-  assert.strictEqual(summary.commands[0].ok, true);
-  assert.strictEqual(summary.medians[0].project, 'demo');
+  expect(summary.timestamp).toBe('2026-06-16T12-30-15');
+  expect(summary.label).toBe('test-run');
+  expect(summary.git.branch).toBe('main');
+  expect(summary.commands.length).toBe(1);
+  expect(summary.commands[0].ok).toBe(true);
+  expect(summary.medians[0].project).toBe('demo');
 
   const roundTripped = JSON.parse(JSON.stringify(summary));
-  assert.deepStrictEqual(roundTripped, summary);
+  expect(roundTripped).toStrictEqual(summary);
 });
 
 test('renderSummaryMarkdown includes label, status, and parse note', () => {
@@ -150,10 +150,10 @@ test('renderSummaryMarkdown includes label, status, and parse note', () => {
     }),
   );
 
-  assert.ok(md.includes('# Benchmark Archive — 2026-06-16T12-30-15 — after'));
-  assert.ok(md.includes('| fail |') || md.includes('fail'), 'should report fail status');
-  assert.ok(md.includes('dirty'));
-  assert.ok(md.includes('Parse Notes'));
+  expect(md).toContain('# Benchmark Archive — 2026-06-16T12-30-15 — after');
+  expect(md.includes('| fail |') || md.includes('fail'), 'should report fail status').toBeTruthy();
+  expect(md).toContain('dirty');
+  expect(md).toContain('Parse Notes');
 });
 
 test('dry run prints commands and writes nothing, exits zero', () => {
@@ -164,9 +164,9 @@ test('dry run prints commands and writes nothing, exits zero', () => {
   );
 
   if (result.error) throw result.error;
-  assert.strictEqual(result.status, 0, `Dry run failed: ${result.stderr}\n${result.stdout}`);
+  expect(result.status, `Dry run failed: ${result.stderr}\n${result.stdout}`).toBe(0);
   const stdout = result.stdout || '';
-  assert.ok(stdout.includes('Output directory:'), 'should print output directory');
-  assert.ok(stdout.includes('bench:compilers'), 'should print bench command');
-  assert.ok(stdout.includes('Dry run'), 'should note dry run');
+  expect(stdout, 'should print output directory').toContain('Output directory:');
+  expect(stdout, 'should print bench command').toContain('bench:compilers');
+  expect(stdout, 'should note dry run').toContain('Dry run');
 });

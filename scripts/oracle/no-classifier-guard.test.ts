@@ -1,10 +1,10 @@
-import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+
+import { expect, test } from 'vitest';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
@@ -43,11 +43,10 @@ test('oracle source stays raw and classifier-free', () => {
     .join('\n');
 
   for (const term of bannedTerms) {
-    assert.equal(
+    expect(
       containsWholeTerm(source, term),
-      false,
       `oracle source still contains banned term: ${term}`,
-    );
+    ).toBe(false);
   }
 });
 
@@ -72,15 +71,14 @@ test('oracle output stays raw on a tiny unresolved project', () => {
     },
   );
 
-  assert.equal(result.status, 0, result.stderr || result.stdout);
+  expect(result.status, result.stderr || result.stdout).toBe(0);
   const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
 
   for (const term of bannedTerms) {
-    assert.equal(
+    expect(
       containsWholeTerm(output, term),
-      false,
       `oracle output still contains banned term: ${term}`,
-    );
+    ).toBe(false);
   }
 });
 

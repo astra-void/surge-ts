@@ -2,8 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import test from 'node:test';
-import assert from 'node:assert';
+
+import { expect, test } from 'vitest';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
@@ -21,9 +21,12 @@ test('bench script parsing and basic run', () => {
   });
   
   if (result.error) throw result.error;
-  assert.strictEqual(result.status, 0, `Script failed: ${result.stderr}\n${result.stdout}`);
-  assert.ok((result.stdout || '').includes('Performance:'), 'Should output performance table');
-  assert.ok((result.stdout || '').includes('tsgo'), 'Should include tsgo in the benchmark output when it is installed');
+  expect(result.status, `Script failed: ${result.stderr}\n${result.stdout}`).toBe(0);
+  expect(result.stdout || '', 'Should output performance table').toContain('Performance:');
+  expect(
+    result.stdout || '',
+    'Should include tsgo in the benchmark output when it is installed',
+  ).toContain('tsgo');
 });
 
 test('bench script rejects ignoreDeprecations', () => {
@@ -40,8 +43,11 @@ test('bench script rejects ignoreDeprecations', () => {
   });
 
   if (result.error) throw result.error;
-  assert.notStrictEqual(result.status, 0, 'Script should fail when ignoreDeprecations is used');
-  assert.ok((result.stderr || '').includes('ignoreDeprecations'), 'Should mention ignoreDeprecations in error');
+  expect(result.status, 'Script should fail when ignoreDeprecations is used').not.toBe(0);
+  expect(
+    result.stderr || '',
+    'Should mention ignoreDeprecations in error',
+  ).toContain('ignoreDeprecations');
 });
 
 test('bench script generates scale fixture correctly', () => {
@@ -52,8 +58,13 @@ test('bench script generates scale fixture correctly', () => {
   });
 
   if (result.error) throw result.error;
-  assert.strictEqual(result.status, 0, `Generate scale fixture failed: ${result.stderr}\n${result.stdout}`);
-  assert.ok(existsSync(path.join(workspaceRoot, '.bench/generated/test-scale/tsconfig.json')));
+  expect(
+    result.status,
+    `Generate scale fixture failed: ${result.stderr}\n${result.stdout}`,
+  ).toBe(0);
+  expect(
+    existsSync(path.join(workspaceRoot, '.bench/generated/test-scale/tsconfig.json')),
+  ).toBeTruthy();
 });
 
 test('bench script generates json output', () => {
@@ -66,32 +77,46 @@ test('bench script generates json output', () => {
   });
 
   if (result.error) throw result.error;
-  assert.strictEqual(result.status, 0, `Script failed: ${result.stderr}\n${result.stdout}`);
-  assert.ok(existsSync(tempJson), 'Should create JSON file');
+  expect(result.status, `Script failed: ${result.stderr}\n${result.stdout}`).toBe(0);
+  expect(existsSync(tempJson), 'Should create JSON file').toBeTruthy();
   const data = JSON.parse(readFileSync(tempJson, 'utf8'));
-  assert.ok(Array.isArray(data.results), 'JSON should contain a results array');
-  assert.ok(data.results.some((entry: { rustJobs?: number }) => entry.rustJobs === 4), 'JSON should include the Rust job count');
-  assert.ok(typeof data.meta?.timestamp === 'string', 'JSON should record the run timestamp');
-  assert.ok(typeof data.meta?.platform === 'string', 'JSON should record the platform');
-  assert.strictEqual(data.meta?.iterations, 1, 'JSON should record the iteration count');
-  assert.match(data.meta?.tscVersion ?? '', /^6\./, 'tsc speed reference should be TypeScript 6');
-  assert.match(data.meta?.tsgoVersion ?? '', /^7\./, 'tsgo should be TypeScript 7');
+  expect(Array.isArray(data.results), 'JSON should contain a results array').toBeTruthy();
+  expect(
+    data.results.some((entry: { rustJobs?: number }) => entry.rustJobs === 4),
+    'JSON should include the Rust job count',
+  ).toBeTruthy();
+  expect(
+    typeof data.meta?.timestamp === 'string',
+    'JSON should record the run timestamp',
+  ).toBeTruthy();
+  expect(typeof data.meta?.platform === 'string', 'JSON should record the platform').toBeTruthy();
+  expect(data.meta?.iterations, 'JSON should record the iteration count').toBe(1);
+  expect(data.meta?.tscVersion ?? '', 'tsc speed reference should be TypeScript 6').toMatch(/^6\./);
+  expect(data.meta?.tsgoVersion ?? '', 'tsgo should be TypeScript 7').toMatch(/^7\./);
   const first = data.results[0];
   if (first.drift?.tsgo && first.drift.tsgo !== 'skipped') {
-    assert.strictEqual(first.drift.tsgo, 'baseline', 'tsgo (TS 7) should be the diagnostic baseline');
-    assert.match(
+    expect(first.drift.tsgo, 'tsgo (TS 7) should be the diagnostic baseline').toBe('baseline');
+    expect(
       first.drift['surge-ts'] ?? '',
-      /vs tsgo$/,
       'surge-ts drift should be measured against tsgo, not the TS 6 reference',
-    );
+    ).toMatch(/vs tsgo$/);
   }
-  assert.ok(first.memory && typeof first.memory === 'object', 'results should include a memory record');
+  expect(
+    first.memory && typeof first.memory === 'object',
+    'results should include a memory record',
+  ).toBeTruthy();
   if (process.platform === 'darwin' || process.platform === 'linux') {
-    assert.ok(first.memory.tsc && first.memory.tsc.medianBytes > 0, 'tsc peak memory should be sampled');
-    assert.ok(first.memory['surge-ts'] && first.memory['surge-ts'].medianBytes > 0, 'surge-ts peak memory should be sampled');
+    expect(
+      first.memory.tsc && first.memory.tsc.medianBytes > 0,
+      'tsc peak memory should be sampled',
+    ).toBeTruthy();
+    expect(
+      first.memory['surge-ts'] && first.memory['surge-ts'].medianBytes > 0,
+      'surge-ts peak memory should be sampled',
+    ).toBeTruthy();
   }
   if (process.platform === 'darwin') {
-    assert.strictEqual(first.memory.tsc.source, 'phys_footprint', 'macOS should measure phys_footprint');
+    expect(first.memory.tsc.source, 'macOS should measure phys_footprint').toBe('phys_footprint');
   }
 });
 
@@ -120,18 +145,18 @@ test('bench script fromJson generates chart and html', () => {
   });
 
   if (result.error) throw result.error;
-  assert.strictEqual(result.status, 0, `Script failed: ${result.stderr}\n${result.stdout}`);
+  expect(result.status, `Script failed: ${result.stderr}\n${result.stdout}`).toBe(0);
   
-  assert.ok(existsSync(tempChart), 'Should create SVG chart');
+  expect(existsSync(tempChart), 'Should create SVG chart').toBeTruthy();
   const chartContent = readFileSync(tempChart, 'utf8');
-  assert.ok(chartContent.includes('<svg'), 'Chart should contain SVG tag');
-  assert.ok(chartContent.includes('jobs=4'), 'Chart should label the Rust job count');
+  expect(chartContent, 'Chart should contain SVG tag').toContain('<svg');
+  expect(chartContent, 'Chart should label the Rust job count').toContain('jobs=4');
   
-  assert.ok(existsSync(tempHtml), 'Should create HTML file');
+  expect(existsSync(tempHtml), 'Should create HTML file').toBeTruthy();
   const htmlContent = readFileSync(tempHtml, 'utf8');
-  assert.ok(htmlContent.includes('<svg'), 'HTML should embed SVG tag');
-  assert.ok(htmlContent.includes('jobs=4'), 'HTML should label the Rust job count');
-  assert.ok(htmlContent.includes('local-machine-relative'), 'HTML should contain disclaimer');
+  expect(htmlContent, 'HTML should embed SVG tag').toContain('<svg');
+  expect(htmlContent, 'HTML should label the Rust job count').toContain('jobs=4');
+  expect(htmlContent, 'HTML should contain disclaimer').toContain('local-machine-relative');
 });
 
 test('bench script fromJson accepts legacy array-shaped JSON', () => {
@@ -155,8 +180,8 @@ test('bench script fromJson accepts legacy array-shaped JSON', () => {
   });
 
   if (result.error) throw result.error;
-  assert.strictEqual(result.status, 0, `Script failed: ${result.stderr}\n${result.stdout}`);
+  expect(result.status, `Script failed: ${result.stderr}\n${result.stdout}`).toBe(0);
   const chartContent = readFileSync(legacyChart, 'utf8');
-  assert.ok(chartContent.includes('legacy-dummy'), 'Chart should render legacy results');
-  assert.ok(chartContent.includes('jobs=2'), 'Chart should label the Rust job count');
+  expect(chartContent, 'Chart should render legacy results').toContain('legacy-dummy');
+  expect(chartContent, 'Chart should label the Rust job count').toContain('jobs=2');
 });

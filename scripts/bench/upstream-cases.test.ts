@@ -1,9 +1,9 @@
-import assert from 'node:assert';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import test from 'node:test';
+
+import { expect, test } from 'vitest';
 
 import {
   caseConfig,
@@ -23,8 +23,8 @@ test('splits units on @filename and keeps directives out of the source', () => {
     ['// @strict: true', '// @filename: a.ts', 'export const a = 1;', '// @Filename: /b.ts', 'import { a } from "./a";'].join('\n'),
     'case.ts',
   );
-  assert.deepStrictEqual(parsed.directives, [['strict', 'true']]);
-  assert.deepStrictEqual(parsed.files, [
+  expect(parsed.directives).toStrictEqual([['strict', 'true']]);
+  expect(parsed.files).toStrictEqual([
     { name: 'a.ts', content: 'export const a = 1;' },
     { name: '/b.ts', content: 'import { a } from "./a";' },
   ]);
@@ -32,7 +32,7 @@ test('splits units on @filename and keeps directives out of the source', () => {
 
 test('a case without @filename is one unit named after the case', () => {
   const parsed = parseUpstreamCase('// @target: es2015\nlet x = 1;', 'single.ts');
-  assert.deepStrictEqual(parsed.files, [{ name: 'single.ts', content: 'let x = 1;' }]);
+  expect(parsed.files).toStrictEqual([{ name: 'single.ts', content: 'let x = 1;' }]);
 });
 
 test('options take their tsc spelling, the first variation, and drop emit-only settings', () => {
@@ -43,9 +43,10 @@ test('options take their tsc spelling, the first variation, and drop emit-only s
     ),
     typescriptPath,
   );
-  assert.ok(!('skip' in config));
-  assert.deepStrictEqual(config.compilerOptions, { strict: false, target: 'es2015', lib: ['es2015', 'dom'], noEmit: true });
-  assert.deepStrictEqual(config.files, ['c.ts']);
+  expect(config).toStrictEqual({
+    compilerOptions: { strict: false, target: 'es2015', lib: ['es2015', 'dom'], noEmit: true },
+    files: ['c.ts'],
+  });
 });
 
 test('node_modules units and scripts without allowJs are not roots', () => {
@@ -53,13 +54,17 @@ test('node_modules units and scripts without allowJs are not roots', () => {
     parseUpstreamCase('// @filename: /node_modules/p/index.d.ts\nexport {};\n// @filename: main.js\nx;\n// @filename: main.ts\nexport {};', 'c.ts'),
     typescriptPath,
   );
-  assert.ok(!('skip' in config));
-  assert.deepStrictEqual(config.files, ['main.ts']);
+  expect(config).not.toHaveProperty('skip');
+  expect(config).toHaveProperty('files', ['main.ts']);
 });
 
 test('harness-only directives and a case-supplied tsconfig are skipped', () => {
-  assert.ok('skip' in caseConfig(parseUpstreamCase('// @link: /a -> /b\nx;', 'c.ts'), typescriptPath));
-  assert.ok('skip' in caseConfig(parseUpstreamCase('// @filename: tsconfig.json\n{}\n// @filename: a.ts\nx;', 'c.ts'), typescriptPath));
+  expect(
+    'skip' in caseConfig(parseUpstreamCase('// @link: /a -> /b\nx;', 'c.ts'), typescriptPath),
+  ).toBeTruthy();
+  expect(
+    'skip' in caseConfig(parseUpstreamCase('// @filename: tsconfig.json\n{}\n// @filename: a.ts\nx;', 'c.ts'), typescriptPath),
+  ).toBeTruthy();
 });
 
 test('a case in either checker suite is held out, by name or by content', () => {
@@ -75,6 +80,6 @@ test('a case in either checker suite is held out, by name or by content', () => 
     { label: 'surge-ts', names: new Set(), fingerprints: new Set([caseFingerprint('let b = 2;')]) },
   ];
   const selection = selectHeldOutCases(pool, suites, 0);
-  assert.deepStrictEqual(selection.cases.map((source) => source.name), ['free']);
-  assert.deepStrictEqual(selection.excluded, { 'bolt-ts': 1, 'surge-ts': 1 });
+  expect(selection.cases.map((source) => source.name)).toStrictEqual(['free']);
+  expect(selection.excluded).toStrictEqual({ 'bolt-ts': 1, 'surge-ts': 1 });
 });

@@ -1,8 +1,8 @@
-import assert from 'node:assert/strict';
 import path from 'node:path';
-import test from 'node:test';
 
 import type { SpawnSyncReturns } from 'node:child_process';
+
+import { expect, test } from 'vitest';
 
 import {
   type MeasuredCommandResult,
@@ -54,39 +54,39 @@ function fakeSpawn(
 }
 
 test('parsePeakRssBytes reads macOS time -l bytes verbatim', () => {
-  assert.equal(parsePeakRssBytes(MACOS_TIME_REPORT, 'macos-time'), 170999808);
+  expect(parsePeakRssBytes(MACOS_TIME_REPORT, 'macos-time')).toBe(170999808);
 });
 
 test('parsePeakRssBytes converts Linux time -v kbytes to bytes', () => {
-  assert.equal(parsePeakRssBytes(LINUX_TIME_REPORT, 'linux-time'), 166992 * 1024);
+  expect(parsePeakRssBytes(LINUX_TIME_REPORT, 'linux-time')).toBe(166992 * 1024);
 });
 
 test('parsePeakRssBytes returns null when the field is absent', () => {
-  assert.equal(parsePeakRssBytes('no rss here', 'macos-time'), null);
-  assert.equal(parsePeakRssBytes('no rss here', 'linux-time'), null);
-  assert.equal(parsePeakRssBytes(MACOS_TIME_REPORT, 'unavailable'), null);
+  expect(parsePeakRssBytes('no rss here', 'macos-time')).toBe(null);
+  expect(parsePeakRssBytes('no rss here', 'linux-time')).toBe(null);
+  expect(parsePeakRssBytes(MACOS_TIME_REPORT, 'unavailable')).toBe(null);
 });
 
 test('parsePeakFootprintBytes reads the macOS phys_footprint peak', () => {
-  assert.equal(parsePeakFootprintBytes(MACOS_TIME_REPORT, 'macos-time'), 167330320);
+  expect(parsePeakFootprintBytes(MACOS_TIME_REPORT, 'macos-time')).toBe(167330320);
 });
 
 test('parsePeakFootprintBytes is macOS-only and null when absent', () => {
-  assert.equal(parsePeakFootprintBytes(LINUX_TIME_REPORT, 'linux-time'), null);
-  assert.equal(parsePeakFootprintBytes(MACOS_TIME_REPORT, 'unavailable'), null);
-  assert.equal(parsePeakFootprintBytes('no footprint here', 'macos-time'), null);
+  expect(parsePeakFootprintBytes(LINUX_TIME_REPORT, 'linux-time')).toBe(null);
+  expect(parsePeakFootprintBytes(MACOS_TIME_REPORT, 'unavailable')).toBe(null);
+  expect(parsePeakFootprintBytes('no footprint here', 'macos-time')).toBe(null);
 });
 
 test('peakRssMb rounds bytes to one decimal megabyte', () => {
-  assert.equal(peakRssMb(null), null);
-  assert.equal(peakRssMb(1024 * 1024), 1);
-  assert.equal(peakRssMb(170999808), 163.1);
+  expect(peakRssMb(null)).toBe(null);
+  expect(peakRssMb(1024 * 1024)).toBe(1);
+  expect(peakRssMb(170999808)).toBe(163.1);
 });
 
 test('timeMeasurementForPlatform maps darwin/linux and rejects others', () => {
-  assert.deepEqual(timeMeasurementForPlatform('darwin'), { flag: '-l', source: 'macos-time' });
-  assert.deepEqual(timeMeasurementForPlatform('linux'), { flag: '-v', source: 'linux-time' });
-  assert.equal(timeMeasurementForPlatform('win32'), null);
+  expect(timeMeasurementForPlatform('darwin')).toStrictEqual({ flag: '-l', source: 'macos-time' });
+  expect(timeMeasurementForPlatform('linux')).toStrictEqual({ flag: '-v', source: 'linux-time' });
+  expect(timeMeasurementForPlatform('win32')).toBe(null);
 });
 
 test('runMeasuredCommand parses macOS peak RSS and keeps child output clean', () => {
@@ -101,14 +101,14 @@ test('runMeasuredCommand parses macOS peak RSS and keeps child output clean', ()
     now: () => 0,
   });
 
-  assert.equal(result.peakRssBytes, 170999808);
-  assert.equal(result.peakRssSource, 'macos-time');
-  assert.equal(result.peakFootprintBytes, 167330320);
-  assert.equal(result.status, 0);
-  assert.equal(result.stdout, 'OK');
-  assert.equal(result.stderr, 'Timings:\n  parsing: 1ms');
+  expect(result.peakRssBytes).toBe(170999808);
+  expect(result.peakRssSource).toBe('macos-time');
+  expect(result.peakFootprintBytes).toBe(167330320);
+  expect(result.status).toBe(0);
+  expect(result.stdout).toBe('OK');
+  expect(result.stderr).toBe('Timings:\n  parsing: 1ms');
   // time is the spawned process; the measured command is passed after `-o file`.
-  assert.deepEqual(calls[0], {
+  expect(calls[0]).toStrictEqual({
     command: '/usr/bin/time',
     args: ['-l', '-o', '/tmp/report', 'bin', '--project', 'tsconfig.json'],
   });
@@ -124,10 +124,10 @@ test('runMeasuredCommand parses Linux peak RSS', () => {
     readReport: () => LINUX_TIME_REPORT,
   });
 
-  assert.equal(result.peakRssBytes, 166992 * 1024);
-  assert.equal(result.peakRssSource, 'linux-time');
-  assert.equal(result.peakFootprintBytes, null);
-  assert.equal(calls[0].args[0], '-v');
+  expect(result.peakRssBytes).toBe(166992 * 1024);
+  expect(result.peakRssSource).toBe('linux-time');
+  expect(result.peakFootprintBytes).toBe(null);
+  expect(calls[0].args[0]).toBe('-v');
 });
 
 test('runMeasuredCommand falls back to direct execution when time is unavailable', () => {
@@ -138,11 +138,11 @@ test('runMeasuredCommand falls back to direct execution when time is unavailable
     timeBinaryExists: () => false,
   });
 
-  assert.equal(result.peakRssBytes, null);
-  assert.equal(result.peakRssSource, 'unavailable');
-  assert.equal(result.stdout, 'direct');
+  expect(result.peakRssBytes).toBe(null);
+  expect(result.peakRssSource).toBe('unavailable');
+  expect(result.stdout).toBe('direct');
   // No /usr/bin/time wrapper: the command runs directly.
-  assert.deepEqual(calls[0], { command: 'bin', args: ['--project', 'tsconfig.json'] });
+  expect(calls[0]).toStrictEqual({ command: 'bin', args: ['--project', 'tsconfig.json'] });
 });
 
 test('runMeasuredCommand still reports memory when the child command fails', () => {
@@ -155,11 +155,11 @@ test('runMeasuredCommand still reports memory when the child command fails', () 
     readReport: () => MACOS_TIME_REPORT,
   });
 
-  assert.equal(result.status, 2);
-  assert.equal(result.stdout, 'partial');
-  assert.equal(result.stderr, 'boom');
-  assert.equal(result.peakRssBytes, 170999808);
-  assert.equal(result.peakRssSource, 'macos-time');
+  expect(result.status).toBe(2);
+  expect(result.stdout).toBe('partial');
+  expect(result.stderr).toBe('boom');
+  expect(result.peakRssBytes).toBe(170999808);
+  expect(result.peakRssSource).toBe('macos-time');
 });
 
 test('runMeasuredCommand marks memory unavailable when the report is unparseable', () => {
@@ -172,8 +172,8 @@ test('runMeasuredCommand marks memory unavailable when the report is unparseable
     readReport: () => 'garbage with no rss',
   });
 
-  assert.equal(result.peakRssBytes, null);
-  assert.equal(result.peakRssSource, 'unavailable');
+  expect(result.peakRssBytes).toBe(null);
+  expect(result.peakRssSource).toBe('unavailable');
 });
 
 test('parseArgs reads all supported flags', () => {
@@ -191,36 +191,36 @@ test('parseArgs reads all supported flags', () => {
     '--allowMissing',
   ]);
 
-  assert.equal(parsed.project, '/abs/project/tsconfig.json');
-  assert.equal(parsed.name, 'My App');
-  assert.equal(parsed.maxDiagnostics, 1000);
-  assert.deepEqual(parsed.rustJobs, [1, 4]);
-  assert.equal(parsed.outDir, '/tmp/out');
-  assert.equal(parsed.allowMissing, true);
+  expect(parsed.project).toBe('/abs/project/tsconfig.json');
+  expect(parsed.name).toBe('My App');
+  expect(parsed.maxDiagnostics).toBe(1000);
+  expect(parsed.rustJobs).toStrictEqual([1, 4]);
+  expect(parsed.outDir).toBe('/tmp/out');
+  expect(parsed.allowMissing).toBe(true);
 });
 
 test('parseArgs applies defaults', () => {
   const parsed = parseArgs(['--project', '/abs/project']);
-  assert.equal(parsed.maxDiagnostics, 500);
-  assert.deepEqual(parsed.rustJobs, [1, 'auto']);
-  assert.equal(parsed.outDir, null);
-  assert.equal(parsed.name, null);
-  assert.equal(parsed.allowMissing, false);
+  expect(parsed.maxDiagnostics).toBe(500);
+  expect(parsed.rustJobs).toStrictEqual([1, 'auto']);
+  expect(parsed.outDir).toBe(null);
+  expect(parsed.name).toBe(null);
+  expect(parsed.allowMissing).toBe(false);
 });
 
 test('parseArgs rejects unknown arguments and bad values', () => {
-  assert.throws(() => parseArgs(['--nope']), /Unknown argument/);
-  assert.throws(() => parseArgs(['--maxDiagnostics', '0']), /positive integer/);
-  assert.throws(() => parseArgs(['--project']), /Missing value/);
+  expect(() => parseArgs(['--nope'])).toThrow(/Unknown argument/);
+  expect(() => parseArgs(['--maxDiagnostics', '0'])).toThrow(/positive integer/);
+  expect(() => parseArgs(['--project'])).toThrow(/Missing value/);
 });
 
 test('parseRustJobs parses, validates, and dedupes', () => {
-  assert.deepEqual(parseRustJobs('1,4'), [1, 4]);
-  assert.deepEqual(parseRustJobs('1,2,4'), [1, 2, 4]);
-  assert.deepEqual(parseRustJobs(' 1 , 1 , 4 '), [1, 4]);
-  assert.throws(() => parseRustJobs(''), /positive integers/);
-  assert.throws(() => parseRustJobs('1,foo'), /positive integers/);
-  assert.throws(() => parseRustJobs('0,1'), /positive integers/);
+  expect(parseRustJobs('1,4')).toStrictEqual([1, 4]);
+  expect(parseRustJobs('1,2,4')).toStrictEqual([1, 2, 4]);
+  expect(parseRustJobs(' 1 , 1 , 4 ')).toStrictEqual([1, 4]);
+  expect(() => parseRustJobs('')).toThrow(/positive integers/);
+  expect(() => parseRustJobs('1,foo')).toThrow(/positive integers/);
+  expect(() => parseRustJobs('0,1')).toThrow(/positive integers/);
 });
 
 test('resolveProject uses an explicit tsconfig file path', () => {
@@ -228,7 +228,7 @@ test('resolveProject uses an explicit tsconfig file path', () => {
     { project: '/abs/project/tsconfig.json' },
     { workspaceRoot: '/repo', classify: (p) => (p === '/abs/project/tsconfig.json' ? 'file' : 'missing') },
   );
-  assert.deepEqual(resolved, {
+  expect(resolved).toStrictEqual({
     root: '/abs/project',
     tsconfig: '/abs/project/tsconfig.json',
     attempted: ['/abs/project/tsconfig.json'],
@@ -247,8 +247,8 @@ test('resolveProject finds tsconfig.json inside a directory', () => {
       },
     },
   );
-  assert.equal(resolved?.root, '/abs/project');
-  assert.equal(resolved?.tsconfig, '/abs/project/tsconfig.json');
+  expect(resolved?.root).toBe('/abs/project');
+  expect(resolved?.tsconfig).toBe('/abs/project/tsconfig.json');
 });
 
 test('resolveProject returns null when directory has no tsconfig', () => {
@@ -256,7 +256,7 @@ test('resolveProject returns null when directory has no tsconfig', () => {
     { project: '/abs/project' },
     { workspaceRoot: '/repo', classify: (p) => (p === '/abs/project' ? 'dir' : 'missing') },
   );
-  assert.equal(resolved, null);
+  expect(resolved).toBe(null);
 });
 
 test('resolveProject resolves relative project paths against cwd', () => {
@@ -268,37 +268,33 @@ test('resolveProject resolves relative project paths against cwd', () => {
       classify: (p) => (p === '/work/sub/tsconfig.json' ? 'file' : 'missing'),
     },
   );
-  assert.equal(resolved?.tsconfig, '/work/sub/tsconfig.json');
-  assert.equal(resolved?.root, '/work/sub');
+  expect(resolved?.tsconfig).toBe('/work/sub/tsconfig.json');
+  expect(resolved?.root).toBe('/work/sub');
 });
 
 test('resolveProject returns null without a project', () => {
-  assert.equal(
-    resolveProject({ project: null }, { workspaceRoot: '/repo' }),
-    null,
-  );
+  expect(resolveProject({ project: null }, { workspaceRoot: '/repo' })).toBe(null);
 });
 
 test('projectNameFromPath and slugify derive stable slugs', () => {
-  assert.equal(projectNameFromPath('/abs/My Next App'), 'my-next-app');
-  assert.equal(slugify('  trpc  '), 'trpc');
-  assert.equal(slugify('@scope/pkg'), 'scope-pkg');
-  assert.equal(slugify('***'), 'project');
+  expect(projectNameFromPath('/abs/My Next App')).toBe('my-next-app');
+  expect(slugify('  trpc  ')).toBe('trpc');
+  expect(slugify('@scope/pkg')).toBe('scope-pkg');
+  expect(slugify('***')).toBe('project');
 });
 
 test('outputPathsForProject names artifacts per rustJobs', () => {
   const outputs = outputPathsForProject('/out/my-app', [1, 2, 4]);
-  assert.equal(outputs.measurementMd, path.join('/out/my-app', 'measurement.md'));
-  assert.equal(outputs.oracleCompareTxt, path.join('/out/my-app', 'oracle-compare.txt'));
-  assert.equal(outputs.oracleCompareJson, path.join('/out/my-app', 'oracle-compare.json'));
-  assert.equal(outputs.compatReportJson, path.join('/out/my-app', 'compat-report.json'));
-  assert.equal(outputs.timingsTxt, path.join('/out/my-app', 'timings.txt'));
-  assert.deepEqual(
+  expect(outputs.measurementMd).toBe(path.join('/out/my-app', 'measurement.md'));
+  expect(outputs.oracleCompareTxt).toBe(path.join('/out/my-app', 'oracle-compare.txt'));
+  expect(outputs.oracleCompareJson).toBe(path.join('/out/my-app', 'oracle-compare.json'));
+  expect(outputs.compatReportJson).toBe(path.join('/out/my-app', 'compat-report.json'));
+  expect(outputs.timingsTxt).toBe(path.join('/out/my-app', 'timings.txt'));
+  expect(
     outputs.jobs.map((job) => [job.jobs, path.basename(job.json), path.basename(job.svg)]),
-    [
-      [1, 'jobs1.json', 'jobs1.svg'],
-      [2, 'jobs2.json', 'jobs2.svg'],
-      [4, 'jobs4.json', 'jobs4.svg'],
-    ],
-  );
+  ).toStrictEqual([
+    [1, 'jobs1.json', 'jobs1.svg'],
+    [2, 'jobs2.json', 'jobs2.svg'],
+    [4, 'jobs4.json', 'jobs4.svg'],
+  ]);
 });

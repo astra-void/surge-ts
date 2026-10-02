@@ -1,8 +1,8 @@
-import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
+
+import { expect, test } from 'vitest';
 
 import {
   ALLOCATORS,
@@ -37,14 +37,14 @@ function record(overrides: Partial<RunRecord>): RunRecord {
 }
 
 test('median of odd, even, and empty runs', () => {
-  assert.equal(median([3, 1, 2]), 2);
-  assert.equal(median([4, 1, 3, 2]), 2.5);
-  assert.equal(median([]), null);
+  expect(median([3, 1, 2])).toBe(2);
+  expect(median([4, 1, 3, 2])).toBe(2.5);
+  expect(median([])).toBe(null);
 });
 
 test('cargoBuildArgs: system build has no feature flags', () => {
-  assert.deepEqual(cargoBuildArgs('system'), ['build', '--release', '-p', 'surge-ts-cli']);
-  assert.deepEqual(cargoBuildArgs('mimalloc'), [
+  expect(cargoBuildArgs('system')).toStrictEqual(['build', '--release', '-p', 'surge-ts-cli']);
+  expect(cargoBuildArgs('mimalloc')).toStrictEqual([
     'build',
     '--release',
     '-p',
@@ -62,17 +62,17 @@ test('summarize computes per-scenario/allocator medians and worst peak RSS', () 
     record({ allocator: 'mimalloc', wallTimeMs: 50, peakRssBytes: null }),
   ];
   const summaries = summarize(records);
-  assert.equal(summaries.length, 2);
+  expect(summaries.length).toBe(2);
 
   const system = summaries.find((s) => s.allocator === 'system')!;
-  assert.equal(system.runs, 3);
-  assert.equal(system.medianWallTimeMs, 200);
-  assert.equal(system.medianPeakRssBytes, 20);
-  assert.equal(system.worstPeakRssBytes, 30);
+  expect(system.runs).toBe(3);
+  expect(system.medianWallTimeMs).toBe(200);
+  expect(system.medianPeakRssBytes).toBe(20);
+  expect(system.worstPeakRssBytes).toBe(30);
 
   const mimalloc = summaries.find((s) => s.allocator === 'mimalloc')!;
-  assert.equal(mimalloc.medianPeakRssBytes, null);
-  assert.equal(mimalloc.worstPeakRssBytes, null);
+  expect(mimalloc.medianPeakRssBytes).toBe(null);
+  expect(mimalloc.worstPeakRssBytes).toBe(null);
 });
 
 test('renderSummaryMarkdown emits one row per scenario/allocator pair', () => {
@@ -80,24 +80,24 @@ test('renderSummaryMarkdown emits one row per scenario/allocator pair', () => {
     summarize([record({}), record({ allocator: 'jemalloc' })]),
   );
   const rows = markdown.split('\n');
-  assert.equal(rows.length, 4);
-  assert.match(rows[2], /jemalloc/);
-  assert.match(rows[3], /system/);
+  expect(rows.length).toBe(4);
+  expect(rows[2]).toMatch(/jemalloc/);
+  expect(rows[3]).toMatch(/system/);
 });
 
 test('countDiagnosticsFromJson parses surge --format json output', () => {
-  assert.equal(countDiagnosticsFromJson('{"diagnostics": [{}, {}]}'), 2);
-  assert.equal(countDiagnosticsFromJson('{"diagnostics": []}'), 0);
-  assert.equal(countDiagnosticsFromJson('not json'), null);
-  assert.equal(countDiagnosticsFromJson('{}'), null);
+  expect(countDiagnosticsFromJson('{"diagnostics": [{}, {}]}')).toBe(2);
+  expect(countDiagnosticsFromJson('{"diagnostics": []}')).toBe(0);
+  expect(countDiagnosticsFromJson('not json')).toBe(null);
+  expect(countDiagnosticsFromJson('{}')).toBe(null);
 });
 
 test('parseBenchArgs defaults and validation', () => {
   const parsed = parseBenchArgs([]);
-  assert.deepEqual(parsed.allocators, [...ALLOCATORS]);
-  assert.equal(parsed.iterations, 5);
-  assert.equal(parsed.warmup, 1);
-  assert.equal(parsed.skipBuild, false);
+  expect(parsed.allocators).toStrictEqual([...ALLOCATORS]);
+  expect(parsed.iterations).toBe(5);
+  expect(parsed.warmup).toBe(1);
+  expect(parsed.skipBuild).toBe(false);
 
   const custom = parseBenchArgs([
     '--allocators',
@@ -108,35 +108,35 @@ test('parseBenchArgs defaults and validation', () => {
     '--scenario',
     'medium',
   ]);
-  assert.deepEqual(custom.allocators, ['system', 'mimalloc']);
-  assert.equal(custom.iterations, 7);
-  assert.equal(custom.skipBuild, true);
-  assert.equal(custom.scenarioFilter, 'medium');
+  expect(custom.allocators).toStrictEqual(['system', 'mimalloc']);
+  expect(custom.iterations).toBe(7);
+  expect(custom.skipBuild).toBe(true);
+  expect(custom.scenarioFilter).toBe('medium');
 
-  assert.equal(parseBenchArgs(['--', '--iterations', '3']).iterations, 3);
+  expect(parseBenchArgs(['--', '--iterations', '3']).iterations).toBe(3);
 
-  assert.throws(() => parseBenchArgs(['--allocators', 'tcmalloc']), /unknown allocator/);
-  assert.throws(() => parseBenchArgs(['--iterations', '0']), /positive integer/);
-  assert.throws(() => parseBenchArgs(['--bogus']), /unknown argument/);
+  expect(() => parseBenchArgs(['--allocators', 'tcmalloc'])).toThrow(/unknown allocator/);
+  expect(() => parseBenchArgs(['--iterations', '0'])).toThrow(/positive integer/);
+  expect(() => parseBenchArgs(['--bogus'])).toThrow(/unknown argument/);
 });
 
 test('generateSyntheticProject writes a deterministic self-contained fixture', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'surge-alloc-bench-'));
   try {
     const tsconfig = generateSyntheticProject(dir, 5);
-    assert.equal(tsconfig, path.join(dir, 'tsconfig.json'));
+    expect(tsconfig).toBe(path.join(dir, 'tsconfig.json'));
     const config = JSON.parse(readFileSync(tsconfig, 'utf8'));
-    assert.equal(config.compilerOptions.noEmit, true);
+    expect(config.compilerOptions.noEmit).toBe(true);
 
     const files = readdirSync(path.join(dir, 'src')).sort();
-    assert.equal(files.length, 6); // 5 leaves + index.ts
-    assert.ok(files.includes('index.ts'));
+    expect(files.length).toBe(6); // 5 leaves + index.ts
+    expect(files).toContain('index.ts');
 
     const index = readFileSync(path.join(dir, 'src', 'index.ts'), 'utf8');
-    assert.match(index, /import { value4 } from "\.\/file_4";/);
+    expect(index).toMatch(/import { value4 } from "\.\/file_4";/);
 
     const again = generateSyntheticProject(dir, 5);
-    assert.equal(readFileSync(again, 'utf8'), readFileSync(tsconfig, 'utf8'));
+    expect(readFileSync(again, 'utf8')).toBe(readFileSync(tsconfig, 'utf8'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

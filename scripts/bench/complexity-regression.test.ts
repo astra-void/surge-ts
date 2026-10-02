@@ -1,8 +1,8 @@
-import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
+
+import { expect, test } from 'vitest';
 
 import {
   generateInheritanceProject,
@@ -52,65 +52,65 @@ CLI timings:
 
 test('parseTimingsCounters extracts counters and ignores io/file_metrics/RSS sections', () => {
   const counters = parseTimingsCounters(SAMPLE_STDERR);
-  assert.equal(counters.get('files_total'), 12);
-  assert.equal(counters.get('type_declaration_table_clone_count'), 2);
-  assert.equal(counters.get('dependency_declaration_table_clone_count'), 0);
-  assert.equal(counters.get('union_type_clone_count'), 519);
-  assert.equal(counters.get('declaration_lookup_layer_count_avg'), 1.52);
-  assert.equal(counters.get('overload_array_alloc_count'), 35);
-  assert.equal(counters.has('canonicalize_calls'), false);
-  assert.equal(counters.has('parsing'), false);
-  assert.equal(counters.has('total'), false);
+  expect(counters.get('files_total')).toBe(12);
+  expect(counters.get('type_declaration_table_clone_count')).toBe(2);
+  expect(counters.get('dependency_declaration_table_clone_count')).toBe(0);
+  expect(counters.get('union_type_clone_count')).toBe(519);
+  expect(counters.get('declaration_lookup_layer_count_avg')).toBe(1.52);
+  expect(counters.get('overload_array_alloc_count')).toBe(35);
+  expect(counters.has('canonicalize_calls')).toBe(false);
+  expect(counters.has('parsing')).toBe(false);
+  expect(counters.has('total')).toBe(false);
 });
 
 test('parseTimingsCounters returns empty map when no counters block exists', () => {
-  assert.equal(parseTimingsCounters('Timings:\n  parsing: 1.0ms\n').size, 0);
+  expect(parseTimingsCounters('Timings:\n  parsing: 1.0ms\n').size).toBe(0);
 });
 
 test('classifyGrowth: all-zero series', () => {
   const { classification, tailExponent } = classifyGrowth([64, 128, 256], [0, 0, 0]);
-  assert.equal(classification, 'zero');
-  assert.equal(tailExponent, null);
+  expect(classification).toBe('zero');
+  expect(tailExponent).toBe(null);
 });
 
 test('classifyGrowth: constant series', () => {
   const { classification } = classifyGrowth([64, 128, 256], [7, 7, 7]);
-  assert.equal(classification, 'constant');
+  expect(classification).toBe('constant');
 });
 
 test('classifyGrowth: linear series, including fixed offset', () => {
-  assert.equal(classifyGrowth([64, 128, 256], [100, 200, 400]).classification, 'linear');
+  expect(classifyGrowth([64, 128, 256], [100, 200, 400]).classification).toBe('linear');
   // 50 fixed + n: the tail exponent converges to 1 despite the offset.
-  assert.equal(classifyGrowth([64, 128, 256, 512], [114, 178, 306, 562]).classification, 'linear');
+  expect(classifyGrowth([64, 128, 256, 512], [114, 178, 306, 562]).classification).toBe('linear');
 });
 
 test('classifyGrowth: quadratic series is superlinear', () => {
   const sizes = [64, 128, 256];
   const totals = sizes.map((n) => n * n);
   const { classification, tailExponent } = classifyGrowth(sizes, totals);
-  assert.equal(classification, 'superlinear');
-  assert.ok(tailExponent! > 1.9);
+  expect(classification).toBe('superlinear');
+  expect(tailExponent! > 1.9).toBeTruthy();
 });
 
 test('classifyGrowth rejects mismatched or too-short input', () => {
-  assert.throws(() => classifyGrowth([64], [1]));
-  assert.throws(() => classifyGrowth([64, 128], [1]));
+  expect(() => classifyGrowth([64], [1])).toThrow();
+  expect(() => classifyGrowth([64, 128], [1])).toThrow();
 });
 
 test('evaluateExpectation gates zero and superlinear regressions', () => {
-  assert.equal(evaluateExpectation('zero', [0, 0, 0], 'zero').pass, true);
-  assert.equal(evaluateExpectation('zero', [0, 1, 0], 'constant').pass, false);
-  assert.equal(evaluateExpectation('constant', [7, 7, 7], 'constant').pass, true);
-  assert.equal(evaluateExpectation('constant', [7, 28, 112], 'superlinear').pass, false);
-  assert.equal(evaluateExpectation('linear', [10, 20, 40], 'linear').pass, true);
-  assert.equal(evaluateExpectation('linear', [10, 40, 160], 'superlinear').pass, false);
-  assert.equal(evaluateExpectation('known-superlinear', [10, 40, 160], 'superlinear').pass, true);
+  expect(evaluateExpectation('zero', [0, 0, 0], 'zero').pass).toBe(true);
+  expect(evaluateExpectation('zero', [0, 1, 0], 'constant').pass).toBe(false);
+  expect(evaluateExpectation('constant', [7, 7, 7], 'constant').pass).toBe(true);
+  expect(evaluateExpectation('constant', [7, 28, 112], 'superlinear').pass).toBe(false);
+  expect(evaluateExpectation('linear', [10, 20, 40], 'linear').pass).toBe(true);
+  expect(evaluateExpectation('linear', [10, 40, 160], 'superlinear').pass).toBe(false);
+  expect(evaluateExpectation('known-superlinear', [10, 40, 160], 'superlinear').pass).toBe(true);
 });
 
 test('evaluateExpectation warns (without failing) when constant turns linear', () => {
   const { pass, note } = evaluateExpectation('constant', [10, 20, 40], 'linear');
-  assert.equal(pass, true);
-  assert.match(note, /WARN/);
+  expect(pass).toBe(true);
+  expect(note).toMatch(/WARN/);
 });
 
 test('generators are deterministic and size-sensitive', () => {
@@ -127,10 +127,10 @@ test('generators are deterministic and size-sensitive', () => {
       const subB = path.join(dirB, generate.name);
       const tsconfigA = generate(subA, 8);
       const tsconfigB = generate(subB, 8);
-      assert.equal(readFileSync(tsconfigA, 'utf8'), readFileSync(tsconfigB, 'utf8'));
+      expect(readFileSync(tsconfigA, 'utf8')).toBe(readFileSync(tsconfigB, 'utf8'));
       const mainA = path.join(subA, 'src', generate === generateModuleGraphProject ? 'mod_0.ts' : 'index.ts');
       const mainB = path.join(subB, 'src', generate === generateModuleGraphProject ? 'mod_0.ts' : 'index.ts');
-      assert.equal(readFileSync(mainA, 'utf8'), readFileSync(mainB, 'utf8'));
+      expect(readFileSync(mainA, 'utf8')).toBe(readFileSync(mainB, 'utf8'));
     }
 
     const smallDir = path.join(dirA, 'union-small');
@@ -139,9 +139,9 @@ test('generators are deterministic and size-sensitive', () => {
     generateUnionProject(largeDir, 16);
     const small = readFileSync(path.join(smallDir, 'src', 'index.ts'), 'utf8');
     const large = readFileSync(path.join(largeDir, 'src', 'index.ts'), 'utf8');
-    assert.ok(large.length > small.length);
-    assert.match(large, /"k15"/);
-    assert.doesNotMatch(small, /"k15"/);
+    expect(large.length > small.length).toBeTruthy();
+    expect(large).toMatch(/"k15"/);
+    expect(small).not.toMatch(/"k15"/);
   } finally {
     rmSync(dirA, { recursive: true, force: true });
     rmSync(dirB, { recursive: true, force: true });
@@ -157,7 +157,7 @@ test('module graph generator writes the fixed dependency packages', () => {
         path.join(dir, 'node_modules', `dep${dep}`, 'index.d.ts'),
         'utf8',
       );
-      assert.match(declaration, new RegExp(`DepShape${dep}`));
+      expect(declaration).toMatch(new RegExp(`DepShape${dep}`));
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -166,12 +166,12 @@ test('module graph generator writes the fixed dependency packages', () => {
 
 test('projectSpecs reference counters with valid expectations', () => {
   const specs = projectSpecs();
-  assert.ok(specs.length >= 5);
+  expect(specs.length >= 5).toBeTruthy();
   for (const spec of specs) {
-    assert.ok(spec.sizes.length >= 3, `${spec.name} needs at least 3 sizes`);
-    assert.ok(spec.counterCases.length > 0);
+    expect(spec.sizes.length >= 3, `${spec.name} needs at least 3 sizes`).toBeTruthy();
+    expect(spec.counterCases.length > 0).toBeTruthy();
     for (const counterCase of spec.counterCases) {
-      assert.match(counterCase.counter, /^[a-z][a-z0-9_]*$/);
+      expect(counterCase.counter).toMatch(/^[a-z][a-z0-9_]*$/);
     }
   }
 });
@@ -195,13 +195,13 @@ test('renderMarkdownReport includes rows, wall time, and determinism section', (
     new Map([['union-scaling', [31.5, 42.7]]]),
     [{ name: 'zod-shaped fixture', status: 'pass', note: 'sha256 abc… twice (exit 2)' }],
   );
-  assert.match(markdown, /## union-scaling/);
-  assert.match(markdown, /union_type_clone_count/);
-  assert.match(markdown, /519 \| 1031/);
-  assert.match(markdown, /~linear \(p=0\.99\)/);
-  assert.match(markdown, /wall ms \(displayed, never gated\)/);
-  assert.match(markdown, /## determinism/);
-  assert.match(markdown, /PASS/);
+  expect(markdown).toMatch(/## union-scaling/);
+  expect(markdown).toMatch(/union_type_clone_count/);
+  expect(markdown).toMatch(/519 \| 1031/);
+  expect(markdown).toMatch(/~linear \(p=0\.99\)/);
+  expect(markdown).toMatch(/wall ms \(displayed, never gated\)/);
+  expect(markdown).toMatch(/## determinism/);
+  expect(markdown).toMatch(/PASS/);
 });
 
 test('renderMarkdownReport marks failures', () => {
@@ -219,30 +219,30 @@ test('renderMarkdownReport marks failures', () => {
     note: 'expected 0 at every size, got [0, 3]',
   };
   const markdown = renderMarkdownReport([result], new Map(), []);
-  assert.match(markdown, /FAIL — expected 0 at every size/);
+  expect(markdown).toMatch(/FAIL — expected 0 at every size/);
 });
 
 test('parseArgs handles flags and validates sizes', () => {
   const defaults = parseArgs([]);
-  assert.equal(defaults.json, false);
-  assert.equal(defaults.skipBuild, false);
-  assert.equal(defaults.caseFilter, null);
-  assert.equal(defaults.sizesOverride, null);
-  assert.match(defaults.binary, /target[\\/]release[\\/]surge/);
+  expect(defaults.json).toBe(false);
+  expect(defaults.skipBuild).toBe(false);
+  expect(defaults.caseFilter).toBe(null);
+  expect(defaults.sizesOverride).toBe(null);
+  expect(defaults.binary).toMatch(/target[\\/]release[\\/]surge/);
 
   const parsed = parseArgs(['--', '--json', '--skipBuild', '--case', 'union', '--sizes', '8,16']);
-  assert.equal(parsed.json, true);
-  assert.equal(parsed.skipBuild, true);
-  assert.equal(parsed.caseFilter, 'union');
-  assert.deepEqual(parsed.sizesOverride, [8, 16]);
+  expect(parsed.json).toBe(true);
+  expect(parsed.skipBuild).toBe(true);
+  expect(parsed.caseFilter).toBe('union');
+  expect(parsed.sizesOverride).toStrictEqual([8, 16]);
 
-  assert.throws(() => parseArgs(['--sizes', '8']));
-  assert.throws(() => parseArgs(['--sizes', '8,notanumber']));
-  assert.throws(() => parseArgs(['--frobnicate']));
+  expect(() => parseArgs(['--sizes', '8'])).toThrow();
+  expect(() => parseArgs(['--sizes', '8,notanumber'])).toThrow();
+  expect(() => parseArgs(['--frobnicate'])).toThrow();
 });
 
 test('sha256 is stable and input-sensitive', () => {
-  assert.equal(sha256('a'), sha256('a'));
-  assert.notEqual(sha256('a'), sha256('b'));
-  assert.match(sha256(''), /^[0-9a-f]{64}$/);
+  expect(sha256('a')).toBe(sha256('a'));
+  expect(sha256('a')).not.toBe(sha256('b'));
+  expect(sha256('')).toMatch(/^[0-9a-f]{64}$/);
 });

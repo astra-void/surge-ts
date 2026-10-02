@@ -1,8 +1,8 @@
-import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+
+import { expect, test } from 'vitest';
 
 import type { ComparisonResult } from './compare-tsc';
 import {
@@ -106,42 +106,38 @@ test('parseSweepArgs collects flags, repeated filters, and target sources', () =
     '--strictMessages',
     '--strictSpans',
   ]);
-  assert.equal(args.all, true);
-  assert.deepEqual(args.filters, ['node-protocol', 'reference-types']);
-  assert.deepEqual(args.excludes, ['diagnostics-pack']);
-  assert.deepEqual(args.projects, ['a/tsconfig.json']);
-  assert.deepEqual(args.files, ['b.ts']);
-  assert.deepEqual(args.discover, ['tests/compat-projects']);
-  assert.equal(args.maxDiagnostics, 200);
-  assert.equal(args.jobs, 4);
+  expect(args.all).toBe(true);
+  expect(args.filters).toStrictEqual(['node-protocol', 'reference-types']);
+  expect(args.excludes).toStrictEqual(['diagnostics-pack']);
+  expect(args.projects).toStrictEqual(['a/tsconfig.json']);
+  expect(args.files).toStrictEqual(['b.ts']);
+  expect(args.discover).toStrictEqual(['tests/compat-projects']);
+  expect(args.maxDiagnostics).toBe(200);
+  expect(args.jobs).toBe(4);
 });
 
 test('parseSweepArgs rejects unknown flags and bad numbers', () => {
-  assert.throws(() => parseSweepArgs(['--nope']), /unknown argument/);
-  assert.throws(() => parseSweepArgs(['--jobs', '0']), /positive integer/);
-  assert.throws(() => parseSweepArgs(['--project']), /requires a value/);
+  expect(() => parseSweepArgs(['--nope'])).toThrow(/unknown argument/);
+  expect(() => parseSweepArgs(['--jobs', '0'])).toThrow(/positive integer/);
+  expect(() => parseSweepArgs(['--project'])).toThrow(/requires a value/);
 });
 
 test('selectTargets with no criteria selects nothing', () => {
   const selection = selectTargets({ ...baseArgs }, [presetTarget('a')], [], []);
-  assert.equal(selection.hasCriteria, false);
-  assert.deepEqual(selection.selected, []);
+  expect(selection.hasCriteria).toBe(false);
+  expect(selection.selected).toStrictEqual([]);
 });
 
 test('--all selects every preset in registry order', () => {
   const presets = presetTargets();
   const selection = selectTargets({ ...baseArgs, all: true }, presets, [], []);
-  assert.deepEqual(
-    selection.selected.map((target) => target.name),
-    listPresetNames(),
-  );
+  expect(selection.selected.map((target) => target.name)).toStrictEqual(listPresetNames());
 });
 
 test('--filter selects matching presets without --all', () => {
   const presets = [presetTarget('node-protocol-fs'), presetTarget('reference-types'), presetTarget('node-protocol-buf')];
   const selection = selectTargets({ ...baseArgs, filters: ['node-protocol'] }, presets, [], []);
-  assert.deepEqual(
-    selection.selected.map((t) => t.name),
+  expect(selection.selected.map((t) => t.name)).toStrictEqual(
     ['node-protocol-fs', 'node-protocol-buf'],
   );
 });
@@ -149,35 +145,36 @@ test('--filter selects matching presets without --all', () => {
 test('--exclude moves matching targets to skipped', () => {
   const presets = [presetTarget('alpha'), presetTarget('diagnostics-pack'), presetTarget('beta')];
   const selection = selectTargets({ ...baseArgs, all: true, excludes: ['diagnostics-pack'] }, presets, [], []);
-  assert.deepEqual(selection.selected.map((t) => t.name), ['alpha', 'beta']);
-  assert.deepEqual(selection.skipped.map((t) => t.name), ['diagnostics-pack']);
+  expect(selection.selected.map((t) => t.name)).toStrictEqual(['alpha', 'beta']);
+  expect(selection.skipped.map((t) => t.name)).toStrictEqual(['diagnostics-pack']);
 });
 
 test('explicit projects are included even without --all and survive --filter', () => {
   const explicit = [projectTarget('local/app/tsconfig.json')];
   const selection = selectTargets({ ...baseArgs, filters: ['node-protocol'], projects: ['x'] }, [presetTarget('node-protocol-a')], explicit, []);
-  assert.deepEqual(
-    selection.selected.map((t) => t.name).sort(),
+  expect(selection.selected.map((t) => t.name).sort()).toStrictEqual(
     ['local/app/tsconfig.json', 'node-protocol-a'],
   );
-  assert.equal(selection.hasCriteria, true);
+  expect(selection.hasCriteria).toBe(true);
 });
 
 test('--list with explicit sources does not pull in the whole registry', () => {
   const selection = selectTargets({ ...baseArgs, list: true, projects: ['x'] }, presetTargets(), [projectTarget('p')], []);
-  assert.deepEqual(selection.selected.map((t) => t.name), ['p']);
+  expect(selection.selected.map((t) => t.name)).toStrictEqual(['p']);
 });
 
 test('explicit project alone is a valid selection criterion', () => {
   const selection = selectTargets({ ...baseArgs, projects: ['x'] }, presetTargets(), [projectTarget('p')], []);
-  assert.equal(selection.hasCriteria, true);
-  assert.deepEqual(selection.selected.map((t) => t.name), ['p']);
+  expect(selection.hasCriteria).toBe(true);
+  expect(selection.selected.map((t) => t.name)).toStrictEqual(['p']);
 });
 
 test('discovered targets are filtered by --filter but explicit ones are not', () => {
   const discovered = [projectTarget('pkg/keep-node-protocol/tsconfig.json'), projectTarget('pkg/drop/tsconfig.json')];
   const selection = selectTargets({ ...baseArgs, discover: ['pkg'], filters: ['node-protocol'] }, [], [], discovered);
-  assert.deepEqual(selection.selected.map((t) => t.name), ['pkg/keep-node-protocol/tsconfig.json']);
+  expect(selection.selected.map((t) => t.name)).toStrictEqual(
+    ['pkg/keep-node-protocol/tsconfig.json'],
+  );
 });
 
 test('dedupeTargets keeps the first target per resolved path', () => {
@@ -186,14 +183,14 @@ test('dedupeTargets keeps the first target per resolved path', () => {
     { name: 'dup', kind: 'project', value: 'dup', resolvedPath: '/abs/preset-x/tsconfig.json' } as SweepTarget,
     projectTarget('unique'),
   ];
-  assert.deepEqual(dedupeTargets(targets).map((t) => t.name), ['preset-x', 'unique']);
+  expect(dedupeTargets(targets).map((t) => t.name)).toStrictEqual(['preset-x', 'unique']);
 });
 
 test('selectTargets dedupes an explicit project that matches a selected preset', () => {
   const preset = presetTarget('shared');
   const explicit: SweepTarget = { name: 'shared-explicit', kind: 'project', value: 'p', resolvedPath: preset.resolvedPath };
   const selection = selectTargets({ ...baseArgs, all: true, projects: ['p'] }, [preset], [explicit], []);
-  assert.deepEqual(selection.selected.map((t) => t.name), ['shared']);
+  expect(selection.selected.map((t) => t.name)).toStrictEqual(['shared']);
 });
 
 test('discoverProjectTargets walks a directory and skips node_modules', () => {
@@ -207,12 +204,12 @@ test('discoverProjectTargets walks a directory and skips node_modules', () => {
 
   const targets = discoverProjectTargets(root);
   const basenames = targets.map((t) => path.basename(path.dirname(t.resolvedPath))).sort();
-  assert.deepEqual(basenames, ['pkg-a', 'pkg-b']);
-  assert.ok(targets.every((t) => t.kind === 'project'));
+  expect(basenames).toStrictEqual(['pkg-a', 'pkg-b']);
+  expect(targets.every((t) => t.kind === 'project')).toBeTruthy();
 });
 
 test('discoverProjectTargets throws on a missing directory', () => {
-  assert.throws(() => discoverProjectTargets('/no/such/dir/at/all'), /existing directory/);
+  expect(() => discoverProjectTargets('/no/such/dir/at/all')).toThrow(/existing directory/);
 });
 
 test('deriveResult fails on code-count mismatch and counts surplus', () => {
@@ -231,17 +228,19 @@ test('deriveResult fails on code-count mismatch and counts surplus', () => {
     } as never,
   });
   const result = deriveResult(DEMO, comparison, 10, baseArgs);
-  assert.equal(result.passed, false);
-  assert.equal(result.codeCountMatch, false);
-  assert.equal(result.onlyTsc, 4);
+  expect(result.passed).toBe(false);
+  expect(result.codeCountMatch).toBe(false);
+  expect(result.onlyTsc).toBe(4);
 });
 
 test('message drift passes by default but fails under --strictMessages', () => {
   const comparison = makeComparison({
     summary: { byCodeMatch: true, byFileCodeMatch: true, byFileCodeLineMatch: true, messageMatch: false } as never,
   });
-  assert.equal(deriveResult(DEMO, comparison, 1, baseArgs).passed, true);
-  assert.equal(deriveResult(DEMO, comparison, 1, { ...baseArgs, strictMessages: true }).passed, false);
+  expect(deriveResult(DEMO, comparison, 1, baseArgs).passed).toBe(true);
+  expect(
+    deriveResult(DEMO, comparison, 1, { ...baseArgs, strictMessages: true }).passed,
+  ).toBe(false);
 });
 
 test('span drift detected from column differences and gated by --strictSpans', () => {
@@ -251,9 +250,9 @@ test('span drift detected from column differences and gated by --strictSpans', (
       onlySurgeTs: { rawDiagnosticFingerprints: [{ fileName: 'a.ts', code: 'TS1', line: 3, column: 9, message: 'm', count: 1 }] },
     } as never,
   });
-  assert.equal(deriveSpanMatch(comparison), false);
-  assert.equal(deriveResult(DEMO, comparison, 1, baseArgs).passed, true);
-  assert.equal(deriveResult(DEMO, comparison, 1, { ...baseArgs, strictSpans: true }).passed, false);
+  expect(deriveSpanMatch(comparison)).toBe(false);
+  expect(deriveResult(DEMO, comparison, 1, baseArgs).passed).toBe(true);
+  expect(deriveResult(DEMO, comparison, 1, { ...baseArgs, strictSpans: true }).passed).toBe(false);
 });
 
 test('same-column message difference is not span drift', () => {
@@ -263,7 +262,7 @@ test('same-column message difference is not span drift', () => {
       onlySurgeTs: { rawDiagnosticFingerprints: [{ fileName: 'a.ts', code: 'TS1', line: 3, column: 5, message: 'y', count: 1 }] },
     } as never,
   });
-  assert.equal(deriveSpanMatch(comparison), true);
+  expect(deriveSpanMatch(comparison)).toBe(true);
 });
 
 test('buildSummary aggregates counts and exit code', () => {
@@ -277,25 +276,24 @@ test('buildSummary aggregates counts and exit code', () => {
     ),
   ];
   const summary = buildSummary(results, [presetTarget('skipped-one')], 1234);
-  assert.equal(summary.total, 2);
-  assert.equal(summary.passed, 1);
-  assert.equal(summary.failed, 1);
-  assert.equal(summary.skipped, 1);
-  assert.equal(summary.codeCountMismatches, 1);
-  assert.equal(summary.exitCode, 1);
+  expect(summary.total).toBe(2);
+  expect(summary.passed).toBe(1);
+  expect(summary.failed).toBe(1);
+  expect(summary.skipped).toBe(1);
+  expect(summary.codeCountMismatches).toBe(1);
+  expect(summary.exitCode).toBe(1);
 });
 
 test('formatPresetLine matches the compact shape', () => {
   const result = deriveResult(presetTarget('node-protocol-buffer-basic'), makeComparison(), 312, baseArgs);
-  assert.equal(
-    formatPresetLine(result),
+  expect(formatPresetLine(result)).toBe(
     'PASS node-protocol-buffer-basic ts=1 rust=1 onlyTsc=0 onlyRust=0 fileCodeLine=yes message=yes span=yes elapsed=312ms',
   );
 });
 
 test('result object exposes the documented keys', () => {
   const result = deriveResult(DEMO, makeComparison(), 5, baseArgs);
-  assert.deepEqual(Object.keys(result).sort(), [
+  expect(Object.keys(result).sort()).toStrictEqual([
     'codeCountMatch',
     'elapsedMs',
     'fileCodeLineMatch',

@@ -1,8 +1,8 @@
-import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import test from 'node:test';
+
+import { expect, test } from 'vitest';
 
 import { compareProject } from '../oracle/compare-tsc';
 import { resolveTypeScriptLibDir } from '../lib/generate-default-libs';
@@ -57,49 +57,44 @@ function unnamedComparison(): ReturnType<typeof compareProject> {
 // React-typing regression without requiring full parity. The project is local
 // and not vendored, and the oracle needs the `typescript` package, so the gate
 // skips when either is absent — mirroring the ky gate.
-test('unnamed stays at or below the false-positive watermark', (t) => {
+test('unnamed stays at or below the false-positive watermark', ({ skip }) => {
   if (!fs.existsSync(unnamedTsconfig)) {
-    t.skip('unnamed project not present at ../../nextjs/unnamed (local, not vendored)');
-    return;
+    skip('unnamed project not present at ../../nextjs/unnamed (local, not vendored)');
   }
   if (!fs.existsSync(typescriptLib)) {
-    t.skip('typescript package not installed (oracle baseline unavailable)');
-    return;
+    skip('typescript package not installed (oracle baseline unavailable)');
   }
 
   const result = unnamedComparison();
 
-  assert.equal(
+  expect(
     result.typescript.total,
-    0,
     'precondition: tsc must still report 0 diagnostics on unnamed',
-  );
-  assert.ok(
+  ).toBe(0);
+  expect(
     result.surgeTs.total <= FALSE_POSITIVE_CEILING,
     `unnamed over-reports rose to ${result.surgeTs.total} (ceiling ${FALSE_POSITIVE_CEILING}); ` +
       `new only-surge fingerprints indicate a regression: ${JSON.stringify(
         result.matches.onlySurgeTs.slice(0, 20),
       )}`,
-  );
+  ).toBeTruthy();
 });
 
 // The clusters cleared by the 2026-07-02 React pass stay cleared: react-hook-form
 // render-prop bindings (TS7031) went 9 → 0 via function-type binding-pattern
 // parsing and export-shadow scope threading. Any TS7031 on this corpus is a
 // regression of that chain, independent of where the total ceiling sits.
-test('unnamed reports no implicit-any binding elements (TS7031)', (t) => {
+test('unnamed reports no implicit-any binding elements (TS7031)', ({ skip }) => {
   if (!fs.existsSync(unnamedTsconfig) || !fs.existsSync(typescriptLib)) {
-    t.skip('unnamed project or typescript package not present');
-    return;
+    skip('unnamed project or typescript package not present');
   }
 
   const result = unnamedComparison();
   const ts7031 = result.matches.onlySurgeTs.filter(
     (fingerprint) => fingerprint.code === 'TS7031',
   );
-  assert.deepEqual(
+  expect(
     ts7031,
-    [],
     `TS7031 must stay cleared on unnamed; got: ${JSON.stringify(ts7031)}`,
-  );
+  ).toStrictEqual([]);
 });

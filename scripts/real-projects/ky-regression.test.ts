@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import test from 'node:test';
+
+import { expect, test } from 'vitest';
 
 import { compareProject, resolveSurgeBin } from '../oracle/compare-tsc';
 import { resolveTypeScriptLibDir } from '../lib/generate-default-libs';
@@ -36,34 +36,33 @@ function runSurgeJson(extraArgs: string[]): unknown {
 // oracle needs the `typescript` package, so the gate skips when either is absent
 // — mirroring the physical-lib rust tests. When both are present, any drift from
 // tsc fails the gate.
-test('ky matches tsc at 0/0 (real-project regression gate)', (t) => {
+test('ky matches tsc at 0/0 (real-project regression gate)', ({ skip }) => {
   if (!fs.existsSync(kyTsconfig)) {
-    t.skip('ky project not present at .local-projects/ky (gitignored, not vendored)');
-    return;
+    skip('ky project not present at .local-projects/ky (gitignored, not vendored)');
   }
   if (!fs.existsSync(typescriptLib)) {
-    t.skip('typescript package not installed (oracle baseline unavailable)');
-    return;
+    skip('typescript package not installed (oracle baseline unavailable)');
   }
 
   const result = compareProject(kyTsconfig, 'ky', 500, false, undefined);
 
-  assert.equal(
+  expect(
+
     result.typescript.total,
-    0,
+
     'precondition: tsc must still report 0 diagnostics on ky',
-  );
-  assert.equal(
+
+  ).toBe(0);
+  expect(
     result.surgeTs.total,
-    0,
     `surge-ts must report 0 diagnostics on ky; only-surge fingerprints: ${JSON.stringify(
       result.matches.onlySurgeTs,
     )}`,
-  );
-  assert.ok(
+  ).toBe(0);
+  expect(
     result.summary.byCodeMatch && result.summary.byFileCodeMatch,
     'surge-ts must match tsc by code and file/code on ky',
-  );
+  ).toBeTruthy();
 });
 
 // Gate the suppression counters behind the 0/0 parity claim. ky's 0/0 holds in
@@ -74,10 +73,9 @@ test('ky matches tsc at 0/0 (real-project regression gate)', (t) => {
 // particular a recursive-type cycle note degrading a source type, the case the
 // suppressed-diagnostics audit flagged. Locked at zero after the 2026-06-20
 // cycle-tolerant resolution landing.
-test('ky surfaces no suppressed source-level diagnostics (native profile)', (t) => {
+test('ky surfaces no suppressed source-level diagnostics (native profile)', ({ skip }) => {
   if (!fs.existsSync(kyTsconfig) || !fs.existsSync(typescriptLib)) {
-    t.skip('ky project or typescript package not present');
-    return;
+    skip('ky project or typescript package not present');
   }
 
   const report = runSurgeJson(['--diagnosticProfile', 'native', '--maxDiagnostics', '2000']) as {
@@ -86,13 +84,12 @@ test('ky surfaces no suppressed source-level diagnostics (native profile)', (t) 
   const sourceLevel = report.diagnostics.filter(
     (diagnostic) => !diagnostic.fileName.includes('node_modules'),
   );
-  assert.deepEqual(
+  expect(
     sourceLevel,
-    [],
     `ky source files must surface no diagnostics even with suppression off; got: ${JSON.stringify(
       sourceLevel,
     )}`,
-  );
+  ).toStrictEqual([]);
 });
 
 // Every external (package) reference in ky resolves (the lone
@@ -100,20 +97,18 @@ test('ky surfaces no suppressed source-level diagnostics (native profile)', (t) 
 // must stay zero: a non-zero value would mean a dependency stopped resolving and
 // is being silently stubbed, which the externalModuleStubs `total` count alone
 // could not distinguish from a benign resolved reference.
-test('ky has no unresolved external module stubs', (t) => {
+test('ky has no unresolved external module stubs', ({ skip }) => {
   if (!fs.existsSync(kyTsconfig) || !fs.existsSync(typescriptLib)) {
-    t.skip('ky project or typescript package not present');
-    return;
+    skip('ky project or typescript package not present');
   }
 
   const report = runSurgeJson(['--compatReport']) as {
     externalModuleStubs: { total: number; unresolved: number; resolved: number };
   };
-  assert.equal(
+  expect(
     report.externalModuleStubs.unresolved,
-    0,
     `ky external references must all resolve; stubs: ${JSON.stringify(
       report.externalModuleStubs,
     )}`,
-  );
+  ).toBe(0);
 });
