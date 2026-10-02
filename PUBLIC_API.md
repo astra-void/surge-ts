@@ -369,7 +369,11 @@ The verified feature areas (each backed by one or more gated presets):
 ## 3. How to re-verify
 
 ```bash
-cargo nextest run --workspace
+pnpm test
+```
+
+```bash
+cargo test --workspace
 ```
 
 ```bash

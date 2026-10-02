@@ -14,15 +14,30 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  test:
-    name: nextest
+  unit:
+    name: cargo test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
+      - name: cargo test
+        run: cargo test --workspace
+
+  vitest:
+    name: vitest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
         with:
-          tool: cargo-nextest
-      - name: nextest
-        run: cargo nextest run --workspace --profile ci
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: build surge
+        run: cargo build --release -p surge-ts-cli
+      - name: vitest
+        run: pnpm run test:vitest

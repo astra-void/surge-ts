@@ -42,7 +42,8 @@ primary working tree had no fixture edits.
 
 | Gate | Command | Result |
 | --- | --- | ---: |
-| Workspace tests | `cargo nextest run --workspace` | **not measured** for this snapshot. The last clean result recorded here was 1938 / 1939 at `f841633` (2026-09-07); it does not describe `6c1dfcf5`. |
+| Behaviour tests | `pnpm test` (vitest, live tsc comparison) | **not measured** — the vitest suite replaced nextest after this snapshot. |
+| Rust unit tests | `cargo test --workspace` | **not measured** for this snapshot. The last clean result recorded here was the nextest suite at 1938 / 1939 at `f841633` (2026-09-07); it predates the vitest move and does not describe `6c1dfcf5`. |
 | Oracle harness tests | `pnpm run oracle:test` | **23 / 23 passed** |
 | Oracle preset sweep — normal gate | `pnpm run oracle:sweep -- --all --maxDiagnostics 200` | **913 / 919 passed** — 6 failures, see below |
 | Oracle preset sweep — `--strictMessages` | same + `--strictMessages` | **848 / 919 passed** — the 6 above plus 65 message drifts |
@@ -195,7 +196,7 @@ Summary of what backs it today:
 - 919 oracle presets under `tests/compat-projects/`, 913 of them green at the
   normal gate and 836 at both strict gates (see the table above).
 - 1,173 compat-project fixtures in total; the ones not registered as oracle
-  presets are exercised by `cargo nextest run --workspace` instead.
+  presets are exercised by the CLI behaviour tests under `tests/cli/` instead.
 - `diagnostics-pack` at exact 31/31, pinning duplicate-declaration
   (TS2451/TS2393), TDZ (TS2448 + TS2454), missing-return span placement
   (TS2355/TS2366) and use-site generic-arity spans (TS2314/TS2315).
@@ -550,7 +551,11 @@ Everything in the snapshot above comes from these commands, run against a clean
 checkout of the snapshot commit:
 
 ```bash
-cargo nextest run --workspace
+pnpm test
+```
+
+```bash
+cargo test --workspace
 ```
 
 ```bash

@@ -43,25 +43,22 @@ a symbol:
 
 ## Verification
 
-- Rust crates: run the workspace tests with nextest.
+- Behaviour tests (checker diagnostics, CLI): vitest against the release
+  binary, comparing surge with tsc 7.0.2 live — see [tests/README.md](tests/README.md).
 
   ```sh
-  cargo nextest run --workspace
+  pnpm test          # release build, then vitest run
+  pnpm test:vitest   # vitest run against the existing target/release/surge
   ```
 
-  Scope with `-p <crate>`, a substring filter (`cargo nextest run my_test_name`),
-  or the filterset DSL (`-E 'test(my_test_name)'`). `fail-fast` is off by
-  default (see `.config/nextest.toml`), so a run reports every failure.
-  The first run after a rebuild can stall briefly while macOS Gatekeeper
-  assesses the freshly built test binaries — environmental, not a hang.
-
-  Fallback without nextest — build the test binary, then invoke it directly:
-
-  ```sh
-  cargo test --no-run 2>&1 | grep -oE '\(target/[^)]+\)' | tr -d '()' | xargs -I{} {}
-  ```
-
-  Use `-- --test-threads=1` or filter flags (e.g. `-- my_test_name`) after the binary path as needed.
+  Scope with a path (`pnpm test:vitest tests/smoke.test.ts`) or a name filter
+  (`-t <pattern>`). New checker behaviour tests are fixture files under
+  `tests/checker/<suite>/`, not Rust `#[test]`s.
+- Rust unit tests (crate internals): `cargo test --workspace`, or `-p <crate>`
+  with a name filter. A unit test that sets environment gates or reads the
+  process-global counters must isolate itself with
+  `test_support::run_in_own_process` (surge-ts-checker); `cargo test` shares one
+  process across tests.
 - Oracle harness tests: `pnpm run oracle:test`.
 - Single-target oracle check: `pnpm run oracle:compare -- --project <preset|tsconfig>`
   (or `--file <source.ts>`) to spot-check one fixture or project.
