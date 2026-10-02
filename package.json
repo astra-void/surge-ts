@@ -49,7 +49,8 @@
 		"@types/node": "^25.9.3",
 		"tsx": "4.22.4",
 		"typescript": "npm:typescript@7.0.2",
-		"typescript-6": "npm:typescript@6.0.3"
+		"typescript-6": "npm:typescript@6.0.3",
+		"vitest": "^5.0.1"
 	},
 	"packageManager": "pnpm@12.5.1"
 }
