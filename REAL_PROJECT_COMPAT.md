@@ -1764,7 +1764,7 @@ Re-verified 2026-09-01; first reached 2026-06-20.
   tests). The specific patterns that were fixed are additionally pinned as
   cargo fixtures: `tests/compat-projects/physical-lib-new-promise-executor-basic`
   and `tests/compat-projects/physical-lib-required-omit-pick-basic`, plus the
-  `cli_*` regressions in `crates/surge-ts-cli/tests/project_mode.rs`.
+  `cli_*` regressions in `tests/cli/project-mode-*.test.ts`.
 
 ### Suppression / stub transparency (not yet audited)
 
@@ -2298,7 +2298,7 @@ tsc, having picked the second overload's five-member `QueryObserverResult`, has
 `Error`. Overload return selection, below, closed it the same day.
 
 Pinned by `overload-group-generic-parameter-fold-basic` and five tests in
-`crates/surge-ts-checker/tests/function_overloads.rs`.
+`tests/checker/function_overloads/`.
 
 ### TS2356 was applied to unary `+`/`-`, which coerce
 
@@ -2319,7 +2319,7 @@ own false-positive surface and are recorded, not smuggled in.
 `useQueries.test-d.tsx` writes `(data) => [data, +data]` against a
 `(data: string) => [string, number]` contextual type, which is the corpus hit.
 Pinned by `unary-arithmetic-coercion-basic` and
-`crates/surge-ts-checker/tests/unary_arithmetic_operand.rs`.
+`tests/checker/unary_arithmetic_operand/`.
 
 Seven smoke fixtures and one span test encoded the old behavior. Each was
 re-verified against the pinned oracle on its own — `-"hello"`, `+true`,
@@ -2349,7 +2349,7 @@ nothing. A written out-of-range index on a *concrete* tuple is unaffected.
 
 `instantiate_function_type_with_substitution` now discards what it raises.
 Pinned by `instantiated-annotation-span-basic` and
-`crates/surge-ts-checker/tests/instantiation_annotation_diagnostics.rs`.
+`tests/checker/instantiation_annotation_diagnostics/`.
 
 ### A missing-property report was made on a literal that could not be compared
 
@@ -2378,7 +2378,7 @@ re-enters while the literal is mid-check.
 
 No preset: the premise is a surge-internal degradation, so a project pinning it
 would be green for the wrong reason, and would flip the moment `Exclude` over
-that member resolves. `crates/surge-ts-checker/tests/object_literal_report_order.rs`
+that member resolves. `tests/checker/object_literal_report_order/`
 pins the ordering rule the fix depends on instead.
 
 ## Overload return selection (2026-09-13)
@@ -2446,7 +2446,7 @@ binding still sees the selected type because declarations are typed through the
 check path.
 
 Pinned by `overload-return-selection-basic` and seven tests in
-`crates/surge-ts-checker/tests/function_overloads.rs`.
+`tests/checker/function_overloads/`.
 
 ## query-core: type-parameter candidates from every argument (2026-09-13)
 
@@ -2457,7 +2457,7 @@ three lines: `declare function eq<T extends Record<string, any>>(a: T, b: T |
 undefined)`.
 
 Three layers, each pinned by `generic-object-candidate-union-basic` and
-`crates/surge-ts-checker/tests/generic_literal_widening.rs`:
+`tests/checker/generic_literal_widening/`:
 
 - **Later object candidates were dropped.** `record_type_argument_candidate`
   kept the first candidate and could only meet two *primitives* at their base

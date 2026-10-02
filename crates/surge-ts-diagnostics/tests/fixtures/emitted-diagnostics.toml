@@ -280,7 +280,7 @@ oracle = [
 [TS2350]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program/assorted_checks.rs",
+  "tests/checker/program_assorted_checks",
 ]
 
 [TS2721]
@@ -336,7 +336,7 @@ oracle = [
 [TS5102]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/cli",
   "crates/surge-ts-config/src/tests.rs",
 ]
 oracle = [
@@ -346,7 +346,7 @@ oracle = [
 [TS5108]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/cli",
   "crates/surge-ts-config/src/tests.rs",
 ]
 oracle = [
@@ -362,7 +362,7 @@ fixtures = [
 [TS5112]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/cli",
 ]
 oracle = [
   "CLI tests",
@@ -389,35 +389,33 @@ oracle = [
 [TS18046]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker",
 ]
 
 [TS2304]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
-  "tests/smoke/manifest.toml",
+  "tests/cli",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/program.rs",
-  "crates/surge-ts-checker/tests/generics_spans.rs",
-  "crates/surge-ts-checker/tests/generics.rs",
-  "crates/surge-ts-checker/tests/example_spans.rs",
-  "crates/surge-ts-checker/tests/compatibility.rs",
+  "tests/checker/spans",
+  "tests/checker",
+  "tests/checker/program_generics",
+  "tests/checker/compatibility",
 ]
 
 [TS2300]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 oracle = [
   "duplicate-export-specifier-basic",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker/spans",
+  "tests/checker",
 ]
 
 [TS2303]
@@ -429,7 +427,7 @@ oracle = [
 [TS2717]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
   "tests/compat-projects/interface-merging-conflict-basic/tsconfig.json",
 ]
 oracle = [
@@ -439,22 +437,22 @@ oracle = [
 [TS2305]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
-  "tests/smoke/manifest.toml",
+  "tests/cli",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker/spans",
+  "tests/checker",
 ]
 
 [TS2614]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/cli",
   "tests/compat-projects/package-declarations",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker",
 ]
 
 [TS2306]
@@ -466,12 +464,12 @@ oracle = [
 [TS2307]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
-  "tests/smoke/manifest.toml",
+  "tests/cli",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/program.rs",
-  "crates/surge-ts-checker/tests/spans.rs",
+  "tests/checker",
+  "tests/checker/spans",
 ]
 
 [TS2732]
@@ -483,22 +481,22 @@ oracle = [
 [TS2882]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
-  "tests/smoke/manifest.toml",
+  "tests/cli",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker/spans",
+  "tests/checker",
 ]
 
 [TS2314]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/generics.rs",
-  "crates/surge-ts-checker/tests/generics_spans.rs",
+  "tests/checker/program_generics",
+  "tests/checker/spans",
 ]
 
 [TS2707]
@@ -510,39 +508,36 @@ oracle = [
 [TS2315]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/generics.rs",
-  "crates/surge-ts-checker/tests/generics_spans.rs",
+  "tests/checker/program_generics",
+  "tests/checker/spans",
 ]
 
 [TS2322]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
-  "crates/surge-ts-cli/tests/json_diagnostics.rs",
-  "tests/smoke/manifest.toml",
+  "tests/cli",
+  "tests/cli/json-diagnostics.test.ts",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/program.rs",
-  "crates/surge-ts-checker/tests/generics_spans.rs",
-  "crates/surge-ts-checker/tests/generics.rs",
-  "crates/surge-ts-checker/tests/example_spans.rs",
-  "crates/surge-ts-checker/tests/compatibility.rs",
+  "tests/checker/spans",
+  "tests/checker",
+  "tests/checker/program_generics",
+  "tests/checker/compatibility",
 ]
 
 [TS2339]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
-  "tests/smoke/manifest.toml",
+  "tests/cli",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/example_spans.rs",
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker/spans",
+  "tests/checker",
 ]
 
 [TS2344]
@@ -553,27 +548,26 @@ fixtures = [
   "tests/smoke/generic_keyof_constraint_explicit_union_key_mismatch.ts",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/generics_spans.rs",
+  "tests/checker/spans",
 ]
 
 [TS2345]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/program.rs",
-  "crates/surge-ts-checker/tests/example_spans.rs",
+  "tests/checker/spans",
+  "tests/checker",
 ]
 
 [TS2349]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
+  "tests/checker/spans",
 ]
 
 [TS2352]
@@ -585,17 +579,17 @@ oracle = [
 [TS2353]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/compatibility.rs",
+  "tests/checker/spans",
+  "tests/checker/compatibility",
 ]
 
 [TS2355]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 
 [TS2534]
@@ -617,56 +611,53 @@ oracle = [
 [TS2362]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/example_spans.rs",
+  "tests/checker/spans",
 ]
 
 [TS2363]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
+  "tests/checker/spans",
 ]
 
 [TS2365]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/example_spans.rs",
-  "crates/surge-ts-checker/tests/spans.rs",
+  "tests/checker/spans",
 ]
 
 [TS2366]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 
 [TS2367]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/example_spans.rs",
+  "tests/checker/spans",
 ]
 
 [TS2393]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker/spans",
+  "tests/checker",
 ]
 
 [TS2394]
@@ -678,20 +669,20 @@ oracle = [
 [TS2448]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 
 [TS2451]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 oracle = [
   "duplicate-export-specifier-basic",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker/spans",
+  "tests/checker",
 ]
 
 [TS2714]
@@ -703,7 +694,7 @@ oracle = [
 [TS2454]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 
 [TS2493]
@@ -799,10 +790,10 @@ oracle = [
 [TS2536]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
+  "tests/checker/spans",
 ]
 
 [TS2537]
@@ -847,17 +838,17 @@ fixtures = [
 [TS2554]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker/spans",
+  "tests/checker",
 ]
 
 [TS2576]
 status = "emitted"
 span_tests = [
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker",
 ]
 oracle = [
   "tests/compat-projects/class-instance-static-separation-basic",
@@ -866,11 +857,11 @@ oracle = [
 [TS2588]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/program.rs",
-  "crates/surge-ts-checker/tests/spans.rs",
+  "tests/checker",
+  "tests/checker/spans",
 ]
 
 [TS2580]
@@ -891,7 +882,7 @@ fixtures = [
 [TS2688]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/cli",
   "tests/compat-projects/configured-types-missing-basic/tsconfig.json",
 ]
 oracle = [
@@ -901,13 +892,13 @@ oracle = [
 [TS2693]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
-  "tests/smoke/manifest.toml",
+  "tests/cli",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/generics.rs",
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker/program_generics",
+  "tests/checker/spans",
+  "tests/checker",
 ]
 
 [TS1361]
@@ -937,7 +928,7 @@ oracle = [
 [TS2686]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker",
 ]
 oracle = [
   "tests/compat-projects/umd-global-module-reference-basic/tsconfig.json",
@@ -946,11 +937,11 @@ oracle = [
 [TS2741]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/compatibility.rs",
-  "crates/surge-ts-checker/tests/spans.rs",
+  "tests/checker/compatibility",
+  "tests/checker/spans",
 ]
 
 [TS2745]
@@ -1081,19 +1072,19 @@ oracle = [
 [TS2872]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
+  "tests/checker/spans",
 ]
 
 [TS2873]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
+  "tests/checker/spans",
 ]
 
 [TS7005]
@@ -1104,28 +1095,28 @@ oracle = [
   "module-evolving-array-basic",
 ]
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
+  "tests/checker/spans",
 ]
 
 [TS7006]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
-  "tests/smoke/manifest.toml",
+  "tests/cli",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/generics.rs",
-  "crates/surge-ts-checker/tests/program.rs",
-  "crates/surge-ts-checker/tests/spans.rs",
+  "tests/checker/program_generics",
+  "tests/checker",
+  "tests/checker/spans",
 ]
 
 [TS7016]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/cli",
 ]
 oracle = [
   "untyped-javascript-module-basic",
@@ -1148,7 +1139,7 @@ oracle = [
 [TS4111]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker",
 ]
 oracle = [
   "zod/trpc real-project parity (noPropertyAccessFromIndexSignature)",
@@ -1169,7 +1160,7 @@ oracle = [
 [TS4114]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker",
 ]
 oracle = [
   "ky real-project parity (noImplicitOverride)",
@@ -1232,7 +1223,7 @@ oracle = [
 [TS6133]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker",
 ]
 oracle = [
   "ky real-project parity (noUnusedParameters/noUnusedLocals)",
@@ -1241,7 +1232,7 @@ oracle = [
 [TS6196]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker",
 ]
 oracle = [
   "zod real-project parity (unused body-local type aliases and interfaces)",
@@ -1250,7 +1241,7 @@ oracle = [
 [TS7029]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker",
 ]
 oracle = [
   "zod/trpc real-project parity (noFallthroughCasesInSwitch)",
@@ -1259,7 +1250,7 @@ oracle = [
 [TS7030]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker",
 ]
 oracle = [
   "ky/zod/trpc real-project parity (noImplicitReturns)",
@@ -1272,7 +1263,7 @@ fixtures = [
   "tests/compat-projects/trpc-like-callbacks-basic/tsconfig.json",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
+  "tests/checker/spans",
 ]
 
 [TS7034]
@@ -1345,20 +1336,20 @@ oracle = [
 ["surge::parser-error"]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
+  "tests/cli",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker",
 ]
 
 ["surge::duplicate-type-parameter"]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/generics_spans.rs",
-  "crates/surge-ts-checker/tests/generics.rs",
+  "tests/checker/spans",
+  "tests/checker/program_generics",
 ]
 
 [TS1117]
@@ -1540,41 +1531,41 @@ oracle = [
 ["surge::unsupported-module-syntax"]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/project_mode.rs",
-  "tests/smoke/manifest.toml",
+  "tests/cli",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker/spans",
+  "tests/checker",
 ]
 
 ["surge::unsupported-declaration"]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-cli/tests/generics.rs",
-  "tests/smoke/manifest.toml",
+  "tests/cli/generics.test.ts",
+  "tests/smoke",
 ]
 span_tests = [
-  "crates/surge-ts-checker/tests/spans.rs",
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker/spans",
+  "tests/checker",
 ]
 
 ["surge::type-alias-cycle"]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 
 ["surge::type-declaration-cycle"]
 status = "emitted"
 fixtures = [
-  "tests/smoke/manifest.toml",
+  "tests/smoke",
 ]
 
 [TS2532]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker",
 ]
 oracle = [
   "possibly-undefined-receiver-basic and no-unchecked-indexed-access-basic presets",
@@ -1589,7 +1580,7 @@ oracle = [
 [TS18048]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker",
 ]
 oracle = [
   "possibly-undefined-receiver-basic and logical-assignment-narrowing-basic presets",
@@ -1598,7 +1589,7 @@ oracle = [
 [TS6198]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program.rs",
+  "tests/checker",
 ]
 oracle = [
   "unused-destructured-parameters-basic preset",
@@ -3361,19 +3352,19 @@ oracle = [
 [TS2441]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program/compiler_flags.rs",
+  "tests/checker/program_compiler_flags",
 ]
 
 [TS2818]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program/compiler_flags.rs",
+  "tests/checker/program_compiler_flags",
 ]
 
 [TS1216]
 status = "emitted"
 fixtures = [
-  "crates/surge-ts-checker/tests/program/compiler_flags.rs",
+  "tests/checker/program_compiler_flags",
 ]
 
 [TS2578]

@@ -26,7 +26,7 @@ now has `{ data: TData | undefined }` and not the first overload's
 supplied at the call rather than inferred from it.
 
 This project is deliberately clean under the oracle, so the control for the
-opposite direction lives in `crates/surge-ts-checker/tests/function_overloads.rs`
+opposite direction lives in `tests/checker/function_overloads/`
 (`a_property_matching_no_generic_overload_still_reports`) instead: a property
 matching neither overload must still report, and it does. It cannot live here,
 because tsc answers every failing overloaded call with `TS2769` and surge — with

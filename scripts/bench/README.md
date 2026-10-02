@@ -361,10 +361,10 @@ The suite exits non-zero when a zero-expected counter becomes nonzero, a
 constant/linear-expected counter classifies as superlinear, a synthetic
 project unexpectedly produces diagnostics, or a determinism check fails. Wall
 time is displayed per run but never gated, and there are no wall-clock
-assertions anywhere in the suite. Companion Rust integration tests live in
+assertions anywhere in the suite. Companion tests live in
 `crates/surge-ts-checker/tests/determinism.rs` (byte-identical diagnostics
 across fresh in-process runs) and
-`crates/surge-ts-checker/tests/complexity_regression.rs` (dependency `.d.ts`
+`tests/checker/complexity_regression/` (dependency `.d.ts`
 lexical-scope resolution, mirroring
 `tests/compat-projects/complexity-dependency-lexical-scope/`).
 

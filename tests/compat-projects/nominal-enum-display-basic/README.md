@@ -15,7 +15,7 @@ The last two declarations pin what must *not* change: an enum member is still
 assignable to its underlying primitive, and discriminant narrowing on a string
 enum member still selects the right union member.
 
-`crates/surge-ts-checker/tests/nominal_enum.rs` pins what the wrapper must not
+`tests/checker/nominal_enum/` pins what the wrapper must not
 break: a member stays assignable to its own member type and to its underlying
 primitive, a numeric member still accepts a plain number, and a mismatch against
 an unrelated type still reports.

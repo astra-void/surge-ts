@@ -131,7 +131,7 @@ The reference point for this phase is the TypeScript LSP underline behavior on t
   the existing excess-property (TS2353) policy, which already underlines the name.
 - Nested contextual errors should prefer the most specific span available inside arrays, tuples, objects, calls, and property accesses.
 - When the smaller span is unavailable, use the policy's pinned wrapper span and keep the code stable.
-- The span-focused regression tests in `tests/spans.rs` and `tests/example_spans.rs` are the baseline for this policy.
+- The span-focused fixtures in `tests/checker/spans/` (repository root), compared against tsc with `@surge-compare: spans`, are the baseline for this policy.
 - Use `cargo run -p surge-ts-cli -- --showSpans <file>` to inspect spans during development.
 - The TypeScript oracle comparison added in v0.60 compares code, file, and
   line/column first; it is a measurement baseline, not an exact span-parity
