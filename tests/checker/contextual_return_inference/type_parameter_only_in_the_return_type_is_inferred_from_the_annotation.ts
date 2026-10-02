@@ -1,0 +1,13 @@
+// zod's `$constructor` shape: `T` occurs in no argument, only in the declared
+// return type, so it is inferable solely from the target's annotation. Without
+// that the initializer callback's parameter degrades and everything typed by it
+// is silently unchecked.
+// @noImplicitAny: true
+interface Trait { tag: string }
+interface Ctor<T extends Trait> { create(): T }
+interface MyTrait extends Trait { alpha(n: number): void }
+declare function make<T extends Trait>(name: string, init: (instance: T) => void): Ctor<T>;
+const ctor: Ctor<MyTrait> = make("x", (instance) => {
+instance.alpha(1);
+});
+void ctor;

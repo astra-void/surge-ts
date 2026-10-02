@@ -1,0 +1,1 @@
+class Box<TValue> { constructor(readonly value: TValue) {} map<TResult>(map: (value: TValue) => TResult): TResult { return map(this.value); } } const mapped: number = new Box('abc').map((value) => value.length); const rejected: string = new Box('abc').map((value) => value.length);

@@ -1,0 +1,1 @@
+class C { m(a?: { k: string[] }, b?: { x: number }): void {} n(a: string, ...rest: number[]): void {} } type P = Parameters<C['m']>; const p1: P = []; const p2: P = [{ k: ['1'] }]; const p3: Parameters<C['n']> = ['a']; const p4: P = [{ k: '1' }];

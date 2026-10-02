@@ -1,0 +1,1 @@
+class Base { off(): void {} listeners(): number[] { return []; } } declare interface CE<TOutput> { on(event: 'data', listener: (d: TOutput) => void): this; } class CE<TOutput> extends Base {} const ee = new CE<string>(); ee.on('data', (d: string) => {}); ee.off(); const n: number = ee.listeners(); const m: number = ee.on;

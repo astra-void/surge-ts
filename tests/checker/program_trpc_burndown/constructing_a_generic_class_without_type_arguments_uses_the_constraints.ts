@@ -1,0 +1,1 @@
+class B<TContext extends object, TMeta extends object> { create(): { ctx: TContext; meta: TMeta } { return null as any; } } const b = new B(); b.nonexistent; const c: string = b.create(); class D<T = string> { get(): T { return null as any; } } const d: string = new D().get();

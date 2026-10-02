@@ -1,0 +1,1 @@
+class A2<T> { a!: T } interface VD { kind: 'vd' } interface Coll<N> { n: N; f1<T>(x: A2<T>): Coll<T>; f4<T>(x: T): Coll<T>; each(cb: (p: N) => void): this } declare const c: Coll<any>; declare const a2: A2<VD>; const n1: number = c.f1(a2).n; const n2: number = c.f4('x').n; c.f1(a2).each((p) => { const q: number = p; }); c.f1(a2).nope;

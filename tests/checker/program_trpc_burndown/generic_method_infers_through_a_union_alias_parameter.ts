@@ -1,0 +1,2 @@
+// @surge-compare: messages
+class A<T> { a!: T; check(v: any): v is T { return true; } } class B<T> { b!: T; check(v: any): v is T { return true; } } type Ty<T> = A<T> | B<T>; interface VD { kind: 'vd' } interface Trav { find<T extends object>(type: Ty<T>): Coll<T>; } interface Coll<N> extends Trav { nodes(): N[]; } declare const root: Coll<any>; declare const VD: Ty<VD>; const s: string = root.find(VD).nodes();

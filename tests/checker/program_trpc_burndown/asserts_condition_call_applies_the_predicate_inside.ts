@@ -1,0 +1,1 @@
+declare function assert(c: unknown, m?: string): asserts c; interface E { data: string } declare function isE(v: unknown): v is E; export function f(x: { a: 1 } | E) { assert(isE(x)); const n: number = x.data; }

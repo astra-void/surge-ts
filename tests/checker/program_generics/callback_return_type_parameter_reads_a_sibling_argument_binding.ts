@@ -1,0 +1,1 @@
+declare function pick<TValue, TResult>(value: TValue, map: (value: TValue) => TResult): TResult; const picked: number = pick('abc', (value) => value.length); const rejected: string = pick('abc', (value) => value.length);

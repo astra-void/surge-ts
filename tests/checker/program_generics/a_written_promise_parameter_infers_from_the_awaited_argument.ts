@@ -1,0 +1,2 @@
+// @surge-compare: messages
+interface Loader<TData> { load: (key: string) => Promise<TData> } declare function observe<TData>(loader: Loader<TData>): (listener: (value: TData) => void) => void; const subscribe = observe({ load: async (key: string) => key.length }); subscribe((value) => { const asNumber: number = value; void asNumber; }); subscribe((value) => { const asString: string = value; void asString; });

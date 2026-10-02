@@ -1,0 +1,1 @@
+interface Checker<T> { check(v: any): v is T } interface A { kind: 'a' } interface M { object: A | M; name: string } declare const tm: Checker<M>; declare function f(m: M): boolean; export function g(expr: M): boolean { if (tm.check(expr.object)) { return f(expr.object); } return !tm.check(expr.object) ? false : f(expr.object); }

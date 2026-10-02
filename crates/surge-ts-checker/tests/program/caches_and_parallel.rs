@@ -1,6 +1,4 @@
-use surge_ts_checker::{CheckerOptions, SourceFileInput, check_program, check_source};
-
-use super::*;
+use surge_ts_checker::{CheckerOptions, SourceFileInput, check_program};
 
 /// Regression coverage for the parallel check phase over script (non-module)
 /// files. Every worker builds its per-file declaration table by cloning the
@@ -103,10 +101,10 @@ fn parallel_worker_reuse_across_many_module_files_matches_serial() {
     );
 }
 
-/// The expected diagnostic surface of `region_fixture_files(6)`, asserted
-/// identically by the default-cap and bounded-cap tests below: the generic
-/// instantiation caches are recomputable memos, so any bucket cap must produce
-/// byte-identical diagnostics (only time/memory may change).
+/// The expected diagnostic surface of `region_fixture_files(6)`, the same one
+/// the default-cap fixture pins against tsc: the generic instantiation caches
+/// are recomputable memos, so any bucket cap must produce byte-identical
+/// diagnostics (only time/memory may change).
 fn assert_region_fixture_diagnostics(diags: &[surge_ts_diagnostics::Diagnostic]) {
     let ts2322: Vec<&surge_ts_diagnostics::Diagnostic> = diags
         .iter()
@@ -123,20 +121,19 @@ fn assert_region_fixture_diagnostics(diags: &[surge_ts_diagnostics::Diagnostic])
     }
 }
 
-#[test]
-fn generic_cache_default_cap_expected_diagnostics() {
-    let result = check_program(region_fixture_files(6));
-    assert_region_fixture_diagnostics(&result);
-}
-
-/// Same fixture and same golden expectation as the default-cap test, but with
-/// the per-declaration cache bucket cap forced to 1 (over-cap instantiations
-/// recompute instead of caching). Also checks a second in-process run for
-/// determinism under the bound. nextest runs each test in its own process, so
-/// the env override cannot leak into other tests.
+/// Same fixture and same golden expectation as the default-cap fixture
+/// (tests/checker/program_caches_and_parallel/generic_cache_default_cap_expected_diagnostics.ts),
+/// but with the per-declaration cache bucket cap forced to 1 (over-cap
+/// instantiations recompute instead of caching). Also checks a second
+/// in-process run for determinism under the bound. The test runs in its own
+/// process, so the env override cannot leak into other tests.
 #[test]
 fn generic_cache_bounded_cap_expected_diagnostics() {
-    // Safety: set before any checker thread is spawned in this test process.
+    if super::run_in_own_process(module_path!(), "generic_cache_bounded_cap_expected_diagnostics") {
+        return;
+    }
+    // Safety: set before any checker thread is spawned in this isolated,
+    // single-test process.
     unsafe { std::env::set_var("SURGE_GENERIC_CACHE_BUCKET_CAP", "1") };
     let first = check_program(region_fixture_files(6));
     assert_region_fixture_diagnostics(&first);
@@ -144,45 +141,8 @@ fn generic_cache_bounded_cap_expected_diagnostics() {
     assert_eq!(rendered_sorted(&first), rendered_sorted(&second));
 }
 
-/// Nested distributive conditionals multiply union widths (20^5 = 3.2M branch
-/// resolutions here). The per-root expansion budget must degrade the runaway
-/// alias to `unknown` instead of hanging or exhausting memory; without it this
-/// test does not terminate in any reasonable time.
-#[test]
-fn nested_distributive_conditional_blowup_degrades_instead_of_hanging() {
-    let mut source = String::new();
-    let members = (1..=20)
-        .map(|index| index.to_string())
-        .collect::<Vec<_>>()
-        .join(" | ");
-    source.push_str(&format!("type U = {members};\n"));
-    source.push_str(
-        "type Cross<A, B, C, D, E> = A extends any\n\
-         ? B extends any\n\
-         ? C extends any\n\
-         ? D extends any\n\
-         ? E extends any\n\
-         ? [A, B, C, D, E]\n\
-         : never : never : never : never : never;\n\
-         type Boom = Cross<U, U, U, U, U>;\n\
-         export const marker: number = 1;\n",
-    );
-
-    let diagnostics = check_source(&source, "blowup.ts");
-    assert!(
-        diagnostics
-            .iter()
-            .all(|diagnostic| !diagnostic.message.contains("marker")),
-        "budget degradation must not produce diagnostics on unrelated code: {diagnostics:?}"
-    );
-}
-
 fn program_files(files: Vec<SourceFileInput>) -> Vec<surge_ts_diagnostics::Diagnostic> {
     check_program(files)
-}
-
-fn codes_of(diags: &[&surge_ts_diagnostics::Diagnostic]) -> Vec<String> {
-    diags.iter().map(|d| d.code.to_string()).collect()
 }
 
 /// One consumer module per index for the signature-context generic tier: each
@@ -265,65 +225,6 @@ fn signature_context_generic_reuse_matches_fresh_expansion() {
     }
 }
 
-/// Two semantically different argument tuples of the same declaration must not
-/// collide: `Internals<number, string>` has `out: number`, so returning it as
-/// `string` is a genuine mismatch that must be reported even though
-/// `Internals<string, number>` was expanded (and possibly cached) first.
-#[test]
-fn signature_context_different_tuples_do_not_collide() {
-    let mut files = signature_context_fixture_files(2);
-    files.push(SourceFileInput {
-        file_name: "flip.ts".to_string(),
-        source_text: "import { Internals } from \"./core\";\n\
-             export function flip<T>(seed: T, internals: Internals<number, string>): string {\n\
-             \x20 return internals.out;\n\
-             }\n"
-        .to_string(),
-    });
-    let diags = program_files(files);
-    let flip: Vec<_> = diags.iter().filter(|d| d.file_name == "flip.ts").collect();
-    assert_eq!(
-        codes_of(&flip),
-        vec!["TS2322".to_string()],
-        "flip.ts must report its own tuple's mismatch: {:?}",
-        rendered_sorted(&diags)
-    );
-}
-
-/// Same declaration name and same argument tuple in two different files with
-/// different shapes must not collide (the key includes the declaring file).
-#[test]
-fn signature_context_same_name_different_files_do_not_collide() {
-    let files = vec![
-        SourceFileInput {
-            file_name: "a.ts".to_string(),
-            source_text: "export interface Shape<T> { tag: string; value: T; }\n\
-                 export function useA<X>(seed: X, s: Shape<number>): string { return s.tag; }\n"
-                .to_string(),
-        },
-        SourceFileInput {
-            file_name: "b.ts".to_string(),
-            source_text: "export interface Shape<T> { tag: number; value: T; }\n\
-                 export function useB<X>(seed: X, s: Shape<number>): string { return s.tag; }\n"
-                .to_string(),
-        },
-    ];
-    let diags = program_files(files);
-    let b: Vec<_> = diags.iter().filter(|d| d.file_name == "b.ts").collect();
-    let a: Vec<_> = diags.iter().filter(|d| d.file_name == "a.ts").collect();
-    assert!(
-        a.is_empty(),
-        "a.ts's Shape.tag is a string; no diagnostic expected: {:?}",
-        rendered_sorted(&diags)
-    );
-    assert_eq!(
-        codes_of(&b),
-        vec!["TS2322".to_string()],
-        "b.ts's Shape.tag is a number; returning it as string must be reported: {:?}",
-        rendered_sorted(&diags)
-    );
-}
-
 /// A recursive generic interface referenced from generic signatures stays
 /// sound: repeated references and repeated runs are stable.
 #[test]
@@ -350,48 +251,6 @@ fn signature_context_recursive_generic_repeated_references_are_stable() {
         .filter(|d| d.code.to_string() == "TS2322")
         .count();
     assert_eq!(ts2322, 6, "anchors only: {:?}", rendered_sorted(&first));
-}
-
-/// A generic interface whose body references an unresolved name degrades; that
-/// degraded expansion must never be frozen for other consumers, and adding
-/// more referencing modules must not change the diagnostic surface shape.
-#[test]
-fn signature_context_degraded_expansion_not_frozen() {
-    let make = |count: usize| {
-        let mut files = vec![SourceFileInput {
-            file_name: "core.ts".to_string(),
-            source_text: "export interface Broken<T> { value: T; oops: MissingThing; }\n"
-                .to_string(),
-        }];
-        files.extend((0..count).map(|i| SourceFileInput {
-            file_name: format!("use_{i}.ts"),
-            source_text: format!(
-                "import {{ Broken }} from \"./core\";\n\
-                 export function probe_{i}<T>(seed: T, b: Broken<string>): string {{\n\
-                 \x20 return b.value;\n\
-                 }}\n"
-            ),
-        }));
-        files
-    };
-    let one = program_files(make(1));
-    let many = program_files(make(8));
-    let codes_one: std::collections::BTreeSet<String> =
-        one.iter().map(|d| d.code.to_string()).collect();
-    let codes_many: std::collections::BTreeSet<String> =
-        many.iter().map(|d| d.code.to_string()).collect();
-    assert_eq!(
-        codes_one,
-        codes_many,
-        "degraded expansion reuse must not change the diagnostic code surface: one={:?} many={:?}",
-        rendered_sorted(&one),
-        rendered_sorted(&many)
-    );
-    assert!(
-        many.iter().all(|d| d.code.to_string() != "TS2339"),
-        "b.value exists; no member diagnostic expected: {:?}",
-        rendered_sorted(&many)
-    );
 }
 
 /// Instantiations whose arguments carry an in-scope type parameter (which
@@ -426,7 +285,14 @@ fn signature_context_placeholder_arguments_stay_stable() {
 /// diagnostics — including for signature-context instantiations.
 #[test]
 fn signature_context_bounded_cap_identical_diagnostics() {
-    // Safety: set before any checker thread is spawned in this test process.
+    if super::run_in_own_process(
+        module_path!(),
+        "signature_context_bounded_cap_identical_diagnostics",
+    ) {
+        return;
+    }
+    // Safety: set before any checker thread is spawned in this isolated,
+    // single-test process.
     unsafe { std::env::set_var("SURGE_GENERIC_CACHE_BUCKET_CAP", "1") };
     let files = signature_context_fixture_files(6);
     let bounded = check_program(files.clone());
@@ -493,131 +359,6 @@ fn signature_context_cache_does_not_leak_across_programs() {
 const MAKE_READONLY_SHAPE: &str = "export type MakeRO<T> = T extends Map<infer K, infer V>\n\
      \x20 ? ReadonlyMap<K, V>\n\
      \x20 : Readonly<T>;\n";
-
-/// An `any` member distributed into the conditional must degrade to an open
-/// `any` (the same rule the non-distributive path applies), not select the
-/// true branch with its `infer` captures unbound — which resolved
-/// `ReadonlyMap<K, V>` with `K`/`V` as unresolvable type names (surge-only
-/// TS2304s on zod v3's `MakeReadonly`) and silently degraded every enclosing
-/// interface expansion.
-#[test]
-fn distributive_conditional_any_member_stays_open_without_phantom_captures() {
-    let files = vec![
-        SourceFileInput {
-            file_name: "util.ts".to_string(),
-            source_text: MAKE_READONLY_SHAPE.to_string(),
-        },
-        SourceFileInput {
-            file_name: "use.ts".to_string(),
-            source_text: "import { MakeRO } from \"./util\";\n\
-                 export interface Holder<T> { value: MakeRO<T>; }\n\
-                 export function go<T>(seed: T, h: Holder<any>): void {\n\
-                 \x20 const v = h.value;\n\
-                 }\n"
-            .to_string(),
-        },
-    ];
-    let diagnostics = check_program(files);
-    assert!(
-        diagnostics.is_empty(),
-        "an `any` member must not produce unbound-capture diagnostics: {:?}",
-        rendered_sorted(&diagnostics)
-    );
-}
-
-/// The clean concrete instantiation of the same shape: a real `Map` member
-/// selects the true branch, binds `K`/`V` from the nominal reference, and the
-/// resulting `ReadonlyMap<string, number>` keeps checking members (`size` is a
-/// `number`, so the anchor assignment must still report TS2322).
-#[test]
-fn distributive_conditional_concrete_map_member_binds_infer_captures() {
-    let files = vec![
-        SourceFileInput {
-            file_name: "util.ts".to_string(),
-            source_text: MAKE_READONLY_SHAPE.to_string(),
-        },
-        SourceFileInput {
-            file_name: "use.ts".to_string(),
-            source_text: "import { MakeRO } from \"./util\";\n\
-                 type RO = MakeRO<Map<string, number>>;\n\
-                 declare const ro: RO;\n\
-                 export const bad: string = ro.size;\n"
-                .to_string(),
-        },
-    ];
-    let diagnostics = check_program(files);
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["TS2322".to_string()],
-        "the bound `ReadonlyMap<string, number>` must keep its true positive: {:?}",
-        rendered_sorted(&diagnostics)
-    );
-}
-
-/// A member that resolved to the `unknown` degradation sentinel (here via
-/// `keyof` of a non-object) must get the same "cannot decide" treatment as a
-/// syntactic sentinel: no branch is selected, no capture goes unbound, and the
-/// open result stays diagnostic-free.
-#[test]
-fn distributive_conditional_over_keyof_number_resolves() {
-    let files = vec![
-        SourceFileInput {
-            file_name: "util.ts".to_string(),
-            source_text: MAKE_READONLY_SHAPE.to_string(),
-        },
-        SourceFileInput {
-            file_name: "use.ts".to_string(),
-            source_text: "import { MakeRO } from \"./util\";\n\
-                 type Mystery = keyof 5;\n\
-                 declare const m: MakeRO<Mystery>;\n\
-                 export const ok: number = m;\n"
-                .to_string(),
-        },
-    ];
-    let diagnostics = check_program(files);
-    // `keyof 5` is `keyof Number`, a union of method names, so `MakeRO`
-    // resolves to string literals that are not assignable to `number`.
-    assert_eq!(
-        codes(&diagnostics),
-        vec!["TS2322"],
-        "{:?}",
-        rendered_sorted(&diagnostics)
-    );
-}
-
-/// Negative control: a genuinely unresolved name in the instantiation still
-/// reports its TS2304 — the `any`/sentinel guards must not swallow real
-/// resolution errors.
-#[test]
-fn distributive_conditional_unresolved_member_still_reports_ts2304() {
-    let files = vec![
-        SourceFileInput {
-            file_name: "util.ts".to_string(),
-            source_text: MAKE_READONLY_SHAPE.to_string(),
-        },
-        SourceFileInput {
-            file_name: "use.ts".to_string(),
-            source_text: "import { MakeRO } from \"./util\";\n\
-                 export type Broken = MakeRO<Missing>;\n"
-                .to_string(),
-        },
-    ];
-    let diagnostics = check_program(files);
-    assert!(
-        diagnostics
-            .iter()
-            .any(|d| d.code.to_string() == "TS2304" && d.message.contains("Missing")),
-        "a real unresolved name must keep its TS2304: {:?}",
-        rendered_sorted(&diagnostics)
-    );
-    assert!(
-        !diagnostics
-            .iter()
-            .any(|d| d.message.contains("'K'") || d.message.contains("'V'")),
-        "no phantom capture-name diagnostics: {:?}",
-        rendered_sorted(&diagnostics)
-    );
-}
 
 /// The full fixture set must produce byte-identical rendered diagnostics
 /// across job counts and repeated runs.
