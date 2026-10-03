@@ -3737,7 +3737,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
 
 /// The modifier codes this pass reports from tsc's `checkGrammarModifiers`
 /// port; the rest of its table is oxc's or another check's to report.
-const OWNED_MODIFIER_CODES: &[u32] = &[1029, 1040, 1042, 1044, 1089, 1243, 1274, 1277, 1319];
+const OWNED_MODIFIER_CODES: &[u32] = &[1024, 1029, 1031, 1040, 1042, 1044, 1089, 1243, 1274, 1277, 1319, 18019];
 
 /// Declaration-position and modifier grammar: tsc's
 /// `checkGrammarModuleElementContext`, `checkModuleDeclaration`,
