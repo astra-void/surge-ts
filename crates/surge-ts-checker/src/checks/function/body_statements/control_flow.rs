@@ -803,6 +803,13 @@ pub(crate) fn check_function_for_of_statement(
     // the key it just produced is not a possibly-undefined access.
     if for_of_statement.keys_only {
         narrow_reference_non_null_in_scope(&for_of_statement.iterable, scopes);
+        // ...and on what an optional chain there reads through
+        // (`optionalChainContainsReference`): `obj.main` in `obj.main?.childs`.
+        for contained in super::super::narrowing::optional_chain_contained_references(
+            &for_of_statement.iterable,
+        ) {
+            narrow_reference_non_null_in_scope(contained, scopes);
+        }
     }
     let loop_assigned_name = match (
         &for_of_statement.binding_name,
