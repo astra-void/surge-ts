@@ -446,6 +446,14 @@ pub(crate) fn check_function_while_statement(
     // (the assignments it made) and, unless the body always runs, the state
     // before the first iteration.
     let assigned = loop_join_names(&body);
+    // With nothing in the body breaking out, the loop is left only by its
+    // condition failing, so the code after it sees the condition's false edge.
+    let exits_by_condition_only = !crate::flow::body_breaks_enclosing_loop(&body);
+    // Otherwise each `if (guard) break;` is an edge out too; what every edge
+    // proves defined is defined after the loop.
+    let exit_defined = (!exits_by_condition_only && !runs_at_least_once && flow_state.tracked_local_count() > 0)
+        .then(|| loop_exit_defined_names(&condition, &body, ctx))
+        .flatten();
     widen_loop_assigned_bindings(&body, return_type, scopes, flow_state, ctx);
     if runs_at_least_once {
         scopes.push_child();
@@ -463,6 +471,9 @@ pub(crate) fn check_function_while_statement(
             flow_state,
             ctx,
         );
+        if exits_by_condition_only {
+            narrow_by_loop_exit(&condition, scopes, flow_state, ctx);
+        }
         return;
     }
 
@@ -517,6 +528,64 @@ pub(crate) fn check_function_while_statement(
     let body_types = branch_assignment_types(&assigned, scopes);
     scopes.pop_child();
     join_branch_pair(&entry_types, &body_types, scopes);
+    if exits_by_condition_only {
+        narrow_by_loop_exit(&condition, scopes, flow_state, ctx);
+    }
+    for name in exit_defined.into_iter().flatten() {
+        flow_state.mark_assigned(&name);
+    }
+}
+
+/// The names defined on every edge out of a `while` whose body breaks only
+/// through top-level `if (guard) break;`: the condition's false edge, and each
+/// break, taken where both the loop condition and its guard held. `None` for
+/// any other break.
+fn loop_exit_defined_names(
+    condition: &ParsedExpression,
+    body: &[ParsedFunctionBodyStatement],
+    ctx: &CheckerContext,
+) -> Option<Vec<String>> {
+    let predicate = |callee: &str| crate::flow::predicate_parameter(callee, ctx);
+    let names = |expression: &ParsedExpression, when: bool| -> Vec<String> {
+        crate::flow::condition_defined_names(expression, when, &predicate)
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    };
+    let mut defined = names(condition, false);
+    let held = names(condition, true);
+    for statement in body {
+        match statement {
+            ParsedFunctionBodyStatement::If(if_statement)
+                if matches!(if_statement.then_body.as_slice(), [ParsedFunctionBodyStatement::Break])
+                    && !crate::flow::body_breaks_enclosing_loop(&if_statement.else_body) =>
+            {
+                let at_break = names(&if_statement.condition, true);
+                defined.retain(|name| held.contains(name) || at_break.contains(name));
+            }
+            other if crate::flow::body_breaks_enclosing_loop(std::slice::from_ref(other)) => return None,
+            _ => {}
+        }
+    }
+    Some(defined)
+}
+
+/// The loop's exit is its condition's false edge (`bindWhileStatement`'s
+/// `postLoopLabel`): narrowed by it, and definitely assigned by it.
+fn narrow_by_loop_exit(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    flow_state: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    let tested = condition
+        .contains_assignment()
+        .then(|| condition.with_assignments_as_reads());
+    let tested = tested.as_ref().unwrap_or(condition);
+    narrow_discriminant_in_scope(tested, scopes, false, ctx);
+    if flow_state.tracked_local_count() > 0 {
+        crate::flow::mark_condition_defined(tested, false, flow_state, ctx);
+    }
 }
 
 fn check_while_condition(
