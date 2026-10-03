@@ -2688,6 +2688,22 @@
     "support": "emitted"
   },
   {
+    "code": "TS17012",
+    "category": "Error",
+    "message": "'{0}' is not a valid meta-property for keyword '{1}'. Did you mean '{2}'?",
+    "source": "typescript",
+    "arity": 3,
+    "support": "emitted"
+  },
+  {
+    "code": "TS18061",
+    "category": "Error",
+    "message": "'{0}' is not a valid meta-property for keyword 'import'. Did you mean 'meta' or 'defer'?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS17013",
     "category": "Error",
     "message": "Meta-property '{0}' is only allowed in the body of a function declaration, function expression, or constructor.",

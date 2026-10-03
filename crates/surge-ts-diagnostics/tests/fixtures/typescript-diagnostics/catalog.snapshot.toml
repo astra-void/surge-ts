@@ -2689,6 +2689,22 @@ message = "Identifier expected. '{0}' is a reserved word in strict mode. Modules
 arity = 1
 
 [[diagnostic]]
+code = "TS17012"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is not a valid meta-property for keyword '{1}'. Did you mean '{2}'?"
+arity = 3
+
+[[diagnostic]]
+code = "TS18061"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "'{0}' is not a valid meta-property for keyword 'import'. Did you mean 'meta' or 'defer'?"
+arity = 1
+
+[[diagnostic]]
 code = "TS17013"
 category = "Error"
 source = "typescript"

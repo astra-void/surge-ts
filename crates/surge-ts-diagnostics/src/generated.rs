@@ -3365,6 +3365,26 @@ pub const TS1214: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS17012: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS17012",
+    number: Some(17012),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' is not a valid meta-property for keyword '{1}'. Did you mean '{2}'?",
+    argument_count: 3,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS18061: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS18061",
+    number: Some(18061),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "'{0}' is not a valid meta-property for keyword 'import'. Did you mean 'meta' or 'defer'?",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS17013: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS17013",
     number: Some(17013),
@@ -8372,6 +8392,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1212,
     TS1213,
     TS1214,
+    TS17012,
+    TS18061,
     TS17013,
     TS2526,
     TS1338,
@@ -11667,6 +11689,33 @@ impl Diagnostic {
     pub fn ts1214(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS1214,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts17012(
+        arg0: impl ToString,
+        arg1: impl ToString,
+        arg2: impl ToString,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self::from_descriptor(
+            &TS17012,
+            vec![
+                DiagnosticArg::from(arg0.to_string()),
+                DiagnosticArg::from(arg1.to_string()),
+                DiagnosticArg::from(arg2.to_string()),
+            ],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts18061(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS18061,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )

@@ -3001,6 +3001,29 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
+    /// tsc's `checkGrammarMetaProperty`: `new.<name>` must be `new.target`,
+    /// and `import.<name>` must be `import.meta` (or `import.defer` called).
+    fn check_meta_property_name(&mut self, meta: &oxc_ast::ast::MetaProperty<'_>) {
+        let name = meta.property.name.as_str();
+        match meta.meta.name.as_str() {
+            "new" if name != "target" => self.push(17012, meta.property.span, &[name, "new", "target"]),
+            "import" if name != "meta" => {
+                let is_callee = matches!(self.stack.last(),
+                    Some(AstKind::CallExpression(call)) if call.callee.span() == meta.span);
+                if name == "defer" {
+                    if !is_callee {
+                        self.push(1005, Span::new(meta.span.end, meta.span.end), &["("]);
+                    }
+                } else if is_callee {
+                    self.push(18061, meta.property.span, &[name]);
+                } else {
+                    self.push(17012, meta.property.span, &[name, "import", "meta"]);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn check_new_target(&mut self, meta: &oxc_ast::ast::MetaProperty<'_>) {
         if meta.meta.name != "new" || meta.property.name != "target" {
             return;
@@ -3339,6 +3362,7 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 self.check_global_augmentation_names(&global.body.body);
             }
             AstKind::MetaProperty(meta) => {
+                self.check_meta_property_name(meta);
                 self.check_new_target(meta);
                 // `checkImportMetaProperty` under a node module kind; the
                 // checker keeps it for a file that is not ESM.
