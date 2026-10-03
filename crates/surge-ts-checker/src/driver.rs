@@ -841,17 +841,24 @@ pub(crate) fn sync_global_this_symbol_with_scripts(
     // and assignability walked an unbounded unfolding of the same type; a
     // reference keeps `typeof globalThis` deferred inside the intersection and
     // tsc-shaped in diagnostics.
-    let global_object =
-        surge_ts_types::Type::Object(crate::metrics::alloc_object_type(properties, None));
+    //
+    // Go declares `globalThis` in the globals table it exports, so the global
+    // object has itself as a read-only member. The member holds the object
+    // weakly: a strong self-reference would be a cycle nothing reclaims.
+    let global_object = std::sync::Arc::new_cyclic(|own: &std::sync::Weak<surge_ts_types::Type>| {
+        properties.insert(
+            "globalThis".into(),
+            surge_ts_types::ObjectProperty::required(global_object_reference(std::sync::Arc::new(
+                WeakGlobalObjectType(own.clone()),
+            )))
+            .with_readonly(true),
+        );
+        surge_ts_types::Type::Object(crate::metrics::alloc_object_type(properties, None))
+    });
     ctx.ambient_global_symbols.insert(
         "globalThis".to_string(),
         crate::symbols::SymbolInfo {
-            ty: surge_ts_types::Type::Reference(surge_ts_types::TypeReference::new(
-                GLOBAL_THIS_REFERENCE_ID,
-                "typeof globalThis",
-                Vec::new(),
-                std::sync::Arc::new(GlobalObjectType(std::sync::Arc::new(global_object))),
-            )),
+            ty: global_object_reference(std::sync::Arc::new(GlobalObjectType(global_object))),
             kind: crate::symbols::SymbolKind::Const,
             function_signature: None,
         },
@@ -863,7 +870,37 @@ pub(crate) fn sync_global_this_symbol_with_scripts(
 /// ids.
 pub(crate) const GLOBAL_THIS_REFERENCE_ID: &str = "\u{0}globalThis";
 
+fn global_object_reference(
+    resolver: std::sync::Arc<dyn surge_ts_types::ResolveReference>,
+) -> surge_ts_types::Type {
+    surge_ts_types::Type::Reference(surge_ts_types::TypeReference::new(
+        GLOBAL_THIS_REFERENCE_ID,
+        "typeof globalThis",
+        Vec::new(),
+        resolver,
+    ))
+}
+
 struct GlobalObjectType(std::sync::Arc<surge_ts_types::Type>);
+
+/// `globalThis.globalThis`: the global object, held weakly by its own member.
+struct WeakGlobalObjectType(std::sync::Weak<surge_ts_types::Type>);
+
+impl surge_ts_types::ResolveReference for WeakGlobalObjectType {
+    fn resolve(&self) -> surge_ts_types::Type {
+        self.0.upgrade().map_or(surge_ts_types::Type::Unknown, |object| (*object).clone())
+    }
+
+    fn resolve_arc(&self) -> std::sync::Arc<surge_ts_types::Type> {
+        self.0
+            .upgrade()
+            .unwrap_or_else(|| std::sync::Arc::new(surge_ts_types::Type::Unknown))
+    }
+
+    fn peek_resolved(&self) -> Option<std::sync::Arc<surge_ts_types::Type>> {
+        self.0.upgrade()
+    }
+}
 
 impl surge_ts_types::ResolveReference for GlobalObjectType {
     fn resolve(&self) -> surge_ts_types::Type {

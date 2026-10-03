@@ -219,17 +219,15 @@ fn signature_declared_names(parsed_files: &[ParsedProgramFile]) -> std::collecti
 /// Each script file's own top-level values, for the other files to see: the
 /// binder declares every script's `var`/`let`/`const`/namespace in the one
 /// global table, so `let greeting` in `a.ts` is in scope in `b.ts` and in every
-/// module. Only a program where another script or a module reads them needs
-/// them.
+/// module. `typeof globalThis` reads them too (`script_global_object_members`),
+/// so even a lone script's are collected.
 pub(crate) fn collect_script_values(
     parsed_files: &[ParsedProgramFile],
     global_symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Vec<Option<Arc<SymbolTable>>> {
     let mut values = vec![None; parsed_files.len()];
-    let scripts = parsed_files.iter().filter(|parsed_file| is_script_source(parsed_file)).count();
-    let read_elsewhere = scripts >= 2 || parsed_files.iter().any(|parsed_file| parsed_file.is_module);
-    if scripts == 0 || !read_elsewhere {
+    if !parsed_files.iter().any(is_script_source) {
         return values;
     }
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
