@@ -559,7 +559,8 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
                 crate::ParsedStatement::ImportDeclaration(_)
                     | crate::ParsedStatement::ExportDeclaration(_)
             )
-        });
+        })
+        || super::grammar_context::contains_import_meta(&parsed.program);
 
     let (mut import_call_specifiers, import_calls) =
         super::import_calls::collect_import_call_specifiers(&parsed.program, source_text, javascript);

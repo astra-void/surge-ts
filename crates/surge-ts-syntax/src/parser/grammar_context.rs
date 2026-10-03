@@ -94,8 +94,30 @@ pub(crate) fn collect_context_grammar_diagnostics(
 }
 
 /// tsc's `ExternalModuleIndicator` under the default `moduleDetection: auto`:
-/// a top-level import or export of any form makes the file a module.
+/// a top-level import or export of any form makes the file a module, and so
+/// does an `import.meta` anywhere in it (`getImportMetaIfNecessary`).
 pub(crate) fn is_external_module(program: &Program<'_>) -> bool {
+    has_top_level_module_syntax(program) || contains_import_meta(program)
+}
+
+pub(crate) fn contains_import_meta(program: &Program<'_>) -> bool {
+    struct Finder(bool);
+    impl<'a> Visit<'a> for Finder {
+        fn visit_meta_property(&mut self, meta: &oxc_ast::ast::MetaProperty<'a>) {
+            if meta.meta.name == "import" && meta.property.name == "meta" {
+                self.0 = true;
+            }
+        }
+    }
+    if !program.source_text.contains("meta") {
+        return false;
+    }
+    let mut finder = Finder(false);
+    finder.visit_program(program);
+    finder.0
+}
+
+fn has_top_level_module_syntax(program: &Program<'_>) -> bool {
     program.body.iter().any(|statement| {
         matches!(
             statement,
