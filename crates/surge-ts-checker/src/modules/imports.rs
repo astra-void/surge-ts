@@ -365,7 +365,10 @@ fn report_import_local_declaration_conflicts(
             };
             let target_meaning = if imported_name == "*" {
                 let mut meaning = MEANING_NAMESPACE;
+                // `import * as x` of an `export =` module is the assigned value
+                // (`resolveESModuleSymbol`).
                 if export_table.default_symbol.is_some()
+                    || export_table.export_assignment_symbol.is_some()
                     || export_table.symbols.iter_shared().next().is_some()
                 {
                     meaning |= MEANING_VALUE;

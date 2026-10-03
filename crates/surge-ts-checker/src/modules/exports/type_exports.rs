@@ -282,6 +282,10 @@ fn lookup_export_assignment_member(
         // unavailable; `any` answers every member, which is also what an
         // `export = <any>` surface means.
         Type::Any => Type::Any,
+        // The value's type is not known yet (an `export =` of a declared
+        // constant reads its annotation once the module's scope is bound):
+        // nothing says the member is missing.
+        Type::Unknown => Type::Unknown,
         // Declared properties only — `Object.prototype` members are not module
         // exports, so `import { toString } from "path"` must stay TS2305. A
         // static side left open (its base was modelled as `any`) answers like
