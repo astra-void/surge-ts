@@ -350,6 +350,9 @@ fn is_in_expression(expression: &Expression<'_>) -> bool {
 
 fn restricted_class_members(class: &Class<'_>) -> Vec<ParsedRestrictedMember> {
     let mut restricted = Vec::new();
+    // A duplicate member's modifiers are its symbol's `valueDeclaration`'s,
+    // which is the first declaration of the name.
+    let mut declared: std::collections::HashSet<(String, bool)> = std::collections::HashSet::new();
     for element in &class.body.body {
         let (key, computed, is_static, accessibility, accessor_side) = match element {
             ClassElement::MethodDefinition(method)
@@ -358,6 +361,8 @@ fn restricted_class_members(class: &Class<'_>) -> Vec<ParsedRestrictedMember> {
                 for parameter in &method.value.params.items {
                     if let oxc_ast::ast::BindingPattern::BindingIdentifier(identifier) =
                         &parameter.pattern
+                        && (parameter.accessibility.is_some() || parameter.readonly || parameter.r#override)
+                        && declared.insert((identifier.name.to_string(), false))
                         && let Some(accessibility) = restricted_accessibility(parameter.accessibility)
                     {
                         restricted.push(ParsedRestrictedMember {
@@ -397,11 +402,6 @@ fn restricted_class_members(class: &Class<'_>) -> Vec<ParsedRestrictedMember> {
             ),
             _ => continue,
         };
-        let Some(accessibility) = restricted_accessibility(accessibility)
-            .or_else(|| super::jsdoc::member_accessibility_at(element.span().start))
-        else {
-            continue;
-        };
         let name = if computed {
             super::types::computed_key_name(key)
         } else {
@@ -409,6 +409,18 @@ fn restricted_class_members(class: &Class<'_>) -> Vec<ParsedRestrictedMember> {
                 PropertyKey::StaticIdentifier(key) => Some(key.name.to_string()),
                 key => super::types::computed_key_name(key),
             }
+        };
+        if accessor_side.is_none()
+            && let Some(name) = &name
+            && !declared.insert((name.clone(), is_static))
+            && !matches!(element, ClassElement::MethodDefinition(_))
+        {
+            continue;
+        }
+        let Some(accessibility) = restricted_accessibility(accessibility)
+            .or_else(|| super::jsdoc::member_accessibility_at(element.span().start))
+        else {
+            continue;
         };
         if let Some(name) = name {
             restricted.push(ParsedRestrictedMember {
