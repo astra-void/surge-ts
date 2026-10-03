@@ -516,7 +516,8 @@ impl<'a> ContextCollector<'a, '_> {
                 AstKind::ArrayAssignmentTarget(_)
                 | AstKind::ObjectAssignmentTarget(_)
                 | AstKind::AssignmentTargetWithDefault(_)
-                | AstKind::AssignmentTargetPropertyProperty(_),
+                | AstKind::AssignmentTargetPropertyProperty(_)
+                | AstKind::AssignmentTargetRest(_),
             ) => true,
             _ => false,
         };
