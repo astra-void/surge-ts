@@ -2179,7 +2179,7 @@ pub(crate) fn collect_namespace_member_value_symbols(
 /// namespace following the class or function it merges with adds its members
 /// to that value (tsc's declaration merging keeps the constructor and call
 /// signatures): a permissive class is `any`, which already has every member.
-fn merge_namespace_value_objects(previous: &Type, current: &Type) -> Type {
+pub(crate) fn merge_namespace_value_objects(previous: &Type, current: &Type) -> Type {
     let (Type::Object(previous), Type::Object(current)) = (previous, current) else {
         return match (previous, current) {
             (Type::Any, _) => Type::Any,

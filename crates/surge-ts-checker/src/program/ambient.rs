@@ -1721,9 +1721,50 @@ pub(crate) fn apply_file_keyed_module_augmentation(
                 let _ = export_table
                     .symbols
                     .insert_shared(name.clone(), symbol.clone());
+                // The namespace object was computed before the augmentation's
+                // values joined the table.
+                export_table.namespace_export_object_type = None;
             }
         }
+        merge_augmentation_values_into_export_assignment(export_table, augmentation);
     }
+}
+
+/// Go merges an augmentation into what `export =` resolves to when that is a
+/// namespace (`mergeModuleAugmentation`), so the augmentation's values are
+/// members of the assigned value — a nested namespace merging member by member.
+fn merge_augmentation_values_into_export_assignment(
+    export_table: &mut ModuleExportTable,
+    augmentation: &ModuleExportTable,
+) {
+    let Some(assignment) = export_table.export_assignment_symbol.as_ref() else {
+        return;
+    };
+    if !matches!(assignment.ty, surge_ts_types::Type::Object(_)) {
+        return;
+    }
+    let mut members = surge_ts_types::PropertyMap::default();
+    for (name, symbol) in augmentation.symbols.iter_shared() {
+        if !name.contains('.') {
+            members.insert(
+                name.as_ref().into(),
+                surge_ts_types::ObjectProperty::required(symbol.ty.clone()),
+            );
+        }
+    }
+    if members.is_empty() {
+        return;
+    }
+    let merged = crate::modules::merge_namespace_value_objects(
+        &assignment.ty,
+        &surge_ts_types::Type::Object(crate::metrics::alloc_object_type(members, None)),
+    );
+    export_table.export_assignment_symbol = Some(Arc::new(crate::symbols::SymbolInfo {
+        ty: merged,
+        kind: assignment.kind,
+        function_signature: assignment.function_signature.clone(),
+    }));
+    export_table.namespace_export_object_type = None;
 }
 
 pub(crate) fn has_file_keyed_module_augmentations(ctx: &CheckerContext) -> bool {
