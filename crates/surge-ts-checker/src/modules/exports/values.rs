@@ -1161,7 +1161,9 @@ pub(crate) fn object_with_namespace_members(
     let mut merged = crate::metrics::alloc_object_type(
         properties,
         object.string_index_type.as_ref().map(|ty| (**ty).clone()),
-    );
+    )
+    .with_number_index_type(object.number_index_type.as_deref().cloned())
+    .with_readonly_indexes(object.string_index_readonly, object.number_index_readonly);
     merged.alias_name = object.alias_name.clone();
     merged.alias_id = object.alias_id.clone();
     merged.construct_signature = object.construct_signature.clone();
