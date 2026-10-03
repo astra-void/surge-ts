@@ -109,7 +109,14 @@ fn is_module_alias(name: &str, ctx: &CheckerContext) -> bool {
 /// `checkAndReportErrorForUsingValueAsType`: the name is a value and not a
 /// namespace.
 fn names_plain_value(name: &str, ctx: &CheckerContext) -> bool {
-    ctx.symbols.get(name).is_some() || ctx.ambient_global_symbols.get(name).is_some()
+    // A declaration's own annotation is resolved before its value is bound
+    // (`var x: x`); the module's value table already has it.
+    ctx.symbols.get(name).is_some()
+        || ctx.ambient_global_symbols.get(name).is_some()
+        || ctx.module_value_fallback.as_ref().is_some_and(|table| table.get(name).is_some())
+        || ctx
+            .module_local_values_for_file(&ctx.file_name)
+            .is_some_and(|table| table.get(name).is_some())
 }
 
 /// tsc's `resolveEntityName` for the head of a qualified type name
