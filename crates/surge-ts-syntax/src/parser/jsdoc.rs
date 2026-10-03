@@ -1101,7 +1101,28 @@ impl<'s> TagParser<'s> {
             self.skip_whitespace();
         }
         let mut is_const = false;
-        while self.token() == Token::Identifier && matches!(self.s.token_text(), "const" | "in" | "out") {
+        // `parseModifiersEx` takes every modifier keyword followed by a name;
+        // the checker, not the parser, rejects the ones a type parameter
+        // cannot carry. `default` needs a declaration keyword after it.
+        while self.token() == Token::Identifier
+            && matches!(
+                self.s.token_text(),
+                "abstract"
+                    | "accessor"
+                    | "async"
+                    | "const"
+                    | "declare"
+                    | "export"
+                    | "in"
+                    | "out"
+                    | "override"
+                    | "private"
+                    | "protected"
+                    | "public"
+                    | "readonly"
+                    | "static"
+            )
+        {
             let state = self.s.mark();
             let modifier = self.s.token_text() == "const";
             self.next_token();
