@@ -644,12 +644,11 @@ fn parse_variadic_tuple(tuple_type: &TSTupleType<'_>) -> ParsedType {
     {
         return parse_type(&rest.type_annotation).unwrap_or(ParsedType::Unknown);
     }
-    // The homogeneous idiom (`[T, ...T[]]`, the non-empty array every enum and
-    // union builder takes) stays the array it always lowered to: the checker
-    // infers an array literal as `T[]` where tsc contextually types it as a
-    // tuple, and every consumer of that idiom is written against the array.
-    // Only the shapes the array cannot express keep their elements.
-    match homogeneous_variadic_tuple(tuple_type) {
+    // `[...T[]]` normalizes to `T[]` (`createNormalizedTupleType`); any fixed
+    // element keeps the tuple, whose minimum length and element positions
+    // the array cannot state.
+    let lone_rest = matches!(tuple_type.element_types.as_slice(), [TSTupleElement::TSRestType(_)]);
+    match if lone_rest { homogeneous_variadic_tuple(tuple_type) } else { ParsedType::Unknown } {
         ParsedType::Unknown if variadic_tuple_elements_enabled() => {
             match variadic_tuple_elements(tuple_type) {
                 Some(elements) => ParsedType::VariadicTuple(std::sync::Arc::new(elements)),
@@ -729,11 +728,8 @@ fn variadic_tuple_elements(tuple_type: &TSTupleType<'_>) -> Option<Vec<ParsedTup
     Some(elements)
 }
 
-/// A variadic tuple whose fixed and rest elements are all the *same* type
-/// (`[T, ...T[]]`, the non-empty-array idiom every enum/tuple builder uses)
-/// carries no more information than `T[]` beyond a minimum length surge does
-/// not model, so it lowers to the array. A heterogeneous one (`[string,
-/// ...number[]]`) would lose its element types that way and stays degraded.
+/// A variadic tuple whose elements are all the *same* type lowered to that
+/// type's array; `Unknown` otherwise.
 fn homogeneous_variadic_tuple(tuple_type: &TSTupleType<'_>) -> ParsedType {
     // `[...T]` spreads a tuple *type parameter*: it is `T` itself, not `T[]`.
     if let [TSTupleElement::TSRestType(rest)] = tuple_type.element_types.as_slice()
