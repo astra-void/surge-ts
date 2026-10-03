@@ -71,6 +71,40 @@ fn collect(statements: &[ParsedStatement], out: &mut FxHashMap<String, ForwardDe
                     collect(std::slice::from_ref(declaration), out);
                 }
             }
+            ParsedStatement::NamespaceDeclaration(namespace) if !namespace.is_declare => {
+                collect_namespace_classes(&namespace.statements, &namespace.name, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A namespace's exported classes, keyed by their dotted path from the file
+/// (`N.E`), which is how a qualified `extends N.E` reaches them
+/// (`checkPropertyNotUsedBeforeDeclaration`).
+fn collect_namespace_classes(
+    statements: &[ParsedStatement],
+    prefix: &str,
+    out: &mut FxHashMap<String, ForwardDeclaration>,
+) {
+    for statement in statements {
+        let (exported, inner) = match statement {
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => (true, declaration.as_ref()),
+                _ => continue,
+            },
+            other => (false, other),
+        };
+        match inner {
+            ParsedStatement::ClassDeclaration(class) if exported && !class.is_declare => {
+                if let Some(span) = class.name_span {
+                    out.entry(format!("{prefix}.{}", class.name))
+                        .or_insert(ForwardDeclaration { span, is_enum: false });
+                }
+            }
+            ParsedStatement::NamespaceDeclaration(namespace) if !namespace.is_declare => {
+                collect_namespace_classes(&namespace.statements, &format!("{prefix}.{}", namespace.name), out);
+            }
             _ => {}
         }
     }
@@ -89,7 +123,19 @@ pub(crate) fn check_statement_forward_references(
         walk(expression, classes, &mut reported);
     });
     if let Some(class) = declared_class(statement) {
-        walk_class_head(class, classes, ctx.options.experimental_decorators, &mut reported);
+        walk_class_head(class, classes, ctx.options.experimental_decorators, &[], &mut reported);
+    }
+    let unwrapped = match statement {
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Statement { declaration, .. } => declaration.as_ref(),
+            _ => statement,
+        },
+        other => other,
+    };
+    if let ParsedStatement::NamespaceDeclaration(namespace) = unwrapped
+        && !namespace.is_declare
+    {
+        walk_namespace_class_heads(namespace, classes, ctx.options.experimental_decorators, &[], &mut reported);
     }
     for (name, span, is_enum) in reported {
         let diagnostic = if is_enum {
@@ -98,6 +144,37 @@ pub(crate) fn check_statement_forward_references(
             Diagnostic::ts2449(&name, ctx.file_name.clone())
         };
         ctx.push(diagnostic.with_span(convert_span(span)));
+    }
+}
+
+/// The heads of the classes a namespace body declares, which run when the
+/// body does, resolved under its scope chain.
+fn walk_namespace_class_heads(
+    namespace: &surge_ts_syntax::ParsedNamespaceDeclaration,
+    classes: &FxHashMap<String, ForwardDeclaration>,
+    legacy_decorators: bool,
+    scope: &[String],
+    reported: &mut Vec<(String, TextSpan, bool)>,
+) {
+    let mut inner_scope = scope.to_vec();
+    inner_scope.push(namespace.name.clone());
+    for statement in &namespace.statements {
+        let statement = match statement {
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Statement { declaration, .. } => declaration.as_ref(),
+                _ => continue,
+            },
+            other => other,
+        };
+        match statement {
+            ParsedStatement::ClassDeclaration(class) => {
+                walk_class_head(class, classes, legacy_decorators, &inner_scope, reported);
+            }
+            ParsedStatement::NamespaceDeclaration(nested) if !nested.is_declare => {
+                walk_namespace_class_heads(nested, classes, legacy_decorators, &inner_scope, reported);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -121,6 +198,7 @@ fn walk_class_head(
     class: &ParsedClassDeclaration,
     classes: &FxHashMap<String, ForwardDeclaration>,
     legacy_decorators: bool,
+    scope: &[String],
     reported: &mut Vec<(String, TextSpan, bool)>,
 ) {
     if class.is_declare {
@@ -129,12 +207,35 @@ fn walk_class_head(
     // The `extends` expression is evaluated with the declaration.
     for base in &class.extends {
         let head = base.name.split('.').next().unwrap_or(&base.name);
-        if let Some(declared) = classes.get(head)
+        if scope.is_empty()
+            && let Some(declared) = classes.get(head)
             && let Some(span) = base.span
             && span.start < declared.span.start
         {
             let use_span = TextSpan { start: span.start, end: span.start + head.len() };
             reported.push((head.to_string(), use_span, declared.is_enum));
+            continue;
+        }
+        // A qualified base reads the class off its namespace, resolved from
+        // the innermost enclosing namespace outward.
+        if let Some(dot) = base.name.rfind('.')
+            && let Some(span) = base.span
+        {
+            let declared = (0..=scope.len()).rev().find_map(|depth| {
+                let key = if depth == 0 {
+                    base.name.clone()
+                } else {
+                    format!("{}.{}", scope[..depth].join("."), base.name)
+                };
+                classes.get(&key)
+            });
+            if let Some(declared) = declared
+                && span.start < declared.span.start
+            {
+                let name = &base.name[dot + 1..];
+                let start = span.start + dot + 1;
+                reported.push((name.to_string(), TextSpan { start, end: start + name.len() }, declared.is_enum));
+            }
         }
     }
     if let Some(expression) = &class.heritage_expression {
