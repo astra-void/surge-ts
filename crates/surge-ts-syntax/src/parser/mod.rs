@@ -69,6 +69,7 @@ pub use isolated_declarations::{IsolatedDeclarationDiagnostic, isolated_declarat
 pub use json::{is_json_file_name, parse_json_module_type};
 pub use jsx_uses::{JsxRuntimeOptions, entity_root as jsx_entity_root, jsx_runtime_import};
 pub use number_text::js_number_to_string;
+pub use types::merge_parsed_call_signatures;
 
 fn parse_statement(statement: &Statement<'_>) -> Option<Vec<ParsedStatement>> {
     let lowered = lower_statement(statement);

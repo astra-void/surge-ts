@@ -529,11 +529,16 @@ pub(crate) fn merge_interface_infos(
             .number_index_type
             .clone()
             .or_else(|| incoming.body.number_index_type.clone()),
-        existing
-            .body
-            .call_signature
-            .clone()
-            .or_else(|| incoming.body.call_signature.clone()),
+        // One permissive fold over every declaration's signatures, as the
+        // parser folds one declaration's (`merge_parsed_call_signatures`); the
+        // first declaration's fold alone made a call matching a later
+        // declaration's signature a false TS2554.
+        match (&existing.body.call_signature, &incoming.body.call_signature) {
+            (Some(existing), Some(incoming)) => {
+                Some(surge_ts_syntax::merge_parsed_call_signatures(existing, incoming))
+            }
+            (existing, incoming) => existing.clone().or_else(|| incoming.clone()),
+        },
         {
             // Merged declarations contribute their call signatures in
             // declaration order, so a call resolves against any of them.
