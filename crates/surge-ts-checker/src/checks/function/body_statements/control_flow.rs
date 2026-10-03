@@ -830,6 +830,7 @@ pub(crate) fn check_function_for_of_statement(
     {
         flow_state.mark_assigned(name);
     }
+    let head_type = element_type.clone();
     insert_binding_name(&for_of_statement.binding_name, element_type, scopes);
     // A `var` head is function-scoped: it stays visible after the loop.
     if for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::Var
@@ -864,6 +865,21 @@ pub(crate) fn check_function_for_of_statement(
     // head types land on the declaring frames, outside this child.
     widen_loop_assigned_bindings(&for_of_statement.body, return_type, scopes, flow_state, ctx);
     let entry_types = branch_assignment_types(&assigned, scopes);
+    // The head is assigned at the top of every iteration
+    // (`bindForInOrForOfStatement`), after the back edge joins: whatever the
+    // body writes to it, the body starts from the element.
+    if let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } = &for_of_statement.binding_name
+        && let Some(symbol) = scopes.resolve(name).cloned()
+        && symbol.ty != head_type
+    {
+        scopes.insert_current(
+            name.as_str(),
+            crate::symbols::SymbolInfo {
+                ty: head_type,
+                ..symbol
+            },
+        );
+    }
     let pending_mutations = prime_loop_mutations(&for_of_statement.body, scopes, ctx);
     if flow_active {
         flow_state.begin_branch_capture();
