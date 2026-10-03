@@ -1598,7 +1598,19 @@ pub(crate) fn check_function_declaration_body(
     // suppression the plain sentinel gives: a component's returned JSX then
     // reported its callback props as implicit `any`.
     let settled_signature;
-    let function_type = if function.return_type.is_none()
+    let full_signature = full_signature_of(function.full_signature.as_ref(), ctx);
+    let function_type = if let Some(signature) = &full_signature {
+        // The collected signature is the full signature itself; the body
+        // binds each parameter to its type at the parameter's position.
+        settled_signature = FunctionType::new(
+            full_signature_parameter_types(signature, function.parameters.len()),
+            signature.return_type().clone(),
+            function.parameters.last().is_some_and(|parameter| parameter.rest),
+            signature::required_parameter_count(&function.parameters),
+        )
+        .with_parameter_names(signature::written_binding_names(&function.parameters));
+        &settled_signature
+    } else if function.return_type.is_none()
         && matches!(
             function_type.return_type(),
             Type::Reference(reference) if reference.id.contains(BODY_RETURN_ID_TAG)
@@ -1652,7 +1664,7 @@ pub(crate) fn check_function_declaration_body(
         function_type,
         type_parameters,
         Some(signature_info),
-        return_type.is_some(),
+        return_type.is_some() || full_signature.is_some(),
         return_type_span.or(name_span),
         is_generator,
         is_async,
