@@ -67,7 +67,20 @@ pub(crate) fn check_variable_declaration_with_symbols(
         }
         _ => None,
     };
+    let merged_enum_members = variable
+        .is_enum_object
+        .then(|| {
+            ctx.module_value_fallback
+                .as_ref()
+                .and_then(|fallback| fallback.get_shared(&variable_name))
+                .or_else(|| symbols.get_shared(&variable_name))
+        })
+        .flatten();
     let symbol = check_variable_declaration_against_symbols(variable, symbols, ctx, options)?;
+    let symbol = match merged_enum_members {
+        Some(merged) => with_merged_namespace_members(symbol, &merged),
+        None => symbol,
+    };
     crate::semantic::record_declaration_type(variable_name_span, &symbol.ty, ctx);
 
     if is_duplicate {
@@ -109,6 +122,38 @@ pub(crate) fn check_variable_declaration_with_symbols(
         }
     }
     Some(symbol)
+}
+
+/// An enum merges with a same-named namespace into one symbol whose value
+/// carries the namespace's exports beside the members. The binding passes
+/// already bound that merged value (`apply_merging_namespace_value_members`);
+/// the enum's own declaration re-binds the object without them, so the members
+/// the merged value has and the enum object lacks are carried over.
+fn with_merged_namespace_members(symbol: SymbolInfoHandle, merged: &SymbolInfo) -> SymbolInfoHandle {
+    let (Type::Object(object), Type::Object(merged_object)) = (&symbol.ty, &merged.ty) else {
+        return symbol;
+    };
+    if merged_object
+        .properties
+        .iter()
+        .all(|(name, _)| object.properties.contains_key(name))
+    {
+        return symbol;
+    }
+    let mut extended = object.clone();
+    let mut properties = (*object.properties).clone();
+    for (name, property) in merged_object.properties.iter() {
+        properties
+            .entry(name.clone())
+            .or_insert_with(|| property.clone());
+    }
+    extended.properties = Arc::new(properties);
+    extended.property_map_id = None;
+    Arc::new(SymbolInfo {
+        ty: Type::Object(extended),
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    })
 }
 
 /// Reports an initializer whose type is not assignable to the annotation it

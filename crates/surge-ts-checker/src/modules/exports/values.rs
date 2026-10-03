@@ -550,24 +550,35 @@ fn apply_merging_namespace_value_members(
     }
 }
 
-/// tsc merges a function declaration and a same-named namespace into one
-/// symbol. Hoisted signature collection binds the function alone; this
+/// tsc merges a function, class or enum declaration and a same-named namespace
+/// into one symbol. Hoisted signature collection binds the declaration alone; this
 /// overlays the namespace's value members onto it, and binds nothing a
-/// declaration of the scope did not. (A class merges the same way, but surge
-/// cannot yet tell its merged members from its `static` ones, which TS2576
-/// depends on.)
+/// declaration of the scope did not. TS2576 asks the class's own `static`
+/// members (`class_has_static_member`), so merged members do not read as
+/// statics.
 pub(crate) fn apply_namespace_members_to_declarations(
     statements: &[ParsedStatement],
     symbols: &mut SymbolTable,
     ctx: &mut CheckerContext,
 ) {
+    let class_or_enum_names: surge_ts_types::fx::FxHashSet<&str> = statements
+        .iter()
+        .filter_map(|statement| match peel_exported_statement(statement) {
+            ParsedStatement::ClassDeclaration(class) => Some(class.name.as_str()),
+            ParsedStatement::VariableDeclaration(variable) if variable.is_enum_object => {
+                Some(variable.name.as_str())
+            }
+            _ => None,
+        })
+        .collect();
     let merging: Vec<_> = merging_namespace_value_members(statements)
         .into_iter()
         .filter(|(name, _, declared_by_a_function)| {
-            *declared_by_a_function
-                && symbols
-                    .get_own(name)
-                    .is_some_and(|symbol| matches!(symbol.ty, Type::Function(_)))
+            symbols.get_own(name).is_some_and(|symbol| match &symbol.ty {
+                Type::Function(_) => *declared_by_a_function,
+                Type::Object(_) => class_or_enum_names.contains(name.as_str()),
+                _ => false,
+            })
         })
         .map(|(name, members, declared_by_a_function)| {
             let members = source_namespace_value_members(statements, &name, ctx).unwrap_or(members);
@@ -1162,6 +1173,9 @@ fn object_with_namespace_members(
         properties,
         object.string_index_type.as_ref().map(|ty| (**ty).clone()),
     );
+    merged.number_index_type = object.number_index_type.clone();
+    merged.string_index_readonly = object.string_index_readonly;
+    merged.number_index_readonly = object.number_index_readonly;
     merged.alias_name = object.alias_name.clone();
     merged.alias_id = object.alias_id.clone();
     merged.construct_signature = object.construct_signature.clone();
