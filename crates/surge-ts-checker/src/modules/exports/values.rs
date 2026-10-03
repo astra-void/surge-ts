@@ -646,6 +646,20 @@ pub(crate) fn apply_expando_members(
                     };
                 }
             }
+            // `var g = F.g = {}`: the write in the initializer declares too.
+            ParsedStatement::VariableDeclaration(variable) => {
+                let mut chained = match &variable.initializer {
+                    Some(surge_ts_syntax::ParsedExpression::MemberAssignment(inner)) => Some(inner.as_ref()),
+                    _ => None,
+                };
+                while let Some(assignment) = chained {
+                    assignments.push(assignment);
+                    chained = match &assignment.value {
+                        surge_ts_syntax::ParsedExpression::MemberAssignment(inner) => Some(inner.as_ref()),
+                        _ => None,
+                    };
+                }
+            }
             ParsedStatement::If(if_statement) => {
                 collect_nested_member_assignments(&if_statement.then_body, &[], &mut assignments);
                 collect_nested_member_assignments(&if_statement.else_body, &[], &mut assignments);

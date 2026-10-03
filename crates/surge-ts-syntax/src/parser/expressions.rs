@@ -2090,6 +2090,36 @@ fn parse_assignment_value(
     })
 }
 
+/// In JavaScript, a member write that is the value of another write or of a
+/// variable's initializer (`F.a = F.b = v`, `var g = F.g = {}`): the binder
+/// declares an expando for it there as anywhere (`bindExpandoPropertyAssignment`),
+/// and the declarations collected from those two places see it. Writes
+/// through `this`/`super` and the CommonJS export targets keep their own
+/// lowering.
+pub(super) fn parse_javascript_member_assignment_chain(expression: &Expression<'_>) -> Option<ParsedExpression> {
+    if !super::spans::lowering_javascript() {
+        return None;
+    }
+    let Expression::AssignmentExpression(assignment) = expression.without_parentheses() else {
+        return None;
+    };
+    if assignment.operator != oxc_syntax::operator::AssignmentOperator::Assign
+        || super::commonjs::is_export_target(&assignment.left)
+    {
+        return None;
+    }
+    let object = match &assignment.left {
+        oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) => &member.object,
+        oxc_ast::ast::AssignmentTarget::ComputedMemberExpression(member) => &member.object,
+        _ => return None,
+    };
+    if matches!(object.without_parentheses(), Expression::ThisExpression(_) | Expression::Super(_)) {
+        return None;
+    }
+    super::functions::parse_member_assignment(assignment)
+        .map(|member| ParsedExpression::MemberAssignment(Box::new(member)))
+}
+
 /// A member write used as a value (`(o.p = f())`, `a.b = c.d = v`), which tsc
 /// checks as it checks the statement (`checkBinaryLikeExpression`). A write
 /// through `this` or `super` keeps to its statement form's own rules, and so

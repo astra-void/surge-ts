@@ -386,7 +386,10 @@ pub(super) fn parse_member_assignment(
         _ => return None,
     };
 
-    let (value, value_span) = parse_expression(&assignment.right);
+    let (value, value_span) = match super::expressions::parse_javascript_member_assignment_chain(&assignment.right) {
+        Some(chain) => (chain, oxc_span::GetSpan::span(&assignment.right)),
+        None => parse_expression(&assignment.right),
+    };
     if value == ParsedExpression::Unknown {
         return None;
     }

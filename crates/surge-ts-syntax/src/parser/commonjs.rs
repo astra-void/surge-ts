@@ -266,6 +266,12 @@ enum ExportTarget {
     Property(String),
 }
 
+/// Whether `target` is `module.exports` or a property of `exports` /
+/// `module.exports`, which the CommonJS lowering declares.
+pub(crate) fn is_export_target(target: &AssignmentTarget<'_>) -> bool {
+    export_target(target).is_some()
+}
+
 fn export_target(target: &AssignmentTarget<'_>) -> Option<ExportTarget> {
     let (object, name) = match target {
         AssignmentTarget::StaticMemberExpression(member) => {
