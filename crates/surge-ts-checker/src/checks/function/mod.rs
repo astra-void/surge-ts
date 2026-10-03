@@ -387,6 +387,13 @@ fn infer_member_type(
         // only methods assign; an empty array is `any[]`, and a member
         // assigned nothing but `null` or `undefined` is `any`.
         surge_ts_syntax::ParsedInferredMemberSource::ThisAssignments(assignments) => {
+            // A member only methods assign is looked up in the base class
+            // first (`getTypeOfPropertyInBaseClass`).
+            if !assignments.in_constructor
+                && let Some(base_type) = base_class_property_type(&member.class_name, &member.member_name, ctx)
+            {
+                return Some(base_type);
+            }
             let mut shadow = body_inference_shadow_context(ctx);
             let mut types = Vec::with_capacity(assignments.values.len() + 1);
             for value in &assignments.values {
@@ -411,6 +418,21 @@ fn infer_member_type(
             type_is_deeply_concrete(&ty).then_some(ty)
         }
     }
+}
+
+/// The type of `member_name` on the first base of the class `class_name`.
+fn base_class_property_type(class_name: &str, member_name: &str, ctx: &mut CheckerContext) -> Option<Type> {
+    let Some(crate::symbols::TypeDeclarationInfo::Interface(class)) = ctx.lookup_type_declaration(class_name) else {
+        return None;
+    };
+    if !class.is_class_instance {
+        return None;
+    }
+    let base = class.body.extends.first()?.clone();
+    let diagnostics_before = ctx.diagnostics().len();
+    let base_type = crate::infer::types::map_parsed_type(surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(base)), ctx);
+    ctx.truncate_diagnostics(diagnostics_before);
+    base_type.get_property_access_type(member_name).filter(|ty| !ty.is_unknown())
 }
 
 pub(crate) fn inferred_member_reference(
