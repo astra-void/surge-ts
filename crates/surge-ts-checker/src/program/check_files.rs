@@ -1843,9 +1843,13 @@ pub(crate) fn check_program_file(
             timings.utility_alias_validation += utility_validation_start.elapsed()
         });
 
-        let validation_symbols = std::mem::replace(&mut ctx.symbols, saved_symbols);
+        let validation_symbols =
+            std::sync::Arc::new(std::mem::replace(&mut ctx.symbols, saved_symbols));
 
         let mut signature_ctx = ctx.clone_without_diagnostics();
+        // A class's constructor parameters are mapped against the context, not
+        // the signature scope, so a default naming a module value reads it here.
+        signature_ctx.module_value_fallback = Some(validation_symbols.clone());
         signature_ctx.reset_utility_diagnostic_keys();
         signature_ctx.resolved_named_types =
             std::sync::Arc::new(std::sync::Mutex::new(Default::default()));
@@ -1884,7 +1888,7 @@ pub(crate) fn check_program_file(
         );
         extend_diagnostics_dedup(&mut ctx.diagnostics, signature_ctx.diagnostics);
 
-        ctx.module_value_fallback = Some(std::sync::Arc::new(validation_symbols));
+        ctx.module_value_fallback = Some(validation_symbols);
 
         let statement_check_start = Instant::now();
         crate::flow::begin_never_initialized_file(
