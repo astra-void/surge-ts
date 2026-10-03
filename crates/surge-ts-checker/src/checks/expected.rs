@@ -2108,7 +2108,7 @@ fn mutable_sequence_shape(member: &Type) -> Type {
     // wrapper, whose own resolution is the mutable shape; `peeled` follows
     // the whole chain.
     match member.peeled() {
-        sequence @ (Type::Array(_) | Type::Tuple(_)) => sequence,
+        sequence @ (Type::Array(_) | Type::Tuple(_) | Type::OpenTuple(_)) => sequence,
         _ => member.clone(),
     }
 }
