@@ -127,7 +127,13 @@ pub(super) fn evaluate_index_access(
     }
     // tsc's `checkElementAccessExpression` checks the index before it gives
     // up on an error object.
-    let Some(symbol) = symbols.get(object_name) else {
+    // As an identifier read resolves it: the module's value table backs a
+    // binding a namespace body's scope does not carry.
+    let Some(symbol) = symbols.get_handle(object_name).or_else(|| {
+        ctx.module_value_fallback
+            .as_ref()
+            .and_then(|fallback| fallback.get_handle(object_name))
+    }) else {
         if object_name != "super" {
             report_unresolved_value_name(
                 object_name,
