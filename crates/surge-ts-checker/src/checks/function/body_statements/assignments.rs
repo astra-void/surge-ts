@@ -2194,6 +2194,11 @@ pub(crate) fn update_assigned_symbol_type(
     scopes: &mut ScopeStack,
 ) {
     let InferredExpression::Known(value_ty) = inferred_value else {
+        // The back edge carries whatever the write left, which surge could not
+        // type either; the binding must not keep its entry type at the head.
+        if super::branch_assignments::in_loop_prepass() {
+            widen_to_declared(target_name, scopes);
+        }
         return;
     };
 
