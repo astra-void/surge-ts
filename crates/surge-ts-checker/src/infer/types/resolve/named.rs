@@ -2008,7 +2008,9 @@ fn report_missing_import_type_member(
 
 /// tsc's `fillMissingTypeArguments` for a JavaScript reference to a generic
 /// class or interface: a missing argument is `any`, and too few arguments
-/// are reported only under `noImplicitAny` (`isJsImplicitAny`).
+/// are reported only under `noImplicitAny` (`isJsImplicitAny`). A default of
+/// `{}` or `unknown` is `any` there too; the arguments are filled at the
+/// reference so the instantiation is keyed by them.
 fn javascript_filled_type_arguments(
     named_type: std::sync::Arc<ParsedNamedType>,
     declaration: &TypeDeclarationInfo,
@@ -2020,18 +2022,46 @@ fn javascript_filled_type_arguments(
     if !surge_ts_syntax::is_javascript_file_name(&ctx.file_name) {
         return named_type;
     }
-    let min = super::substitution::min_type_argument_count(&interface.body.type_parameters);
-    if named_type.type_arguments.len() >= min {
+    let type_parameters = &interface.body.type_parameters;
+    let min = super::substitution::min_type_argument_count(type_parameters);
+    // Only a run of such defaults right after the written arguments can be
+    // filled here: a default before one would have to be resolved in the
+    // declaring scope, which `bind_type_arguments` does.
+    let any_defaults = type_parameters
+        .iter()
+        .skip(named_type.type_arguments.len().max(min))
+        .take_while(|parameter| parameter.default_type.as_ref().is_some_and(is_empty_object_or_unknown_type))
+        .count();
+    if named_type.type_arguments.len() >= min && any_defaults == 0 {
         return named_type;
     }
-    if ctx.options.no_implicit_any
+    if named_type.type_arguments.len() < min
+        && ctx.options.no_implicit_any
         && (!ctx.resolving_class_heritage || crate::infer::types::is_javascript_heritage_reference(ctx))
     {
         report_interface_type_argument_count(interface, &named_type, ctx);
     }
     let mut filled = (*named_type).clone();
-    filled.type_arguments.resize(min, ParsedType::Any);
+    let filled_count = filled.type_arguments.len().max(min) + any_defaults;
+    filled.type_arguments.resize(filled_count, ParsedType::Any);
     std::sync::Arc::new(filled)
+}
+
+/// A default `fillMissingTypeArguments` turns into `any` in JavaScript: one
+/// identical to the empty object type or to `unknown`.
+fn is_empty_object_or_unknown_type(ty: &ParsedType) -> bool {
+    match ty {
+        ParsedType::UnknownKeyword => true,
+        ParsedType::Object(object) => {
+            object.properties.is_empty()
+                && object.string_index_type.is_none()
+                && object.number_index_type.is_none()
+                && object.call_signature.is_none()
+                && object.construct_signature.is_none()
+                && !object.non_primitive
+        }
+        _ => false,
+    }
 }
 
 /// tsc's `getTypeFromClassOrInterfaceReference` arity check, at the reference
