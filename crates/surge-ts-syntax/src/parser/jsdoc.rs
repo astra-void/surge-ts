@@ -830,6 +830,13 @@ impl<'s> TagParser<'s> {
         }
         let type_start = if has_brace { self.s.pos } else { self.s.token_start };
         let parsed = parse_type_text(self.s.text, type_start);
+        for (name, span) in &parsed.not_generic {
+            self.diagnostics.push(crate::ParsedGrammarDiagnostic {
+                kind: crate::ParsedGrammarDiagnosticKind::Ts(2315),
+                span: *span,
+                name: Some(name.clone()),
+            });
+        }
         for end in &parsed.missing_types {
             let bytes = self.s.text.as_bytes();
             let mut start = *end;
@@ -1421,6 +1428,9 @@ struct ParsedTypeText {
     /// Where each lone `?` ends: tsgo's `parseJSDocNullableType` requires a
     /// type after it and reports TS1110 at the next token.
     missing_types: Vec<usize>,
+    /// Each intended type written with type arguments (`Void<T>`), which
+    /// `checkNoTypeArguments` reports as not generic: its name and span.
+    not_generic: Vec<(String, TextSpan)>,
 }
 
 /// tsgo's `parseJSDocType` over the text at `start`: the vendored oxc parser
@@ -1441,6 +1451,7 @@ fn parse_type_text(text: &str, start: usize) -> ParsedTypeText {
             },
             end,
             missing_types: Vec::new(),
+            not_generic: Vec::new(),
         };
     };
     let span = ty.span();
@@ -1451,7 +1462,9 @@ fn parse_type_text(text: &str, start: usize) -> ParsedTypeText {
     let mut import_types = ImportTypeSpecifiers(Vec::new());
     import_types.visit_ts_type(&ty);
     IMPORT_TYPE_SPECIFIERS.with(|specifiers| specifiers.borrow_mut().extend(import_types.0));
-    IntendedTypes { ast: AstBuilder::new(&allocator) }.visit_ts_type(&mut ty);
+    let mut intended = IntendedTypes { ast: AstBuilder::new(&allocator), not_generic: Vec::new() };
+    intended.visit_ts_type(&mut ty);
+    let not_generic = intended.not_generic;
     let lowered = super::types::parse_type(&ty);
     ParsedTypeText {
         ty: JsDocType {
@@ -1464,6 +1477,7 @@ fn parse_type_text(text: &str, start: usize) -> ParsedTypeText {
         },
         end,
         missing_types,
+        not_generic,
     }
 }
 
@@ -1512,6 +1526,7 @@ fn object_or_object_array(ty: &TSType<'_>) -> (bool, bool) {
 /// primitives and `Object.<K, V>` for a record.
 struct IntendedTypes<'a> {
     ast: AstBuilder<'a>,
+    not_generic: Vec<(String, TextSpan)>,
 }
 
 impl<'a> VisitMut<'a> for IntendedTypes<'a> {
@@ -1528,18 +1543,30 @@ impl<'a> VisitMut<'a> for IntendedTypes<'a> {
                 )
             });
             if let TSTypeName::IdentifierReference(name) = &mut reference.type_name {
-                let replacement = match (name.name.as_str(), arguments) {
-                    ("String", 0) => Some(self.ast.ts_type_string_keyword(span)),
-                    ("Number", 0) => Some(self.ast.ts_type_number_keyword(span)),
-                    ("BigInt", 0) => Some(self.ast.ts_type_big_int_keyword(span)),
-                    ("Boolean", 0) => Some(self.ast.ts_type_boolean_keyword(span)),
-                    ("Void", 0) => Some(self.ast.ts_type_void_keyword(span)),
-                    ("Undefined", 0) => Some(self.ast.ts_type_undefined_keyword(span)),
-                    ("Null", 0) => Some(self.ast.ts_type_null_keyword(span)),
+                let replacement = match name.name.as_str() {
+                    "String" => Some(self.ast.ts_type_string_keyword(span)),
+                    "Number" => Some(self.ast.ts_type_number_keyword(span)),
+                    "BigInt" => Some(self.ast.ts_type_big_int_keyword(span)),
+                    "Boolean" => Some(self.ast.ts_type_boolean_keyword(span)),
+                    "Void" => Some(self.ast.ts_type_void_keyword(span)),
+                    "Undefined" => Some(self.ast.ts_type_undefined_keyword(span)),
+                    "Null" => Some(self.ast.ts_type_null_keyword(span)),
                     _ => None,
                 };
+                let intended_function = matches!(name.name.as_str(), "Function" | "function");
+                if arguments > 0 && (replacement.is_some() || intended_function) {
+                    self.not_generic.push((
+                        name.name.to_string(),
+                        TextSpan { start: span.start as usize, end: span.end as usize },
+                    ));
+                }
                 if let Some(replacement) = replacement {
                     *ty = replacement;
+                    return;
+                }
+                if intended_function && arguments > 0 {
+                    name.name = self.ast.ident("Function");
+                    reference.type_arguments = None;
                     return;
                 }
                 match (name.name.as_str(), arguments) {
