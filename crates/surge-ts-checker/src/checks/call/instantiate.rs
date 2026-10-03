@@ -3498,6 +3498,29 @@ pub(crate) fn collect_inferred_type_argument(
                 } else {
                     expected_types
                 };
+            // tsc's union holds the alias's resolved signature, so `T |
+            // InitialDataFunction<T>` pairs a function argument member with
+            // `() => T | undefined` exactly as the written signature would.
+            let alias_bodies: Vec<Option<(ParsedType, std::sync::Arc<str>)>> =
+                expected_types.iter().map(|member| signature_alias_body(member, ctx)).collect();
+            let expanded;
+            let expected_types: &[ParsedType] = if alias_bodies.iter().any(Option::is_some) {
+                expanded = expected_types
+                    .iter()
+                    .zip(&alias_bodies)
+                    .map(|(member, body)| body.as_ref().map_or_else(|| member.clone(), |(body, _)| body.clone()))
+                    .collect::<Vec<_>>();
+                &expanded
+            } else {
+                expected_types
+            };
+            let alias_file_of = |target: &ParsedType| {
+                expected_types
+                    .iter()
+                    .position(|member| std::ptr::eq(member, target))
+                    .and_then(|index| alias_bodies[index].as_ref())
+                    .map(|(_, file)| file.clone())
+            };
             // `T | PromiseLike<T>` (the lib's `then` callbacks, `Awaited`-style
             // parameters): a promise argument infers `T` from what it resolves
             // to, never as the whole promise — tsc pairs it with the
@@ -3701,14 +3724,12 @@ pub(crate) fn collect_inferred_type_argument(
                 } else {
                     surge_ts_types::union_type(members)
                 };
-                collect_inferred_type_argument(
-                    target,
-                    &member,
-                    substitution,
-                    widen_literals,
-                    ctx,
-                    depth,
-                );
+                match alias_file_of(target) {
+                    Some(file) => with_inference_scope_file(&file, ctx, |ctx| {
+                        collect_inferred_type_argument(target, &member, substitution, widen_literals, ctx, depth)
+                    }),
+                    None => collect_inferred_type_argument(target, &member, substitution, widen_literals, ctx, depth),
+                }
             }
         }
         _ => {}
@@ -3814,6 +3835,33 @@ fn reference_names_declaration(
     lookup_declaration_for_inference(&named.name, ctx).is_some()
         && !matches!(named.name.as_str(), "Array" | "ReadonlyArray")
         && reference_targets_declaration(reference, named, ctx)
+}
+
+/// The signature a generic alias reference stands for, written in the
+/// reference's arguments, and the file declaring the alias, whose names the
+/// signature is written in.
+fn signature_alias_body(
+    member: &ParsedType,
+    ctx: &CheckerContext,
+) -> Option<(ParsedType, std::sync::Arc<str>)> {
+    let ParsedType::Named(named) = member else {
+        return None;
+    };
+    if named.type_arguments.is_empty() {
+        return None;
+    }
+    let handle = lookup_declaration_for_inference(&named.name, ctx)?;
+    let TypeDeclarationInfo::Alias(alias) = handle.get() else {
+        return None;
+    };
+    if !matches!(alias.body.ty, ParsedType::Function(_)) {
+        return None;
+    }
+    let map = filled_type_parameter_map(&alias.body.type_parameters, &named.type_arguments);
+    Some((
+        crate::infer::substitute_parsed_type_parameters_deep(&alias.body.ty, &map),
+        alias.file_name.clone(),
+    ))
 }
 
 /// Union targets with each alias whose body is a union replaced by that
