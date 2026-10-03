@@ -754,6 +754,30 @@ fn evaluate_expression_with_expected_type_inner(
         return evaluate_spread_tuple_literal(elements, expected_type, true, symbols, ctx);
     }
 
+    // `getContextualTypeForElementExpression`: against an iterable that is no
+    // array, each element is contextually typed by the iterated type. No
+    // element has a slot to be elaborated onto, so the literal is related as
+    // a whole by the caller.
+    if let ParsedExpression::ArrayLiteral { elements, .. } = expression
+        && !elements.is_empty()
+        && elements.iter().all(|element| !element.spread)
+        && matches!(expected_type.peeled(), Type::Object(_))
+        && let Some(iterated) = crate::checks::expr::iteration_types_of_iterable(
+            expected_type,
+            crate::checks::expr::IterationUse::sync(false),
+        )
+        .map(|types| types.yield_type)
+        .filter(|ty| !ty.is_unmodelled())
+    {
+        return evaluate_array_literal_in_context(
+            elements,
+            &Type::Array(Box::new(iterated)),
+            fallback_span,
+            symbols,
+            ctx,
+        );
+    }
+
     // An object literal against a tuple or array target is checked against its
     // apparent members (indices, `length`, the array methods): tsc reports the
     // first property that is none of them as excess, at the property, rather
