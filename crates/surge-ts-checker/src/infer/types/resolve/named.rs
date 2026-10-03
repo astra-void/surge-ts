@@ -324,6 +324,7 @@ fn resolve_named_type_inner(
             };
         }
         let promise = std::sync::Arc::new(ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: "Promise".to_string(),
             span: named_type.span,
             type_arguments: vec![ParsedType::Any],
