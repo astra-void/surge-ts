@@ -1211,9 +1211,12 @@ pub(crate) fn resolve_interface_declaration(
                     else {
                         continue;
                     };
+                    // Every function-valued member of the lib's `Array<T>` is
+                    // declared with method syntax, so it relates bivariantly.
+                    let is_method = matches!(member_ty, Type::Function(_));
                     properties.insert(
                         (*name).into(),
-                        surge_ts_types::ObjectProperty::required(member_ty),
+                        surge_ts_types::ObjectProperty::required(member_ty).with_method(is_method),
                     );
                 }
             }
