@@ -1584,6 +1584,22 @@ fn check_member_assignment_itself(
     let target_unresolved = crate::checks::assign::type_contains_unknown(&target_type);
     let checkpoint = ctx.diagnostics().len();
 
+    // `checkObjectLiteral`: an empty JavaScript object literal that expando
+    // writes declare members on is typed by those members, and the write
+    // initializing an expando member with it is that member's declaration —
+    // its value is the member's own type.
+    if surge_ts_syntax::is_javascript_file_name(&ctx.file_name)
+        && matches!(&assignment.value, ParsedExpression::ObjectLiteral { properties, .. } if properties.is_empty())
+        && is_expando_receiver(object, &visible_symbols, ctx)
+    {
+        crate::checks::function::narrowing::narrow_assignment_target_in_scope(
+            &assignment.target,
+            &target_type,
+            scopes,
+        );
+        return;
+    }
+
     // An expando container's member is an assignment declaration, whose
     // value has no contextual signature to take `this` from.
     if is_expando_receiver(object, &visible_symbols, ctx) {
