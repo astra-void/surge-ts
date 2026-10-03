@@ -2497,15 +2497,23 @@ impl<'a> Visit<'a> for GrammarCollector {
     }
 
     fn visit_sequence_expression(&mut self, sequence: &oxc_ast::ast::SequenceExpression<'a>) {
-        // Every operand but the last has its value discarded.
+        // tsc parses `a, b, c` as `(a, b), c`: each comma's discarded left
+        // operand is the whole sequence before it, side-effect free only when
+        // every operand in it is, and reported from the first operand on.
         let indirect_call = self.indirect_call_sequences.contains(&sequence.span.start);
+        let start = sequence.expressions.first().map_or(sequence.span.start, |first| first.span().start);
+        let mut prefix_side_effect_free = true;
         for expression in sequence
             .expressions
             .iter()
             .take(sequence.expressions.len().saturating_sub(1))
         {
-            if !indirect_call && is_side_effect_free(expression) {
-                self.push(Kind::UnusedCommaOperand, expression.span(), None);
+            prefix_side_effect_free &= is_side_effect_free(expression);
+            if !prefix_side_effect_free {
+                break;
+            }
+            if !indirect_call {
+                self.push(Kind::UnusedCommaOperand, Span::new(start, expression.span().end), None);
             }
         }
         oxc_ast_visit::walk::walk_sequence_expression(self, sequence);
