@@ -350,10 +350,18 @@ fn resolve_named_type_inner(
         // head nothing could resolve: surge does not model a namespace's full
         // member surface (`@types/*`, generated clients), so a miss past the
         // head is surge's, not the source's.
-        let may_be_unbound_value_base = ctx.collecting_signatures
-            && ctx.resolving_class_heritage
+        // A class base is an expression: one naming a value (`extends x<T>`
+        // over a constructor-typed variable) is the class check's to judge.
+        let may_be_unbound_value_base = ctx.resolving_class_heritage
             && crate::program::current_dts_expansion_reason()
-                == crate::program::DtsExpansionReason::InterfaceHeritageResolution;
+                == crate::program::DtsExpansionReason::InterfaceHeritageResolution
+            && (ctx.collecting_signatures
+                || !named_type.name.contains('.')
+                    && (ctx.symbols.get(&named_type.name).is_some()
+                        || ctx
+                            .module_value_fallback
+                            .as_ref()
+                            .is_some_and(|fallback| fallback.get(&named_type.name).is_some())));
         if let Some((specifier, qualifier)) = surge_ts_syntax::split_import_type_name(&named_type.name) {
             let reported = report_missing_import_type_member(specifier, qualifier, &named_type, ctx);
             return ResolvedType {
