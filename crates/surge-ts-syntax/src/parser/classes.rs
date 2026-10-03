@@ -727,6 +727,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
             };
 
             Some(ParsedClassMember::Property(ParsedClassProperty {
+                is_auto_accessor: false,
                 span: Some(text_span_from_oxc_span(property.span)),
                 name,
                 name_span: Some(text_span_from_oxc_span(name_span)),
@@ -792,6 +793,7 @@ fn parse_class_member(member: &ClassElement<'_>) -> Option<ParsedClassMember> {
                 None => (None, None),
             };
             Some(ParsedClassMember::Property(ParsedClassProperty {
+                is_auto_accessor: true,
                 span: Some(text_span_from_oxc_span(property.span)),
                 name,
                 name_span: Some(text_span_from_oxc_span(name_span)),
@@ -985,6 +987,7 @@ fn javascript_this_members(
             .collect();
         let span = Some(text_span_from_oxc_span(found.name_span));
         members.push(ParsedClassMember::Property(ParsedClassProperty {
+            is_auto_accessor: false,
             span,
             name: found.name.clone(),
             name_span: span,

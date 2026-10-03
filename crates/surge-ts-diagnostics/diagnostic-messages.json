@@ -2704,6 +2704,14 @@
     "support": "emitted"
   },
   {
+    "code": "TS2855",
+    "category": "Error",
+    "message": "Class field '{0}' defined by the parent class is not accessible in the child class via super.",
+    "source": "typescript",
+    "arity": 1,
+    "support": "emitted"
+  },
+  {
     "code": "TS17013",
     "category": "Error",
     "message": "Meta-property '{0}' is only allowed in the body of a function declaration, function expression, or constructor.",

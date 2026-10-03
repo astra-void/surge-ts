@@ -3385,6 +3385,16 @@ pub const TS18061: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS2855: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2855",
+    number: Some(2855),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "Class field '{0}' defined by the parent class is not accessible in the child class via super.",
+    argument_count: 1,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS17013: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS17013",
     number: Some(17013),
@@ -8394,6 +8404,7 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1214,
     TS17012,
     TS18061,
+    TS2855,
     TS17013,
     TS2526,
     TS1338,
@@ -11716,6 +11727,15 @@ impl Diagnostic {
     pub fn ts18061(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS18061,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2855(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2855,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )

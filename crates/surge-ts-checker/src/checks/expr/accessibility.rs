@@ -375,6 +375,15 @@ pub(crate) fn check_member_accessibility(
         ctx.push(diagnostic_with_syntax_span(diagnostic, member_span));
         return;
     }
+    // A class field lives on the instance, not the prototype `super` reads.
+    if !is_static
+        && matches!(object, ParsedExpression::Identifier { name, .. } if name == "super")
+        && nearest_instance_member_is_field(&class, member, ctx)
+    {
+        let diagnostic = Diagnostic::ts2855(member, ctx.file_name.clone());
+        ctx.push(diagnostic_with_syntax_span(diagnostic, member_span));
+        return;
+    }
     let Some((declaring, accessibility)) =
         restricted_member_owner(&class, member, is_static, is_write, ctx)
     else {
@@ -416,6 +425,25 @@ pub(crate) fn check_member_accessibility(
 }
 
 /// The class whose nearest declaration of an instance member is `abstract`.
+fn nearest_instance_member_is_field(class: &InterfaceInfo, member: &str, ctx: &CheckerContext) -> bool {
+    let mut current = class.clone();
+    for _ in 0..MAX_HERITAGE_DEPTH {
+        if let Some(declared) =
+            current.body.class_members.iter().find(|declared| !declared.is_static && declared.name == member)
+        {
+            return declared.is_field;
+        }
+        if current.body.members.iter().any(|declared| declared.name == member) {
+            return false;
+        }
+        let Some(base) = base_interface(&current, ctx) else {
+            return false;
+        };
+        current = base;
+    }
+    false
+}
+
 fn abstract_member_owner(class: &InterfaceInfo, member: &str, ctx: &CheckerContext) -> Option<InterfaceInfo> {
     let mut current = class.clone();
     for _ in 0..MAX_HERITAGE_DEPTH {

@@ -2705,6 +2705,14 @@ message = "'{0}' is not a valid meta-property for keyword 'import'. Did you mean
 arity = 1
 
 [[diagnostic]]
+code = "TS2855"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "Class field '{0}' defined by the parent class is not accessible in the child class via super."
+arity = 1
+
+[[diagnostic]]
 code = "TS17013"
 category = "Error"
 source = "typescript"

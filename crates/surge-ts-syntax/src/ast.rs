@@ -1191,6 +1191,9 @@ pub const EXPRESSION_HERITAGE_BASE: &str = "\0expression-base";
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedClassProperty {
     pub name: String,
+    /// Written with the `accessor` keyword: a get/set pair over a private
+    /// slot, which reads as a property but is no class field.
+    pub is_auto_accessor: bool,
     pub name_span: Option<TextSpan>,
     /// `"a": T` or `1: T`: a string or numeric literal key, which tsc's
     /// property-initialization check (TS2564) does not look at.

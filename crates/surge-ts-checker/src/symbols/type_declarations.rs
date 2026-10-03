@@ -187,6 +187,9 @@ pub(crate) struct ClassMemberSymbol {
     pub(crate) is_static: bool,
     /// `SymbolFlagsGetAccessor`: a `get` accessor, alone or paired.
     pub(crate) is_get_accessor: bool,
+    /// A property declaration (`isClassInstanceProperty`), as opposed to a
+    /// method or accessor.
+    pub(crate) is_field: bool,
 }
 
 impl InterfaceBody {

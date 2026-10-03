@@ -75,11 +75,13 @@ pub(crate) fn class_instance_interface_info(
         .members
         .iter()
         .filter_map(|member| {
-            let (name, is_static, is_get_accessor) = match member {
-                ParsedClassMember::Property(property) => (&property.name, property.is_static, false),
-                ParsedClassMember::Method(method) => (&method.name, method.is_static, false),
+            let (name, is_static, is_get_accessor, is_field) = match member {
+                ParsedClassMember::Property(property) => {
+                    (&property.name, property.is_static, false, !property.is_auto_accessor)
+                }
+                ParsedClassMember::Method(method) => (&method.name, method.is_static, false, false),
                 ParsedClassMember::Accessor(accessor) => {
-                    (&accessor.name, accessor.is_static, accessor.has_getter)
+                    (&accessor.name, accessor.is_static, accessor.has_getter, false)
                 }
                 ParsedClassMember::Constructor(_) | ParsedClassMember::StaticBlock(_) => return None,
             };
@@ -87,6 +89,7 @@ pub(crate) fn class_instance_interface_info(
                 name: name.clone(),
                 is_static,
                 is_get_accessor,
+                is_field,
             })
         })
         .collect();
