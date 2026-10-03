@@ -583,11 +583,22 @@ fn reads_string_by_number(receiver_type: &Type) -> bool {
     }
 }
 
+/// tsc's `isApplicableIndexType` against a number index: a key assignable to
+/// `number`, `${number}`, or a numeric string literal. A union key is looked
+/// up member by member.
 fn numeric_index_key(index_type: &Type) -> bool {
     match index_type {
         Type::StringLiteral(value) => value.parse::<f64>().is_ok(),
+        Type::Union(union) => union.types().iter().all(numeric_index_key),
+        other if is_numeric_string_type(other) => true,
         other => is_assignable_to(other, &Type::Number),
     }
+}
+
+fn is_numeric_string_type(ty: &Type) -> bool {
+    surge_ts_types::template_literal_parts(ty).is_some_and(|(texts, types)| {
+        texts.iter().all(|text| text.is_empty()) && matches!(types.as_slice(), [Type::Number])
+    })
 }
 
 /// A receiver whose only index is numeric cannot answer any other key. tsc
