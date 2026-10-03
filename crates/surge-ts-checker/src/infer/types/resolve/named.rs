@@ -2007,8 +2007,8 @@ fn report_missing_import_type_member(
 }
 
 /// tsc's `fillMissingTypeArguments` for a JavaScript reference to a generic
-/// class or interface: a missing argument is `any`, and too few arguments
-/// are reported only under `noImplicitAny` (`isJsImplicitAny`). A default of
+/// class or interface: a missing argument is `any`, and a wrong count is
+/// reported only under `noImplicitAny` (`isJsImplicitAny`). A default of
 /// `{}` or `unknown` is `any` there too; the arguments are filled at the
 /// reference so the instantiation is keyed by them.
 fn javascript_filled_type_arguments(
@@ -2023,6 +2023,16 @@ fn javascript_filled_type_arguments(
         return named_type;
     }
     let type_parameters = &interface.body.type_parameters;
+    // `isJsImplicitAny` skips the arity check both ways, and the arguments
+    // past the parameters are dropped.
+    if !ctx.options.no_implicit_any
+        && !type_parameters.is_empty()
+        && named_type.type_arguments.len() > type_parameters.len()
+    {
+        let mut truncated = (*named_type).clone();
+        truncated.type_arguments.truncate(type_parameters.len());
+        return std::sync::Arc::new(truncated);
+    }
     let min = super::substitution::min_type_argument_count(type_parameters);
     // Only a run of such defaults right after the written arguments can be
     // filled here: a default before one would have to be resolved in the
