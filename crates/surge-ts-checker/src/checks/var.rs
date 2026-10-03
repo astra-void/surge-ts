@@ -668,12 +668,13 @@ pub(crate) fn check_variable_declaration_against_symbols(
         })
         .flatten();
 
-    let outer_allow_missing = ctx.allow_missing_tuple_element;
-    ctx.allow_missing_tuple_element = variable.from_binding_pattern
-        && matches!(
-            variable.initializer,
-            Some(ParsedExpression::NullishCoalescing { .. })
-        );
+    let mut allow_missing = Vec::new();
+    if variable.from_binding_pattern
+        && let Some(initializer) = &variable.initializer
+    {
+        defaulted_element_reads(initializer, &mut allow_missing);
+    }
+    let outer_allow_missing = std::mem::replace(&mut ctx.allow_missing_tuple_elements, allow_missing);
     // `const s: unique symbol = Symbol()` is what creates that unique symbol:
     // the call's `symbol` is this declaration's own type, not a mismatch.
     let initializer_target = declared_type.as_ref().filter(|declared_type| {
@@ -714,7 +715,7 @@ pub(crate) fn check_variable_declaration_against_symbols(
     } else {
         InferredExpression::Unknown
     };
-    ctx.allow_missing_tuple_element = outer_allow_missing;
+    ctx.allow_missing_tuple_elements = outer_allow_missing;
     let mut inferred_symbol_type = match &inferred_initializer {
         InferredExpression::Known(inferred_initializer_type) => {
             if let Some(declared_type) = initializer_target {
@@ -1619,6 +1620,25 @@ fn iterated_array_pattern_element(
             surge_ts_types::union_type(vec![surge_ts_types::remove_undefined(&element), default_type]),
         ),
         _ => None,
+    }
+}
+
+/// A binding lowers each default on its path as `read ?? default`, nested
+/// patterns reading through it: the spans of those defaulted element reads.
+fn defaulted_element_reads(initializer: &ParsedExpression, spans: &mut Vec<surge_ts_syntax::TextSpan>) {
+    match initializer {
+        ParsedExpression::NullishCoalescing { left, .. } => {
+            if let ParsedExpression::ElementAccess { index_span: Some(span), .. }
+            | ParsedExpression::IndexAccess { index_span: Some(span), .. } = left.as_ref()
+            {
+                spans.push(*span);
+            }
+            defaulted_element_reads(left, spans);
+        }
+        ParsedExpression::ElementAccess { object, .. } | ParsedExpression::PropertyAccess { object, .. } => {
+            defaulted_element_reads(object, spans);
+        }
+        _ => {}
     }
 }
 

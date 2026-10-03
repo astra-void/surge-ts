@@ -840,7 +840,7 @@ pub(super) fn report_tuple_index_out_of_bounds(
     span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
 ) {
-    if ctx.allow_missing_tuple_element {
+    if span.is_some_and(|span| ctx.allow_missing_tuple_elements.contains(&span)) {
         return;
     }
     let diagnostic = if index_value < 0 {

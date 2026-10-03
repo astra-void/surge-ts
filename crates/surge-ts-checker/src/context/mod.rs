@@ -802,10 +802,11 @@ pub(crate) struct CheckerContext {
     /// that conditional: tsc checks each branch of a returned conditional
     /// against the return type on its own (`checkReturnExpression`).
     pub(crate) split_returned_conditional: bool,
-    /// Set while a destructured binding with a default is evaluated: tsc reads
-    /// its element with `AccessFlagsAllowMissing`, so a tuple too short for it
-    /// is not TS2493.
-    pub(crate) allow_missing_tuple_element: bool,
+    /// The element reads of the defaulted binding elements on the binding
+    /// being evaluated: tsc reads each with `AccessFlagsAllowMissing`, so a
+    /// tuple too short for it is not TS2493. Other reads on the same path
+    /// still report.
+    pub(crate) allow_missing_tuple_elements: Vec<SyntaxTextSpan>,
     /// Spans of the `default`-less switches checked in this file whose cases do
     /// not cover their discriminant, which the missing-return check needs.
     pub(crate) non_exhaustive_switches: Vec<(usize, usize)>,
@@ -1064,7 +1065,7 @@ impl CheckerContext {
             next_arrow_context_only: false,
             namespace_require_reads: None,
             split_returned_conditional: false,
-            allow_missing_tuple_element: false,
+            allow_missing_tuple_elements: Vec::new(),
             non_exhaustive_switches: Vec::new(),
             exhaustive_switches: Vec::new(),
             next_body_frame_active: false,
@@ -1271,7 +1272,7 @@ impl CheckerContext {
             next_arrow_context_only: false,
             namespace_require_reads: None,
             split_returned_conditional: false,
-            allow_missing_tuple_element: false,
+            allow_missing_tuple_elements: Vec::new(),
             non_exhaustive_switches: Vec::new(),
             exhaustive_switches: Vec::new(),
             next_body_frame_active: false,
