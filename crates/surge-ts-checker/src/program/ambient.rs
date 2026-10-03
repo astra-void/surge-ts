@@ -1549,6 +1549,9 @@ fn declaring_file_for_exported_type(
         let Some(file) = parsed_files.get(index) else {
             continue;
         };
+        if export_assignment_namespace(&file.statements).is_some() {
+            return Some(crate::modules::canonical_file_identity(&file.file_name));
+        }
         let declares = |statement: &ParsedStatement| match statement {
             ParsedStatement::InterfaceDeclaration(declaration) => declaration.name == type_name,
             ParsedStatement::ClassDeclaration(declaration) => declaration.name == type_name,
@@ -1739,20 +1742,49 @@ pub(crate) fn has_file_keyed_module_augmentations(ctx: &CheckerContext) -> bool 
 pub(crate) fn merge_file_keyed_module_augmentation_into_declarations(
     table: &mut crate::symbols::TypeDeclarationTable,
     file_identity: &str,
+    statements: &[ParsedStatement],
     ctx: &CheckerContext,
 ) {
     if let Some(augmentation) = ctx
         .module_augmentations
         .get(&module_augmentation_file_key(file_identity))
     {
+        // Go merges an augmentation into what `export =` resolves to when that
+        // is a namespace (`mergeModuleAugmentation`), so its types are the
+        // namespace's members.
+        let namespace = export_assignment_namespace(statements);
         for (name, declaration) in augmentation.type_declarations.iter() {
+            let name = match namespace {
+                Some(namespace) => format!("{namespace}.{name}"),
+                None => name.to_string(),
+            };
             crate::symbols::merge_augmentation_type_declaration_into_table(
                 table,
-                name.as_ref(),
+                &name,
                 declaration,
             );
         }
     }
+}
+
+/// The namespace a module's `export = X` names, when the module declares one.
+fn export_assignment_namespace(statements: &[ParsedStatement]) -> Option<&str> {
+    let exported = statements.iter().find_map(|statement| match statement {
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Equals { exported_name, .. } => Some(exported_name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    })?;
+    statements
+        .iter()
+        .any(|statement| {
+            matches!(
+                crate::modules::peel_exported_statement(statement),
+                ParsedStatement::NamespaceDeclaration(namespace) if namespace.name == exported
+            )
+        })
+        .then_some(exported)
 }
 
 pub(crate) fn apply_module_augmentation(

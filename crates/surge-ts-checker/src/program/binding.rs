@@ -57,6 +57,7 @@ pub(crate) fn collect_preliminary_module_type_bindings(
             merge_file_keyed_module_augmentation_into_declarations(
                 &mut raw_local_type_declarations,
                 &file_identity,
+                &parsed_file.statements,
                 ctx,
             );
         }
