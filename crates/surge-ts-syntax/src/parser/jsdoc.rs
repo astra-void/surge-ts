@@ -2368,16 +2368,14 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
                 JsDocTag::Import(import) => self.index.imports.push(import.clone()),
                 JsDocTag::Callback { name, name_span, signature, span } => {
                     check_non_identifier_name(name, *name_span, &mut self.index.parse_errors);
-                    let Some(alias_name) = name.last().filter(|name| !name.is_empty()) else {
-                        continue;
-                    };
-                    if name.len() != 1 {
+                    if name.last().is_none_or(|name| name.is_empty()) {
                         continue;
                     }
+                    // Namespaced like a `@typedef` (`wrapInJSDocNamespace`).
                     self.alias_comment_starts.push(key);
                     self.index.aliases.push(ParsedTypeAliasDeclaration {
                         is_declare: false,
-                        name: alias_name.clone(),
+                        name: name.join("."),
                         name_span: Some(*name_span),
                         type_parameters: template_parameters(&comment.tags, true),
                         ty: signature_type(signature, Vec::new()),
