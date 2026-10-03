@@ -601,9 +601,10 @@ pub(crate) fn call_statement_key(expression: &surge_ts_syntax::ParsedExpression)
 }
 
 /// A block-scoped binding declared later in its scope: the statement that
-/// declares it, and whether a read before it is also TS2454 — not when the
-/// annotation is a type tsc assumes initialized (`checkIdentifier`'s
-/// `AnyOrUnknown | Void`, or the `errorType` a circular annotation gets).
+/// declares it, and whether a read before it is also TS2454 — not for a
+/// binding element, nor when the annotation is a type tsc assumes initialized
+/// (`checkIdentifier`'s `isBindingElement` and `AnyOrUnknown | Void`, or the
+/// `errorType` a circular annotation gets).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FutureDeclaration {
     pub(crate) index: usize,
@@ -612,15 +613,16 @@ pub(crate) struct FutureDeclaration {
 
 impl FutureDeclaration {
     pub(crate) fn of(index: usize, variable: &surge_ts_syntax::ParsedVariableDeclaration) -> Self {
-        let assumed_initialized = matches!(
-            variable.declared_type,
-            Some(
-                surge_ts_syntax::ParsedType::Any
-                    | surge_ts_syntax::ParsedType::UnknownKeyword
-                    | surge_ts_syntax::ParsedType::Void
-                    | surge_ts_syntax::ParsedType::ErrorType
-            )
-        );
+        let assumed_initialized = variable.from_binding_pattern
+            || matches!(
+                variable.declared_type,
+                Some(
+                    surge_ts_syntax::ParsedType::Any
+                        | surge_ts_syntax::ParsedType::UnknownKeyword
+                        | surge_ts_syntax::ParsedType::Void
+                        | surge_ts_syntax::ParsedType::ErrorType
+                )
+            );
         Self {
             index,
             unassigned: !assumed_initialized,
