@@ -1581,8 +1581,29 @@ fn check_new_like_unrecorded(
                 ctx.degraded_expected_type_depth -= 1;
                 return None;
             }
+            // A generic construct signature of a constructor type
+            // (`new <T>(n: T)`) binds its own written type arguments before
+            // the arguments are related. Inferring them is left out: tsc infers
+            // a nested `new`/call argument against the outer inference's
+            // partial mapper (`new Proxy(target, new Handler())`), which
+            // surge's per-argument inference does not reproduce.
+            let instantiated = (class_info.is_none()
+                && !type_arguments.is_empty()
+                && construct_signature.overloads().is_none()
+                && !own_type_parameter_names(&construct_signature).is_empty())
+            .then(|| {
+                instantiate_overload_member(
+                    &construct_signature,
+                    type_arguments,
+                    callee_span,
+                    arguments,
+                    None,
+                    symbols,
+                    ctx,
+                )
+            });
             check_function_type_call(
-                &construct_signature,
+                instantiated.as_ref().unwrap_or(&construct_signature),
                 callee_span,
                 call_span,
                 type_arguments,
