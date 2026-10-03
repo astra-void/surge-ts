@@ -728,6 +728,18 @@ pub(crate) fn apply_expando_members(
             _ => None,
         })
         .collect();
+    // `getInitializerSymbol`: in JavaScript a class declaration is one too.
+    let classes_declared_here: std::collections::HashSet<&str> = if javascript {
+        statements
+            .iter()
+            .filter_map(|statement| match peel_exported_statement(statement) {
+                ParsedStatement::ClassDeclaration(class) => Some(class.name.as_str()),
+                _ => None,
+            })
+            .collect()
+    } else {
+        std::collections::HashSet::new()
+    };
     let mut containers: std::collections::HashMap<&str, Option<ExpandoContainer>> =
         std::collections::HashMap::new();
     // `bindDeferredExpandoAssignment` declares an expando only where no other
@@ -739,6 +751,10 @@ pub(crate) fn apply_expando_members(
         let property_name: &str = &property_name;
         let container = *containers.entry(name).or_insert_with(|| {
             let symbol = exportable_values.get_own_shared(name)?;
+            if classes_declared_here.contains(name) {
+                return matches!(&symbol.ty, Type::Object(object) if object.construct_signature().is_some())
+                    .then_some(ExpandoContainer::Class);
+            }
             expando_container(&symbol, javascript && declared_here.contains(name))
         });
         let Some(container) = container else {
@@ -746,6 +762,10 @@ pub(crate) fn apply_expando_members(
         };
         let Some(symbol) = exportable_values.get_own_shared(name) else {
             continue;
+        };
+        let class_object = match (&symbol.ty, container) {
+            (Type::Object(object), ExpandoContainer::Class) => Some(object),
+            _ => None,
         };
         let (call_signature, mut properties) = match &symbol.ty {
             Type::Function(function) => (Some(function.clone()), surge_ts_types::PropertyMap::default()),
@@ -772,10 +792,19 @@ pub(crate) fn apply_expando_members(
             property_name.into(),
             surge_ts_types::ObjectProperty::required(member_type).with_readonly(readonly),
         );
-        let object = crate::metrics::alloc_object_type(properties, None);
-        let ty = match call_signature {
-            Some(call_signature) => Type::Object(object.with_call_signature(call_signature)),
-            None => Type::Object(object),
+        let ty = if let Some(class_object) = class_object {
+            // The class's static side keeps its construct signature, statics
+            // and identity; the member joins its statics.
+            let mut class_object = class_object.clone();
+            class_object.properties = Arc::new(properties);
+            class_object.property_map_id = None;
+            Type::Object(class_object)
+        } else {
+            let object = crate::metrics::alloc_object_type(properties, None);
+            match call_signature {
+                Some(call_signature) => Type::Object(object.with_call_signature(call_signature)),
+                None => Type::Object(object),
+            }
         };
         let kind = symbol.kind;
         let function_signature = symbol.function_signature.clone();
@@ -874,6 +903,8 @@ enum ExpandoContainer {
     Callable,
     /// A JavaScript variable initialized to an empty object literal.
     Object,
+    /// A JavaScript class declaration: its static side carries the members.
+    Class,
 }
 
 fn expando_container(symbol: &SymbolInfo, javascript: bool) -> Option<ExpandoContainer> {
