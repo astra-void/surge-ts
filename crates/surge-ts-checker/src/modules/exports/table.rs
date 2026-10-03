@@ -1135,8 +1135,12 @@ pub(crate) fn resolve_module_export_table(
                 exported_name,
                 module_specifier,
                 module_specifier_span,
+                is_type_only,
                 ..
             } => {
+                if *is_type_only {
+                    resolved_export_table.mark_type_only_export(exported_name, TypeOnlyAliasKind::Export);
+                }
                 report_synchronous_import_of_esm(
                     module_specifier,
                     *module_specifier_span,

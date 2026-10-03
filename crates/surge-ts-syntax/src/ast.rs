@@ -1391,6 +1391,8 @@ pub enum ParsedExportDeclaration {
         module_specifier: String,
         module_specifier_span: Option<TextSpan>,
         span: Option<TextSpan>,
+        /// `export type * as ns from "x"`.
+        is_type_only: bool,
     },
     Empty {
         span: Option<TextSpan>,
