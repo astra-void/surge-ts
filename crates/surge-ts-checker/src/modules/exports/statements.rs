@@ -176,8 +176,22 @@ pub(crate) fn collect_exports_from_statement(
             } => {
                 // Any other expression is bound as a property, not an alias
                 // (`bindExportAssignment`): the module's export is the value of
-                // the expression and nothing else.
-                let ty = match crate::infer::infer_expression(expression, exportable_values, ctx) {
+                // the expression and nothing else. A generic function is typed
+                // as its check types it, with its type parameters in scope;
+                // the inference sketch leaves its parameters untyped.
+                let inferred = match expression.as_ref() {
+                    surge_ts_syntax::ParsedExpression::ArrowFunction(function)
+                        if !function.type_parameters.is_empty() =>
+                    {
+                        let diagnostics_before = ctx.diagnostics().len();
+                        let evaluated =
+                            crate::checks::expr::evaluate_expression(expression, None, exportable_values, ctx);
+                        ctx.truncate_diagnostics(diagnostics_before);
+                        evaluated
+                    }
+                    _ => crate::infer::infer_expression(expression, exportable_values, ctx),
+                };
+                let ty = match inferred {
                     crate::infer::InferredExpression::Known(ty) => ty,
                     crate::infer::InferredExpression::Unknown
                     | crate::infer::InferredExpression::UnresolvedIdentifier { .. }
