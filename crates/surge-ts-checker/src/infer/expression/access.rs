@@ -968,6 +968,7 @@ pub(crate) fn lib_builtin_member_type(
         Type::Number | Type::NumberLiteral(_) => ("Number", None),
         Type::Boolean | Type::BooleanLiteral(_) => ("Boolean", None),
         Type::BigInt => ("BigInt", None),
+        Type::Symbol => ("Symbol", None),
         Type::Function(_) => ("Function", None),
         // tsc's `getPropertyOfType`: an object type with call or construct
         // signatures reads the members it lacks from the global `Function`.
