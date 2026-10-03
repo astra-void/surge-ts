@@ -1034,8 +1034,15 @@ fn report_redeclared_var_type(
     // parameter) is not the type tsc compares. A type variable of the body
     // being checked is (`T`, `T[K]`, a generic mapped type), and is identical
     // only to itself.
+    // A namespace function surge keeps only as a permissive signature
+    // (`UnmodelledNamespaceFunction`) is one too: its written type is not it.
     let carries_hole = |ty: &Type| {
-        !ty.is_type_variable() && (ty.is_unknown() || surge_ts_types::parameter_type_is_degraded(ty))
+        let unmodelled_function = matches!(ty, Type::Function(function)
+            if function.declaration().is_some_and(|declaration| {
+                declaration.is::<crate::modules::UnmodelledNamespaceFunction>()
+            }));
+        unmodelled_function
+            || (!ty.is_type_variable() && (ty.is_unknown() || surge_ts_types::parameter_type_is_degraded(ty)))
     };
     if (matches!(previous, Type::Any) && ctx.inferred_any_vars.contains(variable_name))
         || carries_hole(&previous)
