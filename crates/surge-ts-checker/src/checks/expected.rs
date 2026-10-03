@@ -687,7 +687,7 @@ fn evaluate_expression_with_expected_type_inner(
         (expected_type, expression)
         && elements.iter().any(|element| element.spread)
     {
-        return evaluate_spread_tuple_literal(elements, expected_type, symbols, ctx);
+        return evaluate_spread_tuple_literal(elements, expected_type, false, symbols, ctx);
     }
 
     // An argument after a call's first failing one only types its elements —
@@ -746,6 +746,12 @@ fn evaluate_expression_with_expected_type_inner(
             symbols,
             ctx,
         );
+    }
+
+    if let ParsedExpression::ArrayLiteral { elements, .. } = expression
+        && is_tuple_like_object_target(expected_type)
+    {
+        return evaluate_spread_tuple_literal(elements, expected_type, true, symbols, ctx);
     }
 
     // An object literal against a tuple or array target is checked against its
@@ -2232,12 +2238,38 @@ fn literal_element_types(
 
 /// The slot of a tuple-like target at `index`, counted from the front. Only
 /// meaningful before the literal's first variable-length spread.
-fn tuple_like_slot(expected_type: &Type, index: usize) -> Option<&Type> {
+fn tuple_like_slot(expected_type: &Type, index: usize) -> Option<Type> {
     match expected_type {
-        Type::Tuple(slots) => slots.get(index),
-        Type::OpenTuple(open) => Some(open.leading.get(index).unwrap_or(open.rest.as_ref())),
-        _ => None,
+        Type::Tuple(slots) => slots.get(index).cloned(),
+        Type::OpenTuple(open) => Some(open.leading.get(index).unwrap_or(open.rest.as_ref()).clone()),
+        other => match other.peeled() {
+            Type::Object(object) => object.get_property_access_type(&index.to_string()),
+            _ => None,
+        },
     }
+}
+
+/// tsc's `isTupleLikeType` for a target that is not itself an array or a
+/// tuple: one declaring a property `0`, or an array-like one whose `length`
+/// is a number literal. An array literal it contextually types is a tuple
+/// (`checkArrayLiteral`'s `inTupleContext`).
+fn is_tuple_like_object_target(expected_type: &Type) -> bool {
+    let peeled = expected_type.peeled();
+    let Type::Object(object) = &peeled else {
+        return false;
+    };
+    if object.get_property("0").is_some_and(|property| !property.index_slot) {
+        return true;
+    }
+    let literal_length = object.get_property("length").is_some_and(|property| {
+        !property.index_slot
+            && match &property.ty {
+                Type::NumberLiteral(_) => true,
+                Type::Union(union) => union.types().iter().all(|member| matches!(member, Type::NumberLiteral(_))),
+                _ => false,
+            }
+    });
+    literal_length && is_assignable_to(&peeled, &Type::Array(Box::new(Type::Any)))
 }
 
 /// An array literal with spread elements against a tuple-like target. The
@@ -2248,6 +2280,7 @@ fn tuple_like_slot(expected_type: &Type, index: usize) -> Option<&Type> {
 fn evaluate_spread_tuple_literal(
     elements: &[surge_ts_syntax::ParsedArrayElement],
     expected_type: &Type,
+    elaborate_elements: bool,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
@@ -2286,6 +2319,7 @@ fn evaluate_spread_tuple_literal(
         } else {
             None
         };
+        let slot = slot.as_ref();
         let element_type = match evaluate_expression_with_expected_type(
             &element.expression,
             element.span,
@@ -2327,6 +2361,14 @@ fn evaluate_spread_tuple_literal(
     };
     if is_assignable_to(&literal_type, expected_type) {
         return InferredExpression::Known(expected_type.clone());
+    }
+    // Without a spread every element still has its slot, so an element the
+    // target rejected was elaborated onto (`elaborateArrayLiteral`).
+    if elaborate_elements
+        && elements.iter().all(|element| !element.spread)
+        && ctx.diagnostics().len() > checkpoint
+    {
+        return InferredExpression::Unknown;
     }
 
     // See `evaluate_open_tuple_literal_with_expected_type`: a nested literal's
