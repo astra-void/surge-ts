@@ -2335,3 +2335,198 @@ pub(crate) fn update_assigned_symbol_type(
 
     let _ = scopes.update_visible(target_name, updated);
 }
+
+/// The body of a non-async, non-generator function called where it is
+/// written (`(function () { … })()`, `(() => { … })()`).
+fn immediately_invoked_body(
+    expression: &ParsedExpression,
+) -> Option<&surge_ts_syntax::ParsedArrowFunction> {
+    let ParsedExpression::ExpressionCall { callee, .. } = expression else {
+        return None;
+    };
+    let ParsedExpression::ArrowFunction(function) = callee.as_ref() else {
+        return None;
+    };
+    (!function.is_async && !function.is_generator).then_some(function.as_ref())
+}
+
+/// What an immediately invoked body assigns to the bindings it does not
+/// declare itself: each straight-line write before the body can leave, which
+/// holds once the call returns, and every other write, which may or may not
+/// have run.
+#[derive(Default)]
+pub(crate) struct ImmediatelyInvokedAssignments {
+    certain: Vec<ParsedExpression>,
+    possible: Vec<ParsedExpression>,
+}
+
+fn immediately_invoked_assignments(
+    function: &surge_ts_syntax::ParsedArrowFunction,
+) -> Option<ImmediatelyInvokedAssignments> {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
+
+    let surge_ts_syntax::ParsedArrowFunctionBody::Block(body) = &function.body else {
+        return None;
+    };
+    fn declared(statements: &[Statement], names: &mut Vec<String>) {
+        for statement in statements {
+            match statement {
+                Statement::VariableDeclaration(variable) => names.push(variable.name.clone()),
+                Statement::Function(function) => names.push(function.name.clone()),
+                Statement::Class(class) => names.push(class.name.clone()),
+                Statement::Block(block) => declared(block, names),
+                Statement::If(statement) => {
+                    declared(&statement.then_body, names);
+                    declared(&statement.else_body, names);
+                }
+                Statement::While(statement) => declared(&statement.body, names),
+                Statement::ForOf(statement) => declared(&statement.body, names),
+                Statement::Switch(statement) => {
+                    for case in &statement.cases {
+                        declared(&case.consequent, names);
+                    }
+                }
+                Statement::Try(statement) => {
+                    declared(&statement.block, names);
+                    if let Some(handler) = &statement.handler {
+                        declared(&handler.body, names);
+                    }
+                    declared(&statement.finalizer, names);
+                }
+                _ => {}
+            }
+        }
+    }
+    fn writes(statements: &[Statement], out: &mut Vec<ParsedExpression>) {
+        for statement in statements {
+            match statement {
+                Statement::Assignment(assignment) => out.push(assignment_expression(assignment)),
+                Statement::Block(block) => writes(block, out),
+                Statement::If(statement) => {
+                    writes(&statement.then_body, out);
+                    writes(&statement.else_body, out);
+                }
+                Statement::While(statement) => writes(&statement.body, out),
+                Statement::ForOf(statement) => writes(&statement.body, out),
+                Statement::Switch(statement) => {
+                    for case in &statement.cases {
+                        writes(&case.consequent, out);
+                    }
+                }
+                Statement::Try(statement) => {
+                    writes(&statement.block, out);
+                    if let Some(handler) = &statement.handler {
+                        writes(&handler.body, out);
+                    }
+                    writes(&statement.finalizer, out);
+                }
+                _ => {}
+            }
+        }
+    }
+    fn assignment_expression(assignment: &ParsedAssignment) -> ParsedExpression {
+        ParsedExpression::Assignment {
+            target_name: assignment.target_name.clone(),
+            target_span: assignment.target_span,
+            value: Box::new(assignment.value.clone()),
+            value_span: assignment.value_span,
+        }
+    }
+
+    let mut own = Vec::new();
+    for parameter in &function.parameters {
+        own.extend(parameter.binding_name.bound_names().into_iter().map(|bound| bound.name));
+    }
+    declared(body, &mut own);
+    let mut assignments = ImmediatelyInvokedAssignments::default();
+    let mut leaves = false;
+    for statement in body {
+        match statement {
+            Statement::Assignment(assignment) if !leaves => {
+                assignments.certain.push(assignment_expression(assignment));
+            }
+            Statement::Return(_) | Statement::Throw(_) => leaves = true,
+            other => writes(std::slice::from_ref(other), &mut assignments.possible),
+        }
+    }
+    let foreign = |assignment: &ParsedExpression| {
+        matches!(assignment, ParsedExpression::Assignment { target_name, .. } if !own.contains(target_name))
+    };
+    assignments.certain.retain(foreign);
+    assignments.possible.retain(foreign);
+    Some(assignments)
+}
+
+/// tsc binds a non-async, non-generator IIFE inline (`bindContainer`), so
+/// once the call returns its writes are the flow the caller continues from.
+/// A write that certainly ran narrows its target as an assignment statement
+/// does; one that may not have joins what the target held before.
+impl ImmediatelyInvokedAssignments {
+    pub(crate) fn target_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for assignment in self.certain.iter().chain(&self.possible) {
+            if let ParsedExpression::Assignment { target_name, .. } = assignment
+                && !names.contains(target_name)
+            {
+                names.push(target_name.clone());
+            }
+        }
+        names
+    }
+}
+
+pub(crate) fn immediately_invoked_writes(expression: &ParsedExpression) -> Option<ImmediatelyInvokedAssignments> {
+    immediately_invoked_body(expression)
+        .and_then(immediately_invoked_assignments)
+        .filter(|assignments| !assignments.certain.is_empty() || !assignments.possible.is_empty())
+}
+
+pub(crate) fn apply_immediately_invoked_assignments(
+    assignments: ImmediatelyInvokedAssignments,
+    scopes: &mut ScopeStack,
+    flow_state: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    let possible_targets: Vec<&str> = assignments
+        .possible
+        .iter()
+        .filter_map(|assignment| match assignment {
+            ParsedExpression::Assignment { target_name, .. } => Some(target_name.as_str()),
+            _ => None,
+        })
+        .collect();
+    for assignment in &assignments.certain {
+        let ParsedExpression::Assignment { target_name, .. } = assignment else {
+            continue;
+        };
+        apply_immediately_invoked_assignment(assignment, false, scopes, ctx);
+        if !possible_targets.contains(&target_name.as_str()) {
+            mark_assignment_state(target_name, flow_state);
+        }
+    }
+    for assignment in &assignments.possible {
+        apply_immediately_invoked_assignment(assignment, true, scopes, ctx);
+    }
+}
+
+/// A write the outer scope cannot type (it reads the body's own bindings)
+/// leaves the target holding its declared type.
+fn apply_immediately_invoked_assignment(
+    assignment: &ParsedExpression,
+    conditional: bool,
+    scopes: &mut ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    let ParsedExpression::Assignment { target_name, value, .. } = assignment else {
+        return;
+    };
+    let typed = matches!(
+        crate::infer::infer_expression(value, visible_symbols(scopes), ctx),
+        InferredExpression::Known(ref ty) if !ty.is_unmodelled()
+    );
+    if typed {
+        apply_assignment_expression(assignment, conditional, scopes, ctx);
+    } else {
+        widen_to_declared(target_name, scopes);
+    }
+}

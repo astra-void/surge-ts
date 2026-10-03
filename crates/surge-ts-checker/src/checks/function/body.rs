@@ -988,6 +988,12 @@ pub(crate) fn check_function_body_statement(
         .filter(|expression| expression.contains_assignment())
         .cloned()
         .collect();
+    let immediately_invoked = match &statement {
+        ParsedFunctionBodyStatement::Expression(expression) => {
+            super::body_statements::immediately_invoked_writes(expression)
+        }
+        _ => None,
+    };
     check_function_body_statement_itself(
         statement,
         statement_index,
@@ -996,6 +1002,9 @@ pub(crate) fn check_function_body_statement(
         flow_state,
         ctx,
     );
+    if let Some(writes) = immediately_invoked {
+        super::body_statements::apply_immediately_invoked_assignments(writes, scopes, flow_state, ctx);
+    }
     if !mutations.is_empty() {
         apply_array_mutations(mutations, scopes, ctx);
     }
