@@ -419,10 +419,15 @@ pub(super) fn evaluate_index_access(
                     // each reading the member it names; a generic key is read
                     // through its constraint, which is what its deferred
                     // `T[K]` relates by.
-                    let key_union = if index_type.is_type_variable() {
+                    // surge reads a generic key eagerly rather than deferring
+                    // `T[K]`; its constraint is read only where an index
+                    // signature would otherwise answer for declared members.
+                    let key_union = if !index_type.is_type_variable() {
+                        index_type.clone()
+                    } else if object_type.applicable_index_type(index_is_numeric).is_some() {
                         surge_ts_types::type_variable::base_constraint_or_type(&index_type)
                     } else {
-                        index_type.clone()
+                        Type::Never
                     };
                     // A write through a union of keys must suit every member
                     // it may land on (`AccessFlagsWriting` intersects them); a
@@ -729,10 +734,12 @@ pub(crate) fn object_element_read(
         let Type::Object(object_type) = &peeled else {
             return None;
         };
-        let key_union = if index_type.is_type_variable() {
+        let key_union = if !index_type.is_type_variable() {
+            index_type.clone()
+        } else if object_type.applicable_index_type(index_is_numeric).is_some() {
             surge_ts_types::type_variable::base_constraint_or_type(index_type)
         } else {
-            index_type.clone()
+            Type::Never
         };
         if let Some(members) = declared_literal_union_members(object_type, &key_union) {
             return Some(union_type(members));
