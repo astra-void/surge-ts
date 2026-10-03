@@ -983,6 +983,10 @@ impl TypeDeclarationHandle {
     pub(crate) fn get(&self) -> &TypeDeclarationInfo {
         self.declaration.as_ref()
     }
+
+    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.declaration, &other.declaration)
+    }
 }
 
 #[derive(Debug, Clone)]

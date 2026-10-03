@@ -341,6 +341,38 @@ fn generic_interface_display_name(interface: &InterfaceInfo) -> String {
     format!("{name}<{parameters}>")
 }
 
+/// The scope a declaration without one of its own resolves its body under:
+/// its file's module scope, unless that scope does not declare it. A
+/// declaration in a `declare module` block's own table carries no scope (the
+/// table and the block scope would hold each other) and is reached through the
+/// block scope installed where it is referenced; the names around it are that
+/// scope's from the layer declaring it outward, as Go resolves a declaration's
+/// names where it is written.
+fn unscoped_declaration_scope(
+    file_name: &str,
+    name: &str,
+    handle: &TypeDeclarationHandle,
+    ctx: &CheckerContext,
+) -> Option<Arc<crate::symbols::TypeDeclarationScope>> {
+    let module_scope = ctx.module_scope_for_file(file_name).filter(|scope| !scope.is_empty())?;
+    if module_scope.get_handle(name).is_some_and(|declared| declared.ptr_eq(handle)) {
+        return Some(module_scope);
+    }
+    let installed = ctx.type_declaration_scope.as_ref()?;
+    let layers = installed.layers();
+    match layers
+        .iter()
+        .position(|layer| layer.get_handle(name).is_some_and(|declared| declared.ptr_eq(handle)))
+    {
+        Some(position) => {
+            let scope = crate::symbols::TypeDeclarationScope::new(layers[position..].to_vec())
+                .with_lexical_layers(installed.lexical_layer_count().saturating_sub(position));
+            Some(Arc::new(if installed.is_preliminary() { scope.preliminary() } else { scope }))
+        }
+        None => Some(module_scope),
+    }
+}
+
 pub(crate) fn resolve_interface(
     interface: &InterfaceInfo,
     handle: TypeDeclarationHandle,
@@ -425,10 +457,10 @@ pub(crate) fn resolve_interface(
     // scope is empty. A sibling declaration reached through the installed block
     // scope carries no resolution_scope of its own; replacing the block scope
     // with the empty fallback made every name in the sibling's body miss.
-    let declaration_effective_scope = interface.resolution_scope.clone().or_else(|| {
-        ctx.module_scope_for_file(&interface.file_name)
-            .filter(|scope| !scope.is_empty())
-    });
+    let declaration_effective_scope = interface
+        .resolution_scope
+        .clone()
+        .or_else(|| unscoped_declaration_scope(&interface.file_name, &interface.name, &handle, ctx));
     // See `resolve_type_alias`: a default names its namespace siblings bare.
     let default_prefix = crate::infer::types::utility::namespace_member_prefix(
         interface.declared_name.as_deref(),
