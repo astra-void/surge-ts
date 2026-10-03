@@ -854,13 +854,16 @@ pub(crate) fn object_rest_type(source: &Type, omitted: &[String]) -> Type {
                 .collect(),
         ),
         Type::Object(object) => {
-            // `getRestType` keeps only spreadable members: no private name.
+            // `getRestType` keeps only spreadable members (no private name, no
+            // private or protected member), each as the writable symbol
+            // `getSpreadSymbol(prop, false)` makes of it.
             let properties: surge_ts_types::PropertyMap = object
                 .properties
                 .iter()
                 .filter(|(name, _)| !surge_ts_types::private_name::is_private_name_key(name))
+                .filter(|(_, property)| property.restriction.is_none())
                 .filter(|(name, _)| !omitted.iter().any(|omitted| omitted.as_str() == name.as_ref()))
-                .map(|(name, property)| (name.clone(), property.clone()))
+                .map(|(name, property)| (name.clone(), property.clone().with_readonly(false)))
                 .collect();
             let mut rest = crate::metrics::alloc_object_type(
                 properties,
