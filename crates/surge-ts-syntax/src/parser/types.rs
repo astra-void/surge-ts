@@ -285,7 +285,11 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
         }
         TSTypeQueryExprName::QualifiedName(qualified_name) => {
             let mut members = Vec::new();
-            let (base, base_span) = flatten_qualified_type_name(qualified_name, &mut members)?;
+            // `typeof this.x` is not modelled either, but it is an annotation:
+            // dropping it would read the binding as unannotated (TS7006).
+            let Some((base, base_span)) = flatten_qualified_type_name(qualified_name, &mut members) else {
+                return Some(ParsedType::Unknown);
+            };
             Some(ParsedType::TypeOf(std::sync::Arc::new(ParsedTypeOfType {
                 name: base,
                 name_span: Some(text_span_from_oxc_span(base_span)),
@@ -322,7 +326,7 @@ fn parse_type_query(type_query: &TSTypeQuery<'_>) -> Option<ParsedType> {
             })))
         }
         // `typeof this` is not modelled.
-        _ => None,
+        _ => Some(ParsedType::Unknown),
     }
 }
 
