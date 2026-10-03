@@ -346,10 +346,12 @@ pub(super) fn resolve_indexed_access_type(
     // - a naked type-parameter receiver (`object_placeholder`): unconstrained
     //   `T[K]` is a genuine error handled below;
     // - an *explicit* `unknown`/`any` keyword receiver (`unknown["x"]`): tsc does
-    //   report `TS2339`/`TS2538` there, so it must not be suppressed.
+    //   report `TS2339`/`TS2538` there, so it must not be suppressed. The
+    //   degrade target `ParsedType::Unknown` (`typeof this`, `intrinsic`) is
+    //   not one.
     let object_is_explicit_top_keyword = matches!(
         object_type_for_placeholder.as_ref(),
-        ParsedType::Unknown | ParsedType::UnknownKeyword | ParsedType::Any
+        ParsedType::UnknownKeyword | ParsedType::Any
     );
     if resolved_object.ty.is_unknown()
         && object_placeholder_name.is_none()
