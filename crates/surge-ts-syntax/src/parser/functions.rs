@@ -1323,11 +1323,13 @@ fn parse_object_binding_element(
     property: &BindingProperty<'_>,
 ) -> Option<ParsedObjectBindingElement> {
     // `{ "show": x }` and `{ ["show"]: x }` name the same property.
-    let property_name = match super::binding_property_key(&property.key) {
-        Some((name, _)) => name,
+    let (property_name, computed_key) = match super::binding_property_key(&property.key) {
+        Some((name, _)) => (name, false),
+        None if property.computed => (String::new(), true),
         None => {
             return Some(ParsedObjectBindingElement {
                 property_name: "<unsupported>".to_string(),
+                computed_key: false,
                 shorthand: false,
                 binding_name: ParsedBindingName::Unsupported {
                     span: Some(text_span_from_oxc_span(property.span)),
@@ -1362,6 +1364,7 @@ fn parse_object_binding_element(
 
     Some(ParsedObjectBindingElement {
         property_name,
+        computed_key,
         shorthand: property.shorthand,
         binding_name,
         name_span,

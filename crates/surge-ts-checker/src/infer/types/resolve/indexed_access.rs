@@ -958,7 +958,7 @@ pub(crate) fn check_binding_pattern_reads(
     match binding {
         ParsedBindingName::ObjectPattern(pattern) => {
             for element in &pattern.elements {
-                if matches!(element.binding_name, ParsedBindingName::Unsupported { .. }) {
+                if element.computed_key || matches!(element.binding_name, ParsedBindingName::Unsupported { .. }) {
                     continue;
                 }
                 let site = AccessSite {
