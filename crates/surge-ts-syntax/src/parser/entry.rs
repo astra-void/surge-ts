@@ -413,7 +413,13 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
         super::suppressions::collect_comment_directives(source_text, &parsed.program.comments);
 
     let enum_values = std::rc::Rc::new(super::enum_values::evaluate_program(&parsed.program));
+    let circular_annotations = std::rc::Rc::new(if is_declaration_file_name(file_name) {
+        Vec::new()
+    } else {
+        super::grammar_context::circular_annotation_starts(&parsed.program)
+    });
     let collect_statements = || -> Vec<crate::ParsedStatement> {
+        super::with_circular_annotations(circular_annotations.clone(), || {
         super::enum_values::with_enum_values(enum_values.clone(), || {
             super::private_names::with_file(file_name, || {
                 let mut statements: Vec<crate::ParsedStatement> = parsed
@@ -426,6 +432,7 @@ fn parse_source_in(allocator: &Allocator, source_text: &str, file_name: &str) ->
                 super::enums::merge_lowered_enum_declarations(&mut statements);
                 statements
             })
+        })
         })
     };
 

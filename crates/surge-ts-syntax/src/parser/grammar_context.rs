@@ -2118,66 +2118,9 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
-    /// Variables whose own annotations reach each other through `typeof` in a
-    /// position tsc resolves eagerly — TS2502 on each one in the cycle. A
-    /// member of an object type or a signature is resolved on demand, so a
-    /// `typeof` there does not close a cycle.
     fn check_self_referencing_annotations(&mut self, statements: &[Statement<'_>]) {
-        let mut variables: Vec<(&str, Span, Vec<&str>)> = Vec::new();
-        // A redeclared variable takes its type from its first declaration
-        // (`valueDeclaration`); a later `var p: typeof p` reads that type.
-        let mut declared: Vec<&str> = Vec::new();
-        for statement in statements {
-            let declaration = match statement {
-                Statement::VariableDeclaration(declaration) => Some(&**declaration),
-                Statement::ExportNamedDeclaration(export) => match &export.declaration {
-                    Some(oxc_ast::ast::Declaration::VariableDeclaration(declaration)) => Some(&**declaration),
-                    _ => None,
-                },
-                _ => None,
-            };
-            let Some(declaration) = declaration else {
-                continue;
-            };
-            for declarator in &declaration.declarations {
-                let BindingPattern::BindingIdentifier(id) = &declarator.id else {
-                    continue;
-                };
-                if declared.contains(&id.name.as_str()) {
-                    continue;
-                }
-                declared.push(id.name.as_str());
-                let Some(annotation) = declarator.type_annotation.as_ref() else {
-                    continue;
-                };
-                let mut queried = Vec::new();
-                eager_type_queries(&annotation.type_annotation, &mut queried);
-                if !queried.is_empty() {
-                    variables.push((id.name.as_str(), id.span, queried));
-                }
-            }
-        }
-        for (name, span, _) in &variables {
-            // Reachable from itself through the query edges.
-            let mut stack: Vec<&str> = vec![name];
-            let mut seen: Vec<&str> = Vec::new();
-            let mut cyclic = false;
-            while let Some(current) = stack.pop() {
-                let Some((_, _, edges)) = variables.iter().find(|(other, _, _)| *other == current) else {
-                    continue;
-                };
-                for edge in edges {
-                    if edge == name {
-                        cyclic = true;
-                    } else if !seen.contains(edge) {
-                        seen.push(edge);
-                        stack.push(edge);
-                    }
-                }
-            }
-            if cyclic {
-                self.push(2502, *span, &[name]);
-            }
+        for (name, span) in self_referencing_annotations(statements) {
+            self.push(2502, span, &[name]);
         }
     }
 
@@ -4698,4 +4641,103 @@ fn is_external_module_name_relative(name: &str) -> bool {
             && name.as_bytes()[0].is_ascii_alphabetic()
             && name.as_bytes()[1] == b':');
     relative || rooted
+}
+
+/// Variables whose own annotations reach each other through `typeof` in a
+/// position tsc resolves eagerly — TS2502 on each one in the cycle. A
+/// member of an object type or a signature is resolved on demand, so a
+/// `typeof` there does not close a cycle. tsc types each one `errorType`.
+pub(crate) fn self_referencing_annotations<'s>(statements: &'s [Statement<'_>]) -> Vec<(&'s str, Span)> {
+    let mut variables: Vec<(&str, Span, Vec<&str>)> = Vec::new();
+    // A redeclared variable takes its type from its first declaration
+    // (`valueDeclaration`); a later `var p: typeof p` reads that type.
+    let mut declared: Vec<&str> = Vec::new();
+    for statement in statements {
+        let declaration = match statement {
+            Statement::VariableDeclaration(declaration) => Some(&**declaration),
+            Statement::ExportNamedDeclaration(export) => match &export.declaration {
+                Some(oxc_ast::ast::Declaration::VariableDeclaration(declaration)) => Some(&**declaration),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(declaration) = declaration else {
+            continue;
+        };
+        for declarator in &declaration.declarations {
+            let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                continue;
+            };
+            if declared.contains(&id.name.as_str()) {
+                continue;
+            }
+            declared.push(id.name.as_str());
+            let Some(annotation) = declarator.type_annotation.as_ref() else {
+                continue;
+            };
+            let mut queried = Vec::new();
+            eager_type_queries(&annotation.type_annotation, &mut queried);
+            if !queried.is_empty() {
+                variables.push((id.name.as_str(), id.span, queried));
+            }
+        }
+    }
+    let mut found = Vec::new();
+    for (name, span, _) in &variables {
+        // Reachable from itself through the query edges.
+        let mut stack: Vec<&str> = vec![name];
+        let mut seen: Vec<&str> = Vec::new();
+        let mut cyclic = false;
+        while let Some(current) = stack.pop() {
+            let Some((_, _, edges)) = variables.iter().find(|(other, _, _)| *other == current) else {
+                continue;
+            };
+            for edge in edges {
+                if edge == name {
+                    cyclic = true;
+                } else if !seen.contains(edge) {
+                    seen.push(edge);
+                    stack.push(edge);
+                }
+            }
+        }
+        if cyclic {
+            found.push((*name, *span));
+        }
+    }
+    found
+}
+
+/// Where the name of every variable [`self_referencing_annotations`] finds
+/// starts, over each statement list the grammar walk checks.
+pub(crate) fn circular_annotation_starts(program: &oxc_ast::ast::Program<'_>) -> Vec<u32> {
+    struct Collector(Vec<u32>);
+    impl Collector {
+        fn statements(&mut self, statements: &[Statement<'_>]) {
+            self.0
+                .extend(self_referencing_annotations(statements).into_iter().map(|(_, span)| span.start));
+        }
+    }
+    impl<'a> Visit<'a> for Collector {
+        fn visit_program(&mut self, program: &oxc_ast::ast::Program<'a>) {
+            self.statements(&program.body);
+            oxc_ast_visit::walk::walk_program(self, program);
+        }
+        fn visit_block_statement(&mut self, block: &oxc_ast::ast::BlockStatement<'a>) {
+            self.statements(&block.body);
+            oxc_ast_visit::walk::walk_block_statement(self, block);
+        }
+        fn visit_function_body(&mut self, body: &oxc_ast::ast::FunctionBody<'a>) {
+            self.statements(&body.statements);
+            oxc_ast_visit::walk::walk_function_body(self, body);
+        }
+        fn visit_ts_module_block(&mut self, block: &oxc_ast::ast::TSModuleBlock<'a>) {
+            self.statements(&block.body);
+            oxc_ast_visit::walk::walk_ts_module_block(self, block);
+        }
+    }
+    let mut collector = Collector(Vec::new());
+    collector.visit_program(program);
+    collector.0.sort_unstable();
+    collector.0
 }
