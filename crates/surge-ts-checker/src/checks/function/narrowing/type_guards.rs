@@ -502,8 +502,6 @@ pub(super) fn narrow_to_instanceof_subclass(
     {
         return None;
     }
-    // Narrow only along a real subtype edge; an unrelated constructor leaves the
-    // subject alone rather than replacing it with something it never was.
     if surge_ts_types::is_assignable_to(instance, ty) {
         return Some(instance.clone());
     }
@@ -525,6 +523,15 @@ pub(super) fn narrow_to_instanceof_subclass(
             properties,
             candidate.string_index_type.as_deref().cloned(),
         )));
+    }
+    // `getNarrowedTypeWorker`'s last resort for an object the candidate does
+    // not relate to either way, as a predicate guard narrows one.
+    if !surge_ts_types::is_assignable_to(ty, instance)
+        && matches!(ty.peeled(), Type::Object(_))
+        && matches!(instance.peeled(), Type::Object(_))
+        && !instance.is_unmodelled()
+    {
+        return Some(crate::infer::types::merge_intersection_members(vec![ty.clone(), instance.clone()]));
     }
     None
 }
