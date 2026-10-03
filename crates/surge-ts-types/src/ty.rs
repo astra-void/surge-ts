@@ -1120,11 +1120,13 @@ pub fn array_member_type(name: &str, element: &Type) -> Option<Type> {
 }
 
 fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
+    // Every iteration method takes the lib's optional `thisArg?: any` after
+    // its callback.
     match name {
         "length" => Some(Type::Number),
         ITERATION_PROTOCOL_MEMBER => Some(iteration_protocol_type(element)),
         "map" => Some(function_type(
-            vec![array_iteration_callback(element, Type::Any)],
+            vec![array_iteration_callback(element, Type::Any), Type::Any],
             Type::Array(Box::new(Type::Any)),
             false,
             1,
@@ -1132,13 +1134,13 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
         // Like `filter` below, the lib types these predicates as returning
         // `unknown` (the non-narrowing overload), so any truthy value is accepted.
         "find" | "findLast" => Some(function_type(
-            vec![array_iteration_callback(element, Type::Any)],
+            vec![array_iteration_callback(element, Type::Any), Type::Any],
             element_or_undefined(element),
             false,
             1,
         )),
         "findIndex" | "findLastIndex" => Some(function_type(
-            vec![array_iteration_callback(element, Type::Any)],
+            vec![array_iteration_callback(element, Type::Any), Type::Any],
             Type::Number,
             false,
             1,
@@ -1147,25 +1149,25 @@ fn array_property_access_type(name: &str, element: &Type) -> Option<Type> {
         // truthy value filters (`lines.filter((x) => x)`), so demanding `boolean`
         // reports a `TS2345` tsc never emits.
         "filter" => Some(function_type(
-            vec![array_iteration_callback(element, Type::Any)],
+            vec![array_iteration_callback(element, Type::Any), Type::Any],
             Type::Array(Box::new(element.clone())),
             false,
             1,
         )),
         "some" | "every" => Some(function_type(
-            vec![array_iteration_callback(element, Type::Any)],
+            vec![array_iteration_callback(element, Type::Any), Type::Any],
             Type::Boolean,
             false,
             1,
         )),
         "forEach" => Some(function_type(
-            vec![array_iteration_callback(element, Type::Any)],
+            vec![array_iteration_callback(element, Type::Any), Type::Any],
             Type::Void,
             false,
             1,
         )),
         "flatMap" => Some(function_type(
-            vec![array_iteration_callback(element, Type::Any)],
+            vec![array_iteration_callback(element, Type::Any), Type::Any],
             Type::Array(Box::new(Type::Any)),
             false,
             1,
