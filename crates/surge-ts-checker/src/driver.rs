@@ -1378,39 +1378,38 @@ fn register_namespace_member_interface(
     key: String,
     mut info: InterfaceInfo,
     table: &Arc<str>,
+    report_conflicts: bool,
     ctx: &mut CheckerContext,
 ) {
-    let merged = match ctx.type_declarations.get(&key) {
-        None => None,
-        Some(TypeDeclarationInfo::Interface(existing))
-            if namespace_interface_merge_enabled()
-                && existing.namespace_member_table.as_deref() == Some(table.as_ref()) =>
-        {
-            if info
-                .body
-                .declaration_fragments
-                .iter()
-                .all(|fragment| existing.body.declaration_fragments.contains(fragment))
-            {
-                return;
-            }
-            let mut merged = crate::symbols::merge_interface_infos(existing, &info);
-            merged.namespace_member_table = Some(table.clone());
-            Some(merged)
-        }
-        Some(_) => return,
-    };
-    match merged {
-        Some(merged) => ctx
+    let Some(handle) = ctx.type_declarations.get_handle(&key) else {
+        info.namespace_member_table = Some(table.clone());
+        let _ = ctx
             .type_declarations
-            .upsert(key, TypeDeclarationInfo::Interface(merged)),
-        None => {
-            info.namespace_member_table = Some(table.clone());
-            let _ = ctx
-                .type_declarations
-                .insert(key, TypeDeclarationInfo::Interface(info));
-        }
+            .insert(key, TypeDeclarationInfo::Interface(info));
+        return;
+    };
+    let TypeDeclarationInfo::Interface(existing) = handle.get() else {
+        return;
+    };
+    if !namespace_interface_merge_enabled()
+        || existing.namespace_member_table.as_deref() != Some(table.as_ref())
+        || info
+            .body
+            .declaration_fragments
+            .iter()
+            .all(|fragment| existing.body.declaration_fragments.contains(fragment))
+    {
+        return;
     }
+    let incoming = if report_conflicts {
+        filter_conflicting_interface_members(existing, info, ctx)
+    } else {
+        info
+    };
+    let mut merged = crate::symbols::merge_interface_infos(existing, &incoming);
+    merged.namespace_member_table = Some(table.clone());
+    ctx.type_declarations
+        .upsert(key, TypeDeclarationInfo::Interface(merged));
 }
 
 /// `prefix` is the fully-qualified dotted path to `namespace` (`React`, then
@@ -1468,7 +1467,7 @@ fn collect_namespace_type_declarations_prefixed(
 
         match inner {
             ParsedStatement::InterfaceDeclaration(interface) => {
-                for key in member_keys(&interface.name) {
+                for (key_index, key) in member_keys(&interface.name).into_iter().enumerate() {
                     let info = InterfaceInfo::new(
                         key.clone(),
                         ctx.file_name_arc(),
@@ -1484,7 +1483,7 @@ fn collect_namespace_type_declarations_prefixed(
                         None,
                     )
                     .with_readonly_indexes(interface.string_index_readonly, interface.number_index_readonly);
-                    register_namespace_member_interface(key, info, table, ctx);
+                    register_namespace_member_interface(key, info, table, key_index == 0, ctx);
                 }
             }
             ParsedStatement::TypeAliasDeclaration(alias) => {
@@ -1529,7 +1528,7 @@ fn collect_namespace_type_declarations_prefixed(
                     // bare copy captures the qualified name as declared_name on
                     // rename, exactly as it does for interfaces.
                     info.name = key.as_str().into();
-                    register_namespace_member_interface(key, info, table, ctx);
+                    register_namespace_member_interface(key, info, table, false, ctx);
                 }
             }
             ParsedStatement::NamespaceDeclaration(inner_namespace) => {
@@ -2064,6 +2063,7 @@ pub(crate) fn collect_interface(
     ctx: &mut CheckerContext,
 ) {
     report_duplicate_type_parameters(&interface.type_parameters, ctx);
+    report_conflicting_members_within(&interface.members, ctx);
 
     let info = InterfaceInfo::new(
         interface.name.clone(),
@@ -2156,6 +2156,30 @@ pub(crate) fn collect_interface(
     }
 }
 
+/// TS2717 for a property one interface body declares twice with different
+/// types, on the later declaration, as for a later merged declaration.
+fn report_conflicting_members_within(members: &[surge_ts_syntax::ParsedInterfaceMember], ctx: &mut CheckerContext) {
+    let is_method = |ty: &ParsedType| matches!(ty, ParsedType::Function(_));
+    for (index, member) in members.iter().enumerate() {
+        let Some(previous) = members[..index].iter().find(|previous| previous.name == member.name) else {
+            continue;
+        };
+        if is_method(&previous.ty) || is_method(&member.ty) || previous.ty == member.ty {
+            continue;
+        }
+        // Parsed types carry their spans; the written text decides identity.
+        if let (Some(expected), Some(actual)) = (parsed_type_display(&previous.ty), parsed_type_display(&member.ty))
+            && expected != actual
+        {
+            let mut diagnostic = Diagnostic::ts2717(&member.name, expected, actual, ctx.file_name.clone());
+            if let Some(span) = member.name_span {
+                diagnostic = diagnostic.with_span(crate::context::convert_span(span));
+            }
+            ctx.push(diagnostic);
+        }
+    }
+}
+
 /// Drop members of a later interface declaration whose property type conflicts
 /// with the existing declaration and report TS2717 for each. The earlier
 /// declaration's type wins (matching TypeScript), so assignability still checks
@@ -2196,10 +2220,18 @@ fn filter_conflicting_interface_members(
                 return true;
             }
 
-            if let (Some(expected), Some(actual)) = (
+            let (Some(expected), Some(actual)) = (
                 parsed_type_display(&previous.ty),
                 parsed_type_display(&member.ty),
-            ) {
+            ) else {
+                return false;
+            };
+            // Parsed types carry their spans; the written text decides
+            // identity, and an identical redeclaration merges silently.
+            if expected == actual {
+                return false;
+            }
+            {
                 let mut diagnostic =
                     Diagnostic::ts2717(&member.name, expected, actual, ctx.file_name.clone());
                 if let Some(span) = member.name_span {
