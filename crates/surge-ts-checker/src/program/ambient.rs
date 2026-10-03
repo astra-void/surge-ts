@@ -1656,7 +1656,9 @@ fn declaring_file_for_exported_type(
         let Some(file) = parsed_files.get(index) else {
             continue;
         };
-        if export_assignment_namespace(&file.statements).is_some() {
+        if export_assignment_namespace(&file.statements).is_some_and(|namespace| {
+            namespace_reexported_local(&file.statements, namespace, type_name).is_none()
+        }) {
             return Some(crate::modules::canonical_file_identity(&file.file_name));
         }
         let declares = |statement: &ParsedStatement| match statement {
@@ -1902,8 +1904,14 @@ pub(crate) fn merge_file_keyed_module_augmentation_into_declarations(
         // namespace's members.
         let namespace = export_assignment_namespace(statements);
         for (name, declaration) in augmentation.type_declarations.iter() {
+            // A member the namespace re-exports (`export type { Req }`) is an
+            // alias: Go merges into what it resolves to, not into a new
+            // namespace member that would shadow it.
             let name = match namespace {
-                Some(namespace) => format!("{namespace}.{name}"),
+                Some(namespace) => match namespace_reexported_local(statements, namespace, name) {
+                    Some(local) => local.to_string(),
+                    None => format!("{namespace}.{name}"),
+                },
                 None => name.to_string(),
             };
             crate::symbols::merge_augmentation_type_declaration_into_table(
@@ -1933,6 +1941,39 @@ fn export_assignment_namespace(statements: &[ParsedStatement]) -> Option<&str> {
             )
         })
         .then_some(exported)
+}
+
+/// The local name a top-level `namespace` re-exports as `name` through an
+/// export specifier (`export { Local as name }`).
+fn namespace_reexported_local<'a>(
+    statements: &'a [ParsedStatement],
+    namespace: &str,
+    name: &str,
+) -> Option<&'a str> {
+    statements.iter().find_map(|statement| {
+        let ParsedStatement::NamespaceDeclaration(declaration) =
+            crate::modules::peel_exported_statement(statement)
+        else {
+            return None;
+        };
+        if declaration.name != namespace {
+            return None;
+        }
+        declaration.statements.iter().find_map(|member| match member {
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Named {
+                    specifiers,
+                    module_specifier: None,
+                    ..
+                } => specifiers
+                    .iter()
+                    .find(|specifier| specifier.exported_name == name)
+                    .map(|specifier| specifier.local_name.as_str()),
+                _ => None,
+            },
+            _ => None,
+        })
+    })
 }
 
 pub(crate) fn apply_module_augmentation(
