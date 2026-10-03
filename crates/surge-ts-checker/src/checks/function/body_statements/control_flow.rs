@@ -1121,22 +1121,48 @@ pub(crate) fn iterable_reference_element_type(
     }
 }
 
-/// TS7029 under `noFallthroughCasesInSwitch`: a non-empty clause whose end is
-/// reachable falls through into the next clause. The last clause cannot fall
-/// through, and empty clauses (stacked `case` labels) are allowed to.
-pub(super) fn emit_switch_fallthrough_diagnostics(
+/// The clauses TS7029 may report: every non-empty clause but the last (empty
+/// clauses, stacked `case` labels, are allowed to fall through), with the call
+/// each ends with.
+fn fallthrough_candidates(
     switch_statement: &ParsedSwitchStatement,
+) -> Vec<(Option<surge_ts_syntax::TextSpan>, Vec<ParsedFunctionBodyStatement>, Option<(usize, usize)>)> {
+    let case_count = switch_statement.cases.len();
+    switch_statement
+        .cases
+        .iter()
+        .enumerate()
+        .filter(|(index, case)| index + 1 != case_count && !case.consequent.is_empty())
+        .map(|(_, case)| {
+            (
+                case.span,
+                case.consequent.clone(),
+                crate::checks::expr::tail_call_key(&case.consequent),
+            )
+        })
+        .collect()
+}
+
+/// TS7029 under `noFallthroughCasesInSwitch`: a clause whose end is reachable
+/// (`isReachableFlowNode` of its fallthrough flow) falls through into the next
+/// one. Decided once the clauses are checked, so a nested `switch` known to be
+/// exhaustive and a call that returns `never` end the flow as they do for tsc.
+fn emit_switch_fallthrough_diagnostics(
+    candidates: Vec<(Option<surge_ts_syntax::TextSpan>, Vec<ParsedFunctionBodyStatement>, Option<(usize, usize)>)>,
     ctx: &mut CheckerContext,
 ) {
-    let case_count = switch_statement.cases.len();
-    for (index, case) in switch_statement.cases.iter().enumerate() {
-        let is_last = index + 1 == case_count;
-        if is_last || case.consequent.is_empty() {
+    for (span, consequent, tail_call) in candidates {
+        if tail_call.is_some_and(|key| ctx.never_returning_calls.contains(&key)) {
             continue;
         }
-        if !analyze_function_body_flow(&case.consequent).guarantees_exit {
+        let flow = crate::flow::with_non_exhaustive_switches(
+            &ctx.non_exhaustive_switches,
+            &ctx.exhaustive_switches,
+            || analyze_function_body_flow(&consequent),
+        );
+        if !flow.guarantees_exit {
             let diagnostic = Diagnostic::ts7029(ctx.file_name.clone());
-            let diagnostic = match case.span {
+            let diagnostic = match span {
                 Some(span) => diagnostic.with_span(convert_span(span)),
                 None => diagnostic,
             };
@@ -1228,9 +1254,10 @@ pub(crate) fn check_function_switch_statement(
             case.test = Some(ParsedExpression::StringLiteral(text));
         }
     }
-    if ctx.options.no_fallthrough_cases_in_switch {
-        emit_switch_fallthrough_diagnostics(&switch_statement, ctx);
-    }
+    let fallthrough_candidates = ctx
+        .options
+        .no_fallthrough_cases_in_switch
+        .then(|| fallthrough_candidates(&switch_statement));
 
     let flow_active = flow_state.tracked_local_count() > 0;
     let condition_blocked = if flow_active {
@@ -1479,6 +1506,9 @@ pub(crate) fn check_function_switch_statement(
             ctx,
         );
         narrow_switch_case(condition, false, scopes, flow_state, ctx);
+    }
+    if let Some(candidates) = fallthrough_candidates {
+        emit_switch_fallthrough_diagnostics(candidates, ctx);
     }
 }
 
