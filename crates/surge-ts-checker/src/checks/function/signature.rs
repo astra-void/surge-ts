@@ -883,6 +883,15 @@ pub(crate) fn object_rest_type(source: &Type, omitted: &[String]) -> Type {
 fn object_binding_element_type(source: &Type, property_name: &str) -> Type {
     match source {
         Type::Any => Type::Any,
+        // `getTypeOfDestructuredProperty` off a generic parent is the deferred
+        // `T["name"]`, not the parent itself.
+        source if source.is_type_variable() => {
+            surge_ts_types::type_variable::indexed_access_variable(
+                source,
+                &Type::StringLiteral(property_name.to_string()),
+            )
+            .unwrap_or(Type::Unknown)
+        }
         source if source.is_unknown() => {
             with_type_copy_reason(TypeCopyReason::FunctionBodySetup, || source.clone())
         }
