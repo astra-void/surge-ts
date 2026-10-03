@@ -415,6 +415,27 @@ pub(super) fn evaluate_index_access(
                             return InferredExpression::Unknown;
                         }
                     }
+                    // `getIndexedAccessType` distributes a union of literal keys,
+                    // each reading the member it names; a generic key is read
+                    // through its constraint, which is what its deferred
+                    // `T[K]` relates by.
+                    let key_union = if index_type.is_type_variable() {
+                        surge_ts_types::type_variable::base_constraint_or_type(&index_type)
+                    } else {
+                        index_type.clone()
+                    };
+                    // A write through a union of keys must suit every member
+                    // it may land on (`AccessFlagsWriting` intersects them); a
+                    // generic key's write stays the deferred `T[K]`, which
+                    // surge does not model.
+                    if let Some(members) = declared_literal_union_members(&object_type, &key_union) {
+                        if !is_write {
+                            return InferredExpression::Known(union_type(members));
+                        }
+                        if !index_type.is_type_variable() {
+                            return InferredExpression::Known(crate::infer::types::merge_intersection_members(members));
+                        }
+                    }
                     if let Some(index_value) = object_type.applicable_index_type(index_is_numeric) {
                         return InferredExpression::Known(crate::infer::unchecked_index_read(
                             index_value.clone(),
@@ -708,6 +729,14 @@ pub(crate) fn object_element_read(
         let Type::Object(object_type) = &peeled else {
             return None;
         };
+        let key_union = if index_type.is_type_variable() {
+            surge_ts_types::type_variable::base_constraint_or_type(index_type)
+        } else {
+            index_type.clone()
+        };
+        if let Some(members) = declared_literal_union_members(object_type, &key_union) {
+            return Some(union_type(members));
+        }
         return match object_type.applicable_index_type(index_is_numeric) {
             Some(index_value) => Some(crate::infer::unchecked_index_read(index_value.clone(), ctx)),
             None => union_literal_index_read(object_type, index_type),
@@ -795,6 +824,23 @@ fn literal_tuple_element(ty: &Type, key: &str) -> Option<Type> {
 /// reads `o["a"] | o["b"]`, and is only a missing key when one of them is. The
 /// union never reaches [`literal_index_key`], so without this it would look like
 /// a non-literal key the receiver cannot answer.
+/// The members a union of literal keys names when every one of them is a
+/// declared member, none read through an index signature.
+fn declared_literal_union_members(object_type: &surge_ts_types::ObjectType, index_type: &Type) -> Option<Vec<Type>> {
+    let Type::Union(union) = index_type else {
+        return None;
+    };
+    let mut member_types = Vec::with_capacity(union.types().len());
+    for member in union.types() {
+        let key = literal_index_key(member)?;
+        if object_type.properties.get(key.as_str()).is_none_or(|property| property.index_slot) {
+            return None;
+        }
+        member_types.push(object_type.get_property_access_type(&key)?);
+    }
+    Some(member_types)
+}
+
 fn union_literal_index_read(
     object_type: &surge_ts_types::ObjectType,
     index_type: &Type,
