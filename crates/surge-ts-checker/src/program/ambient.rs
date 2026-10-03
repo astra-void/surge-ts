@@ -818,9 +818,13 @@ fn is_ambient_global_declaration_file(
 
 /// A source file with no top-level import or export: Go's `initializeChecker`
 /// merges its locals into the globals table, so a module names its types as it
-/// names a declaration file's.
+/// names a declaration file's. A JavaScript script's JSDoc types are left to
+/// the script pass: published this early, an `import("./m")` typedef resolves
+/// before modules are bound and loses the TS1340 its use reports.
 fn is_root_source_script(parsed_file: &ParsedProgramFile) -> bool {
-    parsed_file.file_kind == FileKind::RootSource && !parsed_file.is_module
+    parsed_file.file_kind == FileKind::RootSource
+        && !parsed_file.is_module
+        && !surge_ts_syntax::is_javascript_file_name(&parsed_file.file_name)
 }
 
 /// Whether the file's own top-level declarations reach the *global* scope. A

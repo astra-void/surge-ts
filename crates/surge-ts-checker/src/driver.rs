@@ -2102,8 +2102,19 @@ fn filter_conflicting_interface_members(
     ctx: &mut CheckerContext,
 ) -> InterfaceInfo {
     // First declaration of each name wins, matching the `find` this replaces.
+    // A script's own declaration already sits in the global interface
+    // (`collect_ambient_global_types` publishes it), and is no earlier
+    // declaration of its own members.
     let mut existing_by_name = HashMap::new();
-    for member in &existing.body.members {
+    for (index, member) in existing.body.members.iter().enumerate() {
+        let own = existing
+            .body
+            .member_fragments
+            .get(index)
+            .is_some_and(|fragment| incoming.body.declaration_fragments.contains(fragment));
+        if own {
+            continue;
+        }
         existing_by_name
             .entry(member.name.as_str())
             .or_insert(member);
