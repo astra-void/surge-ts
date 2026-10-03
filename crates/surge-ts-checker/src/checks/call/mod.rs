@@ -1394,7 +1394,24 @@ fn check_new_like_unrecorded(
                         substituted_construct_signature(ctor_ty, &construct_signature, args, ctx)
                     })
                 });
-                let effective_signature = substituted.as_ref().unwrap_or(&construct_signature);
+                // `resolveCall` infers a generic construct signature's own type
+                // parameters from the arguments before relating them.
+                let inferred = (substituted.is_none()
+                    && construct_signature.overloads().is_none()
+                    && !own_type_parameter_names(&construct_signature).is_empty())
+                .then(|| {
+                    instantiate_overload_member(
+                        &construct_signature,
+                        type_arguments,
+                        callee_span,
+                        arguments,
+                        None,
+                        symbols,
+                        ctx,
+                    )
+                });
+                let effective_signature =
+                    substituted.as_ref().or(inferred.as_ref()).unwrap_or(&construct_signature);
                 with_type_copy_reason(TypeCopyReason::CallResolution, || {
                     check_function_type_call(
                         effective_signature,
@@ -3856,6 +3873,7 @@ pub(crate) fn check_function_type_call(
             .last()
             .and_then(|last| candidate_definitely_rejects(last, &argument_types));
     }
+    let overload_failed = overload_failure_argument.is_some();
     if let Some(fold_failure) = overload_failure_argument {
         // With explicit type arguments the candidate list tsc re-checks is not
         // this arity-only one, so the anchor stays where the fold rejected.
@@ -3927,7 +3945,15 @@ pub(crate) fn check_function_type_call(
                 Diagnostic::ts2769(ctx.file_name.clone()),
                 arguments[index].span,
             ));
-            return None;
+            return overload_failure_return_type(
+                function_type,
+                type_arguments,
+                callee_span,
+                arguments,
+                expected_return_type,
+                symbols,
+                ctx,
+            );
         }
     }
 
@@ -3935,7 +3961,17 @@ pub(crate) fn check_function_type_call(
     // types in hand, the return type is the first overload's that accepts them
     // — tsc's resolution order — and the fold's when none does, which keeps a
     // no-match call exactly where it was.
-    let return_type = if mismatch_reported || has_spread_argument {
+    let return_type = if overload_failed {
+        overload_failure_return_type(
+            function_type,
+            type_arguments,
+            callee_span,
+            arguments,
+            expected_return_type,
+            symbols,
+            ctx,
+        )
+    } else if mismatch_reported || has_spread_argument {
         None
     } else {
         choose_overload_return_type(
@@ -4160,6 +4196,50 @@ fn choose_overload_return_type(
         }
     }
     None
+}
+
+/// tsc's `getCandidateForOverloadFailure` when a candidate is generic
+/// (`pickLongestCandidateSignature`): the first candidate taking every
+/// argument, or else the one taking the most, its own type parameters inferred
+/// from the arguments. `None` for a group without a generic member, which tsc
+/// answers with the union of its signatures.
+fn overload_failure_return_type(
+    function_type: &FunctionType,
+    type_arguments: &[ParsedType],
+    callee_span: Option<SyntaxTextSpan>,
+    arguments: &[ParsedCallArgument],
+    expected_return_type: Option<&Type>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Option<Type> {
+    let members = function_type.overloads().unwrap_or(std::slice::from_ref(function_type));
+    if members.iter().all(|member| own_type_parameter_names(member).is_empty()) {
+        return None;
+    }
+    let mut longest: Option<usize> = None;
+    for (index, member) in members.iter().enumerate() {
+        if member.is_variadic() || member.parameters().len() >= arguments.len() {
+            longest = Some(index);
+            break;
+        }
+        if longest.is_none_or(|best| member.parameters().len() > members[best].parameters().len()) {
+            longest = Some(index);
+        }
+    }
+    let candidate = &members[longest?];
+    if own_type_parameter_names(candidate).is_empty() {
+        return Some(candidate.return_type().clone());
+    }
+    let instantiated = instantiate_overload_member(
+        candidate,
+        type_arguments,
+        callee_span,
+        arguments,
+        expected_return_type,
+        symbols,
+        ctx,
+    );
+    Some(instantiated.return_type().clone())
 }
 
 /// `candidate` with its own type parameters inferred for this call, as
