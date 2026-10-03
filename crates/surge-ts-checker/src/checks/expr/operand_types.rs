@@ -271,7 +271,10 @@ pub(crate) fn is_definitely_not_iterable(ty: &Type, nullish_is_error: bool) -> b
         | Type::Boolean
         | Type::BooleanLiteral(_)
         | Type::BigInt
-        | Type::Symbol => true,
+        | Type::Symbol
+        | Type::Never => true,
+        // A signature type carries no `[Symbol.iterator]` (`yield* fn`).
+        Type::Function(_) => true,
         Type::Undefined | Type::Null | Type::GenuineUnknown => nullish_is_error,
         Type::Union(union) => union
             .types()
@@ -291,10 +294,12 @@ pub(crate) fn is_definitely_not_iterable(ty: &Type, nullish_is_error: bool) -> b
         // `getIterationTypesOfIterable` looks the protocol member up as a
         // property, which no index signature answers; only an index surge
         // opened over an operand it could not enumerate proves nothing.
+        // An optional protocol member reads as possibly `undefined` under
+        // `strictNullChecks`, which is not a method to call.
         Type::Object(object) => {
             object
                 .get_property(surge_ts_types::ITERATION_PROTOCOL_MEMBER)
-                .is_none()
+                .is_none_or(|member| member.optional && surge_ts_types::strict_null_checks())
                 && object.call_signature().is_none()
                 && object.construct_signature().is_none()
                 && !(object.synthetic_open_index && object.string_index_type.is_some())
