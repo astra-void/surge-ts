@@ -590,8 +590,38 @@ pub(crate) fn constraint_names_a_sibling(
             .any(|member| constraint_names_a_sibling(member, siblings)),
         // The `object` keyword, which lowers to a memberless object type.
         ParsedType::Object(object) if object.non_primitive => false,
+        ParsedType::Function(function) => signature_names_a_sibling(function, siblings),
+        // A type made only of call and construct signatures
+        // (`abstract new (...args: any) => any`).
+        ParsedType::Object(object)
+            if object.properties.is_empty()
+                && object.string_index_type.is_none()
+                && object.number_index_type.is_none()
+                && object.call_signature_overloads.is_empty()
+                && (object.call_signature.is_some() || object.construct_signature.is_some()) =>
+        {
+            object
+                .call_signature
+                .iter()
+                .chain(&object.construct_signature)
+                .any(|signature| signature_names_a_sibling(signature, siblings))
+        }
         _ => true,
     }
+}
+
+/// A generic signature binds names of its own, which a sibling may share, so
+/// it counts as naming one.
+fn signature_names_a_sibling(
+    function: &surge_ts_syntax::ParsedFunctionType,
+    siblings: &[ParsedTypeParameter],
+) -> bool {
+    !function.type_parameters.is_empty()
+        || function
+            .parameters
+            .iter()
+            .any(|parameter| constraint_names_a_sibling(&parameter.ty, siblings))
+        || constraint_names_a_sibling(&function.return_type, siblings)
 }
 
 /// A type whose constraint relationship surge can judge without leaning on
