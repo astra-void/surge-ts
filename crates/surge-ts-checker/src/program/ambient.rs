@@ -679,10 +679,40 @@ fn lower_ambient_namespace_values(parsed_files: &[ParsedProgramFile], ctx: &mut 
     let global_augmentation_value_names = global_augmentation_value_names(parsed_files);
 
     for name in order {
-        if ctx.ambient_global_symbols.get(&name).is_some() {
+        let properties = merged.remove(&name).unwrap_or_default();
+        if let Some(existing) = ctx.ambient_global_symbols.get(&name) {
+            // A function or class the namespace merges with keeps its call or
+            // construct signature and gains the namespace's exports.
+            let merged_value = match &existing.ty {
+                surge_ts_types::Type::Function(function) if !properties.is_empty() => Some(
+                    crate::metrics::alloc_object_type(properties, None)
+                        .with_call_signature(function.clone()),
+                ),
+                surge_ts_types::Type::Object(object)
+                    if !properties.is_empty()
+                        && (object.call_signature.is_some() || object.construct_signature.is_some()) =>
+                {
+                    let mut extended = object.clone();
+                    let mut members = (*object.properties).clone();
+                    for (member, property) in properties.iter() {
+                        members.entry(member.clone()).or_insert_with(|| property.clone());
+                    }
+                    extended.properties = Arc::new(members);
+                    extended.property_map_id = None;
+                    Some(extended)
+                }
+                _ => None,
+            };
+            if let Some(merged_value) = merged_value {
+                let symbol = crate::symbols::SymbolInfo {
+                    ty: surge_ts_types::Type::Object(merged_value),
+                    kind: existing.kind,
+                    function_signature: existing.function_signature.clone(),
+                };
+                ctx.ambient_global_symbols.insert(name, symbol);
+            }
             continue;
         }
-        let properties = merged.remove(&name).unwrap_or_default();
         // A namespace with no value members contributes nothing but an empty
         // object, and this pass runs before `declare global` blocks are lowered
         // (`collect_global_augmentations`) — claiming the name here would freeze

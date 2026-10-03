@@ -92,6 +92,49 @@ pub(crate) fn collect_global_function_signatures(
         }
     }
     merge_cross_file_script_namespaces(parsed_files, global_symbols, ctx);
+    merge_script_functions_into_ambient_namespaces(parsed_files, global_symbols, ctx);
+}
+
+/// A script's function and a declaration file's `declare namespace` of the
+/// same name are one global symbol in Go: callable, with the namespace's
+/// exports. The ambient table answers the name for every file, so the merged
+/// value replaces the namespace object there.
+fn merge_script_functions_into_ambient_namespaces(
+    parsed_files: &[ParsedProgramFile],
+    global_symbols: &mut SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    for parsed_file in parsed_files.iter().filter(|parsed_file| is_script_source(parsed_file)) {
+        for statement in &parsed_file.statements {
+            let Some(function) = declared_function(statement) else {
+                continue;
+            };
+            let Some(surge_ts_types::Type::Function(call_signature)) =
+                global_symbols.get_own(&function.name).map(|symbol| symbol.ty.clone())
+            else {
+                continue;
+            };
+            let Some(namespace) = ctx.ambient_global_symbols.get(&function.name) else {
+                continue;
+            };
+            let surge_ts_types::Type::Object(namespace_object) = &namespace.ty else {
+                continue;
+            };
+            if namespace_object.call_signature.is_some() || namespace_object.construct_signature.is_some() {
+                continue;
+            }
+            let merged = crate::symbols::SymbolInfo {
+                ty: surge_ts_types::Type::Object(
+                    crate::metrics::alloc_object_type(namespace_object.properties.as_ref().clone(), None)
+                        .with_call_signature(call_signature),
+                ),
+                kind: crate::symbols::SymbolKind::Function,
+                function_signature: None,
+            };
+            let _ = global_symbols.insert(function.name.clone(), merged.clone());
+            ctx.ambient_global_symbols.insert(function.name.clone(), merged);
+        }
+    }
 }
 
 /// tsc merges every script's globals into one table (`mergeSymbolTable`), so a
