@@ -1202,6 +1202,20 @@ fn evaluate_nullish_coalescing(
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
     let left_result = evaluate_expression(left, left_span.or(fallback_span), symbols, ctx);
+    // The right operand runs only when the left is nullish, which narrows
+    // the left's reference there as `left == null` would.
+    let nullish_test = (!left.contains_assignment()).then(|| ParsedExpression::Binary {
+        left: left.clone(),
+        left_span: *left_span,
+        operator: surge_ts_syntax::ParsedBinaryOperator::Equals,
+        operator_span: None,
+        right: Box::new(ParsedExpression::NullLiteral),
+        right_span: None,
+    });
+    let right_symbols = nullish_test
+        .as_ref()
+        .and_then(|test| crate::checks::function::narrow_truthy_operand_symbol_table(test, symbols));
+    let symbols = right_symbols.as_ref().unwrap_or(symbols);
     // With no outer contextual type, tsc contextually types the right
     // operand from the left's — that is what gives `opts.uri ?? ((id) =>
     // id)`'s parameter a type instead of a false TS7006. It is a contextual
