@@ -24,7 +24,11 @@ thread_local! {
 /// Renames the late-bindable members of `properties`. `true` when a key's
 /// value could not be resolved yet (a class built while signatures are
 /// collected, before the module's values are bound): the shape keeps the
-/// written name and must not be cached as final.
+/// written name and must not be cached as final. Only the collected file's own
+/// values are still to be bound: a key that does not resolve outside that
+/// phase, or in another file's declaration, never will here, so its written
+/// name is final. Degrading it kept every shape naming it uncached, and
+/// drizzle's `[TableName]` re-resolved its whole declaration graph without end.
 pub(crate) fn late_bind_member_names(properties: &mut PropertyMap, ctx: &mut CheckerContext) -> bool {
     if !properties.keys().any(|name| is_late_bindable_name(name)) || LATE_BINDING.with(Cell::get) {
         return false;
@@ -36,7 +40,9 @@ pub(crate) fn late_bind_member_names(properties: &mut PropertyMap, ctx: &mut Che
         match late_bound_name(name, ctx) {
             Ok(Some(bound)) if bound.as_str() != name.as_ref() => renamed.push((name.clone(), bound.into())),
             Ok(_) => {}
-            Err(Unresolved) => unresolved = true,
+            Err(Unresolved) => {
+                unresolved |= ctx.collecting_signatures && ctx.cross_file_resolution_depth == 0;
+            }
         }
     }
     LATE_BINDING.with(|active| active.set(false));
