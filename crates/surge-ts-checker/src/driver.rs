@@ -287,6 +287,7 @@ pub(crate) fn collect_global_augmentations(
                     block_statements,
                     enclosing_statements,
                     &parsed_file.statements,
+                    parsed_files,
                     ctx,
                 );
                 let block_table = if enclosing_statements.is_none() {
@@ -341,6 +342,7 @@ pub(crate) fn collect_global_augmentations_from_statements(
                 block_statements,
                 enclosing_statements,
                 statements,
+                &[],
                 ctx,
             ));
         },
@@ -414,6 +416,7 @@ fn collect_global_augmentation_block_types(
     block_statements: &[ParsedStatement],
     enclosing_statements: Option<&[ParsedStatement]>,
     file_statements: &[ParsedStatement],
+    parsed_files: &[crate::program::ParsedProgramFile],
     ctx: &mut CheckerContext,
 ) -> crate::symbols::TypeDeclarationTable {
     let saved_type_declarations = std::mem::replace(
@@ -449,6 +452,7 @@ fn collect_global_augmentation_block_types(
     publish_global_augmentation_alias_types(
         block_statements,
         enclosing_statements.unwrap_or(file_statements),
+        parsed_files,
         &mut block_table,
         ctx,
     );
@@ -468,6 +472,7 @@ fn collect_global_augmentation_block_types(
 fn publish_global_augmentation_alias_types(
     block_statements: &[ParsedStatement],
     enclosing_statements: &[ParsedStatement],
+    parsed_files: &[crate::program::ParsedProgramFile],
     block_table: &mut crate::symbols::TypeDeclarationTable,
     ctx: &mut CheckerContext,
 ) {
@@ -509,6 +514,10 @@ fn publish_global_augmentation_alias_types(
             });
             if names_entity(enclosing_table, target) {
                 entity_alias_type_entries(enclosing_table, target, local, Some(&*enclosing_scope))
+            } else if let Some(entries) =
+                imported_entity_alias_type_entries(enclosing_statements, target, local, parsed_files, ctx)
+            {
+                entries
             } else {
                 entity_alias_type_entries(&ctx.ambient_global_type_declarations, target, local, None)
             }
@@ -517,6 +526,54 @@ fn publish_global_augmentation_alias_types(
             let _ = block_table.insert(name, declaration);
         }
     }
+}
+
+/// [`entity_alias_type_entries`] for an entity whose root the enclosing file
+/// imports by name (`import { JSXInternal } from ".."` then `export import JSX =
+/// JSXInternal` in its `declare global`): the entity is read from the imported
+/// file's own declarations, which is where it resolves.
+fn imported_entity_alias_type_entries(
+    enclosing_statements: &[ParsedStatement],
+    target: &str,
+    local: &str,
+    parsed_files: &[crate::program::ParsedProgramFile],
+    ctx: &mut CheckerContext,
+) -> Option<Vec<(String, TypeDeclarationInfo)>> {
+    let (root, rest) = match target.split_once('.') {
+        Some((root, rest)) => (root, Some(rest)),
+        None => (target, None),
+    };
+    let (module_specifier, imported_name) = enclosing_statements.iter().find_map(|statement| {
+        let ParsedStatement::ImportDeclaration(import) = statement else {
+            return None;
+        };
+        let surge_ts_syntax::ParsedImportKind::Named { specifiers, .. } = &import.kind else {
+            return None;
+        };
+        specifiers
+            .iter()
+            .find(|specifier| specifier.local_name == root)
+            .map(|specifier| (import.module_specifier.as_str(), specifier.imported_name.as_str()))
+    })?;
+    let index = crate::program::module_file_index_for_specifier(
+        &ctx.file_name.clone(),
+        module_specifier,
+        parsed_files,
+        ctx,
+    )?;
+    let imported_file = parsed_files.get(index)?;
+    let saved = std::mem::replace(&mut ctx.type_declarations, crate::symbols::TypeDeclarationTable::new());
+    let diagnostics_before = ctx.diagnostics().len();
+    collect_type_declarations(&imported_file.statements, ctx);
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    let table = std::mem::replace(&mut ctx.type_declarations, saved);
+    let scope = Arc::new(crate::symbols::TypeDeclarationScope::new(vec![Arc::new(table.clone())]));
+    let entity = match rest {
+        Some(rest) => format!("{imported_name}.{rest}"),
+        None => imported_name.to_string(),
+    };
+    let entries = entity_alias_type_entries(&table, &entity, local, Some(&scope));
+    (!entries.is_empty()).then_some(entries)
 }
 
 /// The type declarations the entity path `target` names in `source`, keyed

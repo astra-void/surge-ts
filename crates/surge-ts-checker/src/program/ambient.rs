@@ -1503,7 +1503,7 @@ pub(crate) fn collect_ambient_modules(
 /// Resolves `specifier` written in `from_file` to a program file index, taking
 /// the package resolver's answer for a bare specifier and the relative resolver
 /// otherwise.
-fn module_file_index_for_specifier(
+pub(crate) fn module_file_index_for_specifier(
     from_file: &str,
     specifier: &str,
     parsed_files: &[ParsedProgramFile],
