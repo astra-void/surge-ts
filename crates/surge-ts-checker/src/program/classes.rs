@@ -614,6 +614,7 @@ fn collect_static_members(
             _ => {}
         }
     }
+    let _ = crate::infer::types::late_bind_member_names(properties, ctx);
 }
 
 /// Whether `class` declares a static whose return type narrows its argument

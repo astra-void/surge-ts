@@ -11,12 +11,14 @@ use crate::symbols::TypeDeclarationInfo;
 pub(crate) mod cache;
 mod diagnostics;
 pub(crate) mod interface;
+mod late_bound;
 mod resolve;
 mod utility;
 
 pub(crate) use cache::*;
 pub(crate) use diagnostics::*;
 pub(crate) use interface::*;
+pub(crate) use late_bound::late_bind_member_names;
 pub(crate) use resolve::*;
 pub(crate) use utility::*;
 /// Type-parameter bindings for one resolution context.

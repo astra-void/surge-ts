@@ -100,8 +100,10 @@ fn check_against_base(
     let no_implicit_override = ctx.options.no_implicit_override;
 
     for member in members {
+        let mut bound_name = None;
         match computed_name(class, member, ctx) {
-            ComputedName::NotComputed | ComputedName::Bindable => {}
+            ComputedName::NotComputed => {}
+            ComputedName::Bindable(name) => bound_name = name,
             ComputedName::Unknown => continue,
             ComputedName::Dynamic(span) => {
                 if member.has_override {
@@ -119,14 +121,16 @@ fn check_against_base(
             continue;
         }
         let base_side = if member.is_static { base_static.as_ref() } else { Some(&base_instance) };
+        // The base's members are named as `lateBindMember` binds them.
+        let lookup_name = bound_name.as_deref().unwrap_or(member.name);
         let presence = match base_side {
-            Some(base_side) => property_presence(base_side, member.name, !member.is_static, ctx),
+            Some(base_side) => property_presence(base_side, lookup_name, !member.is_static, ctx),
             None => Presence::Unknown,
         };
         match presence {
             Presence::Unknown => {}
             Presence::Absent if member.has_override => {
-                let suggestion = base_side.and_then(|base_side| suggested_base_member(base_side, member.name, ctx));
+                let suggestion = base_side.and_then(|base_side| suggested_base_member(base_side, lookup_name, ctx));
                 let diagnostic = match (suggestion, javascript) {
                     (Some(suggestion), false) => Diagnostic::ts4117(&base_display, suggestion, ctx.file_name.clone()),
                     (Some(suggestion), true) => Diagnostic::ts4123(&base_display, suggestion, ctx.file_name.clone()),
@@ -224,7 +228,9 @@ fn override_members(class: &ParsedClassDeclaration) -> Vec<Member<'_>> {
 
 enum ComputedName {
     NotComputed,
-    Bindable,
+    /// Bound to a member; the name it binds to when that differs from the
+    /// written one.
+    Bindable(Option<String>),
     /// A name no member is bound under, with where tsc reports it: from the
     /// `[`.
     Dynamic(Option<TextSpan>),
@@ -240,7 +246,7 @@ fn computed_name(class: &ParsedClassDeclaration, member: &Member<'_>, ctx: &mut 
         return ComputedName::NotComputed;
     }
     if member.name.starts_with("[Symbol.") {
-        return ComputedName::Bindable;
+        return ComputedName::Bindable(None);
     }
     let Some(span) = member.name_span else {
         return ComputedName::Unknown;
@@ -263,7 +269,11 @@ fn computed_name(class: &ParsedClassDeclaration, member: &Member<'_>, ctx: &mut 
     };
     let is_wide = |ty: &Type| matches!(ty, Type::String | Type::Number | Type::Symbol);
     match &key_type {
-        ty if is_name(ty) => ComputedName::Bindable,
+        Type::StringLiteral(value) => ComputedName::Bindable(Some(value.clone())),
+        Type::NumberLiteral(literal) => ComputedName::Bindable(Some(literal.value.clone())),
+        Type::Reference(reference) if reference.is_unique_symbol() => {
+            ComputedName::Bindable(reference.unique_symbol_name().map(|name| format!("[{name}]")))
+        }
         ty if is_wide(ty) => ComputedName::Dynamic(*key_span),
         Type::Union(union) if union.types().iter().all(|member| is_name(member) || is_wide(member)) => {
             ComputedName::Dynamic(*key_span)
@@ -313,7 +323,7 @@ fn property_presence(ty: &Type, name: &str, instance_side: bool, ctx: &CheckerCo
     }
 }
 
-fn global_interface_declares(interface: &str, name: &str, ctx: &CheckerContext) -> bool {
+pub(crate) fn global_interface_declares(interface: &str, name: &str, ctx: &CheckerContext) -> bool {
     match ctx.lookup_type_declaration(interface) {
         Some(TypeDeclarationInfo::Interface(info)) => {
             info.body.members.iter().any(|member| member.name == name)

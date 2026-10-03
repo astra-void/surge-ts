@@ -1665,6 +1665,7 @@ pub(crate) fn resolve_interface_declaration(
     } else {
         inherited_number_index_readonly
     };
+    had_error |= super::late_bind_member_names(&mut properties, ctx);
     let mut object_type = alloc_object_type(properties, resolved_index_type)
         .with_number_index_type(resolved_number_index_type)
         .with_readonly_indexes(resolved_index_readonly, resolved_number_index_readonly)

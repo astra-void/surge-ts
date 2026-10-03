@@ -47,6 +47,16 @@ pub(crate) fn resolve_computed_property_names<'a>(
             resolved.push(property.clone());
             continue;
         };
+        // A unique symbol key names the member by the symbol's declaration,
+        // whichever alias the key reads it through.
+        if let Type::Reference(reference) = &key_type
+            && let Some(declaration) = reference.unique_symbol_name()
+        {
+            let mut renamed = property.clone();
+            renamed.name = format!("[{declaration}]");
+            resolved.push(renamed);
+            continue;
+        }
         match key_type.peeled() {
             Type::StringLiteral(name) => {
                 let mut renamed = property.clone();
