@@ -92,8 +92,19 @@ impl<'a> ContextCollector<'a, '_> {
             }
             AstKind::FormalParameter(parameter) => self.check_parameter(parameter),
             AstKind::FormalParameters(parameters) => self.check_rest_parameter_property(parameters),
+            AstKind::BindingRestElement(rest) => self.check_rest_element_initializer(rest),
             AstKind::ForInStatement(statement) => match &statement.left {
                 ForStatementLeft::VariableDeclaration(declaration) => {
+                    // `checkGrammarForInOrForOfStatement`'s `using` rule.
+                    match declaration.kind {
+                        oxc_ast::ast::VariableDeclarationKind::Using => {
+                            self.push(1493, declaration.span, &[]);
+                        }
+                        oxc_ast::ast::VariableDeclarationKind::AwaitUsing => {
+                            self.push(1494, declaration.span, &[]);
+                        }
+                        _ => {}
+                    }
                     if let Some(first) = declaration.declarations.first()
                         && !matches!(first.id, BindingPattern::BindingIdentifier(_))
                     {
@@ -514,6 +525,25 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
+    /// A rest element written with an initializer: on a parameter it is
+    /// `checkGrammarParameterList`'s TS1048 at the name, elsewhere
+    /// `checkGrammarBindingElement`'s TS1186 at the `=`.
+    fn check_rest_element_initializer(&mut self, rest: &oxc_ast::ast::BindingRestElement<'a>) {
+        let BindingPattern::AssignmentPattern(pattern) = &rest.argument else {
+            return;
+        };
+        if matches!(self.stack.last(), Some(AstKind::FormalParameterRest(_))) {
+            self.push(1048, pattern.left.span(), &[]);
+            return;
+        }
+        let from = pattern.left.span().end as usize;
+        let to = pattern.right.span().start as usize;
+        if let Some(offset) = self.source_text.get(from..to).and_then(|text| text.find('=')) {
+            let start = (from + offset) as u32;
+            self.push(1186, Span::new(start, start + 1), &[]);
+        }
+    }
+
     /// tsc's `checkTypePredicate`. Its parser only accepts a predicate as a
     /// return type, so one anywhere else is a parse error there (and nothing
     /// here); a return position that is not a function, arrow, function type,
@@ -582,6 +612,9 @@ impl<'a> ContextCollector<'a, '_> {
                 {
                     Err(())
                 }
+                // A `this` predicate parses wherever the `this` type does
+                // (`var x: this is string`, a setter's parameter).
+                _ if matches!(predicate.parameter_name, TSTypePredicateName::This(_)) => Err(()),
                 _ => return,
             };
         let params = match owner {

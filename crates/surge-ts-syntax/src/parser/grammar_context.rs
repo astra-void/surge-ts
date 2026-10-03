@@ -10,7 +10,7 @@
 
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
-    AssignmentTarget, BindingPattern, Class, MethodDefinitionKind,
+    AssignmentTarget, BindingPattern, Class, Expression, MethodDefinitionKind,
     ModuleExportName, Program, PropertyKind, SimpleAssignmentTarget, Statement,
     VariableDeclarationKind,
 };
@@ -1913,6 +1913,46 @@ impl<'a> ContextCollector<'a, '_> {
         self.push_at_exclamation(code, declarator.id.span());
     }
 
+    /// tsc's `isValidConstAssertionArgument` (TS1355): `as const` applies to
+    /// a literal or to an enum member reference. A member access is left to
+    /// the checker's symbols and never reported here.
+    fn check_const_assertion(&mut self, ty: &oxc_ast::ast::TSType<'_>, expression: &Expression<'_>) {
+        let oxc_ast::ast::TSType::TSTypeReference(reference) = ty else {
+            return;
+        };
+        if !matches!(&reference.type_name, oxc_ast::ast::TSTypeName::IdentifierReference(name) if name.name == "const")
+            || reference.type_arguments.is_some()
+        {
+            return;
+        }
+        fn valid(expression: &Expression<'_>) -> bool {
+            match expression {
+                Expression::StringLiteral(_)
+                | Expression::NumericLiteral(_)
+                | Expression::BigIntLiteral(_)
+                | Expression::BooleanLiteral(_)
+                | Expression::TemplateLiteral(_)
+                | Expression::ArrayExpression(_)
+                | Expression::ObjectExpression(_) => true,
+                Expression::ParenthesizedExpression(inner) => valid(&inner.expression),
+                Expression::UnaryExpression(unary) => match unary.operator {
+                    oxc_ast::ast::UnaryOperator::UnaryNegation => {
+                        matches!(unary.argument, Expression::NumericLiteral(_) | Expression::BigIntLiteral(_))
+                    }
+                    oxc_ast::ast::UnaryOperator::UnaryPlus => matches!(unary.argument, Expression::NumericLiteral(_)),
+                    _ => false,
+                },
+                Expression::StaticMemberExpression(_)
+                | Expression::ComputedMemberExpression(_)
+                | Expression::PrivateFieldExpression(_) => true,
+                _ => false,
+            }
+        }
+        if !valid(expression) {
+            self.push(1355, expression.span(), &[]);
+        }
+    }
+
     fn push_at_exclamation(&mut self, code: u32, name_span: Span) {
         let after = name_span.end as usize;
         if let Some(offset) = self.source_text[after..].find('!') {
@@ -3320,6 +3360,10 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             }
             AstKind::TSTypeAssertion(assertion) => {
                 self.push_erasable(Span::new(assertion.span.start, assertion.expression.span().start));
+                self.check_const_assertion(&assertion.type_annotation, &assertion.expression);
+            }
+            AstKind::TSAsExpression(assertion) => {
+                self.check_const_assertion(&assertion.type_annotation, &assertion.expression);
             }
             AstKind::WithStatement(statement) => {
                 self.check_with_statement(statement);
@@ -3413,8 +3457,24 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
                 }
             }
             AstKind::PropertyDefinition(property) => {
-                if property.definite && property.value.is_some() {
-                    self.push_at_exclamation(1263, property.key.span());
+                // `checkGrammarProperty`'s `!` rules for a class property.
+                if property.definite {
+                    let code = if property.value.is_some() {
+                        Some(1263)
+                    } else if property.type_annotation.is_none() {
+                        Some(1264)
+                    } else if property.r#static
+                        || property.declare
+                        || self.ambient_depth > 0
+                        || property.r#type == oxc_ast::ast::PropertyDefinitionType::TSAbstractPropertyDefinition
+                    {
+                        Some(1255)
+                    } else {
+                        None
+                    };
+                    if let Some(code) = code {
+                        self.push_at_exclamation(code, property.key.span());
+                    }
                 }
                 // tsc checks the name only once `checkGrammarModifiers` passes,
                 // so not under a decorator TS1206 rejects; a `[k in T]` name is

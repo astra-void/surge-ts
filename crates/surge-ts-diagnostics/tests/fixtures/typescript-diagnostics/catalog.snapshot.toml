@@ -2713,6 +2713,46 @@ message = "Class field '{0}' defined by the parent class is not accessible in th
 arity = 1
 
 [[diagnostic]]
+code = "TS1048"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A rest parameter cannot have an initializer."
+arity = 0
+
+[[diagnostic]]
+code = "TS1186"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A rest element cannot have an initializer."
+arity = 0
+
+[[diagnostic]]
+code = "TS1493"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The left-hand side of a 'for...in' statement cannot be a 'using' declaration."
+arity = 0
+
+[[diagnostic]]
+code = "TS1494"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "The left-hand side of a 'for...in' statement cannot be an 'await using' declaration."
+arity = 0
+
+[[diagnostic]]
+code = "TS1355"
+category = "Error"
+source = "typescript"
+support = "emitted"
+message = "A 'const' assertion can only be applied to references to enum members, or string, number, boolean, array, or object literals."
+arity = 0
+
+[[diagnostic]]
 code = "TS17013"
 category = "Error"
 source = "typescript"

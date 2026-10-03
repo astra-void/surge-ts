@@ -3395,6 +3395,56 @@ pub const TS2855: DiagnosticDescriptor = DiagnosticDescriptor {
     support: DiagnosticSupport::Emitted,
 };
 
+pub const TS1048: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1048",
+    number: Some(1048),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A rest parameter cannot have an initializer.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1186: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1186",
+    number: Some(1186),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A rest element cannot have an initializer.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1493: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1493",
+    number: Some(1493),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The left-hand side of a 'for...in' statement cannot be a 'using' declaration.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1494: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1494",
+    number: Some(1494),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The left-hand side of a 'for...in' statement cannot be an 'await using' declaration.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS1355: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS1355",
+    number: Some(1355),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "A 'const' assertion can only be applied to references to enum members, or string, number, boolean, array, or object literals.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
 pub const TS17013: DiagnosticDescriptor = DiagnosticDescriptor {
     code: "TS17013",
     number: Some(17013),
@@ -8405,6 +8455,11 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS17012,
     TS18061,
     TS2855,
+    TS1048,
+    TS1186,
+    TS1493,
+    TS1494,
+    TS1355,
     TS17013,
     TS2526,
     TS1338,
@@ -11739,6 +11794,31 @@ impl Diagnostic {
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1048(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1048, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1186(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1186, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1493(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1493, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1494(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1494, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts1355(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS1355, Vec::<DiagnosticArg>::new(), file_name)
     }
 
     #[allow(clippy::needless_pass_by_value)]

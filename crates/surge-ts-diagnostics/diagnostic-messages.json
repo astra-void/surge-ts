@@ -2712,6 +2712,46 @@
     "support": "emitted"
   },
   {
+    "code": "TS1048",
+    "category": "Error",
+    "message": "A rest parameter cannot have an initializer.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1186",
+    "category": "Error",
+    "message": "A rest element cannot have an initializer.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1493",
+    "category": "Error",
+    "message": "The left-hand side of a 'for...in' statement cannot be a 'using' declaration.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1494",
+    "category": "Error",
+    "message": "The left-hand side of a 'for...in' statement cannot be an 'await using' declaration.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS1355",
+    "category": "Error",
+    "message": "A 'const' assertion can only be applied to references to enum members, or string, number, boolean, array, or object literals.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
     "code": "TS17013",
     "category": "Error",
     "message": "Meta-property '{0}' is only allowed in the body of a function declaration, function expression, or constructor.",
