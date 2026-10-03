@@ -384,6 +384,13 @@ pub(crate) fn collect_exports_from_statement(
                         // A second default export is reported once, as TS2528,
                         // by the parser's grammar walk; the module pass only
                         // keeps the first symbol.
+                    } else if let Some(symbol) = exportable_values
+                        .get_own_shared(&function.name)
+                        .filter(|symbol| matches!(&symbol.ty, Type::Object(object) if object.call_signature().is_some()))
+                    {
+                        // The default export is the function's own symbol, with
+                        // the members expando writes declared on it.
+                        *default_symbol = Some(symbol);
                     } else {
                         let mut signature_symbols =
                             exportable_values.clone_with_reason(TypeCopyReason::ModuleExport);
