@@ -1234,6 +1234,13 @@ pub(crate) fn check_member_assignment(
             _ => None,
         };
     }
+    // The target is bound before the value (`bindBinaryExpressionFlow`), so
+    // what it assigns holds there: `(x = "", o).p = x.length`.
+    if assignment.target.contains_assignment() {
+        for (write, conditional) in crate::flow::expression_assignments(&assignment.target) {
+            apply_assignment_expression(write, conditional, scopes, ctx);
+        }
+    }
     check_member_assignment_itself(assignment, scopes, ctx);
     if evolving_receiver {
         ctx.evolving_array_operation_target = None;
