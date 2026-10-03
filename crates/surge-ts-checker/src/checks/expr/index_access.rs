@@ -86,6 +86,11 @@ pub(super) fn evaluate_optional_index_access(
                 | InferredExpression::MissingProperty { .. }
                 | InferredExpression::Unknown => return InferredExpression::Unknown,
             };
+            if let Some(member) =
+                well_known_symbol_member(&Type::Array(element_type.clone()), index, symbols)
+            {
+                return InferredExpression::Known(member);
+            }
 
             if !numeric_index_key(&index_type) && !indexes_as_number(index, symbols) {
                 report_non_numeric_index(
@@ -251,6 +256,9 @@ pub(super) fn evaluate_index_access(
                 | InferredExpression::MissingProperty { .. }
                 | InferredExpression::Unknown => return InferredExpression::Unknown,
             };
+            if let Some(member) = well_known_symbol_member(&receiver_type, index, symbols) {
+                return InferredExpression::Known(member);
+            }
 
             // tsc's `getPropertyTypeForIndexType`: a literal index past a fixed
             // tuple's end is TS2493 (a negative one TS2514) and reads `undefined`,
@@ -298,6 +306,11 @@ pub(super) fn evaluate_index_access(
                 | InferredExpression::MissingProperty { .. }
                 | InferredExpression::Unknown => return InferredExpression::Unknown,
             };
+            if let Some(member) =
+                well_known_symbol_member(&Type::Array(element_type.clone()), index, symbols)
+            {
+                return InferredExpression::Known(member);
+            }
 
             if !numeric_index_key(&index_type) && !indexes_as_number(index, symbols) {
                 report_non_numeric_index(
@@ -337,6 +350,7 @@ pub(super) fn evaluate_index_access(
                 InferredExpression::Known(ty) => ty,
                 _ => return InferredExpression::Unknown,
             };
+            let index_type = well_known_symbol_key_type(index, symbols).unwrap_or(index_type);
             if report_unusable_index_type(
                 &index_type,
                 choose_span(index_span, choose_span(object_span, fallback_span)),
@@ -826,6 +840,15 @@ fn literal_index_key(index_type: &Type) -> Option<String> {
 /// symbols: a unique symbol, which names the member a class or interface
 /// declares as `[Symbol.<name>]`. surge types the lib's `unique symbol`
 /// members as `symbol`, so the key is recognised by what it reads.
+/// The member a well-known symbol key reads off an array or tuple's apparent
+/// `Array<T>`, which declares it under the same `[Symbol.<name>]`.
+fn well_known_symbol_member(receiver: &Type, index: &ParsedExpression, symbols: &SymbolTable) -> Option<Type> {
+    let Type::Reference(key) = well_known_symbol_key_type(index, symbols)? else {
+        return None;
+    };
+    receiver.get_property_access_type(&format!("[{}]", key.unique_symbol_name()?))
+}
+
 pub(crate) fn well_known_symbol_key_type(index: &ParsedExpression, symbols: &SymbolTable) -> Option<Type> {
     let ParsedExpression::PropertyAccess {
         object,
