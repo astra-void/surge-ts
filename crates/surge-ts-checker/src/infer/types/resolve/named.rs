@@ -560,7 +560,9 @@ fn resolve_named_type_inner(
     // arguments exactly once. Repeating an errored argument during binding is
     // exponential on nested generics too. Keep those results and their error
     // flags local to this binding; only clean arguments participate in shared
-    // lookup and nominal identity. Errored arguments retain their diagnostics.
+    // lookup and nominal identity. Errored arguments of a written reference
+    // retain their diagnostics; a synthesized one (no span) has nowhere to
+    // report them, and its written source already did.
     let (resolved_arguments, degraded_arguments, argument_errors) = {
         let diagnostics_before = ctx.diagnostics().len();
         let mut arguments = Vec::with_capacity(named_type.type_arguments.len());
@@ -579,6 +581,9 @@ fn resolve_named_type_inner(
             ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
             (Some(arguments), None, errors)
         } else {
+            if named_type.span.is_none() {
+                ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+            }
             (None, Some(arguments), errors)
         }
     };
