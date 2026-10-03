@@ -86,7 +86,7 @@ pub(super) fn tsc_file_errors(
     options.language_version = checker_options.language_version;
     if checker_options.no_unused_locals || checker_options.no_unused_parameters {
         let (jsx_element_reads, jsx_fragment_reads) =
-            super::unused_locals::jsx_factory_reads(&parsed.jsx_factory_uses, checker_options);
+            super::unused_locals::jsx_factory_reads(&parsed.jsx_factory_uses, file_name, checker_options);
         options.unused = Some(surge_ts_tsc_syntax::UnusedCheck {
             locals: checker_options.no_unused_locals,
             parameters: checker_options.no_unused_parameters,
