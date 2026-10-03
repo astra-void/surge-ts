@@ -60,6 +60,24 @@ fn is_line_break(ch: char) -> bool {
     matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}')
 }
 
+/// tsgo's `peekUnicodeEscape`: the character `\\uXXXX` or `\\u{X…}` at
+/// `pos` names, and the escape's length.
+fn unicode_escape_at(text: &str, pos: usize) -> Option<(char, usize)> {
+    let rest = text.get(pos..)?.strip_prefix("\\u")?;
+    let (digits, length) = match rest.strip_prefix('{') {
+        Some(braced) => {
+            let close = braced.find('}')?;
+            (&braced[..close], 2 + 1 + close + 1)
+        }
+        None => (rest.get(..4)?, 2 + 4),
+    };
+    if digits.is_empty() || !digits.chars().all(|digit| digit.is_ascii_hexdigit()) {
+        return None;
+    }
+    let ch = char::from_u32(u32::from_str_radix(digits, 16).ok()?)?;
+    Some((ch, length))
+}
+
 fn is_white_space_single_line(ch: char) -> bool {
     matches!(
         ch,
@@ -101,6 +119,47 @@ impl<'s> Scanner<'s> {
 
     fn token_text(&self) -> &'s str {
         &self.text[self.token_start..self.pos]
+    }
+
+    /// The identifier the current token spells, its unicode escapes decoded
+    /// (tsgo's `tokenValue`).
+    fn token_value(&self) -> std::borrow::Cow<'s, str> {
+        let text = self.token_text();
+        if !text.contains('\\') {
+            return std::borrow::Cow::Borrowed(text);
+        }
+        let mut value = String::with_capacity(text.len());
+        let mut pos = 0;
+        while pos < text.len() {
+            if let Some((ch, length)) = unicode_escape_at(text, pos) {
+                value.push(ch);
+                pos += length;
+            } else {
+                let ch = text[pos..].chars().next().unwrap_or_default();
+                value.push(ch);
+                pos += ch.len_utf8().max(1);
+            }
+        }
+        std::borrow::Cow::Owned(value)
+    }
+
+    /// tsgo's `scanIdentifierParts` from `self.pos`: identifier characters
+    /// and the unicode escapes of identifier characters.
+    fn scan_identifier_parts(&mut self, allow_dash: bool) {
+        while let Some(next) = self.char_at(self.pos) {
+            if is_identifier_part(next) || (allow_dash && next == '-') {
+                self.pos += next.len_utf8();
+                continue;
+            }
+            if next == '\\'
+                && let Some((escaped, length)) = unicode_escape_at(self.text, self.pos)
+                && is_identifier_part(escaped)
+            {
+                self.pos += length;
+                continue;
+            }
+            break;
+        }
     }
 
     fn mark(&self) -> ScannerState {
@@ -166,8 +225,19 @@ impl<'s> Scanner<'s> {
                     }
                     self.pos += next.len_utf8();
                 }
+                if self.char_at(self.pos) == Some('\\') {
+                    self.scan_identifier_parts(false);
+                }
                 Token::Identifier
             }
+            '\\' => match unicode_escape_at(self.text, self.token_start) {
+                Some((escaped, length)) if is_identifier_start(escaped) => {
+                    self.pos = self.token_start + length;
+                    self.scan_identifier_parts(false);
+                    Token::Identifier
+                }
+                _ => Token::Unknown,
+            },
             _ => Token::Unknown,
         };
         self.token
@@ -614,7 +684,7 @@ impl<'s> TagParser<'s> {
             return None;
         }
         let span = TextSpan { start: self.s.token_start, end: self.s.pos };
-        let text = self.s.token_text().to_string();
+        let text = self.s.token_value().into_owned();
         self.next_token_jsdoc();
         Some((text, span))
     }
