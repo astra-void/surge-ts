@@ -940,6 +940,7 @@ fn register_ambient_blocks(
 ) -> Vec<AmbientModuleEntry> {
     let mut ambient_module_entries = Vec::<AmbientModuleEntry>::new();
     let mut ambient_module_indexes = HashMap::<String, usize>::new();
+    let augmentation_types = syntactic_ambient_augmentation_types(parsed_files, block_imports, ctx);
 
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
         ctx.set_file_name(parsed_file.file_name.clone());
@@ -995,6 +996,19 @@ fn register_ambient_blocks(
 
             let collect_start = Instant::now();
             collect_type_declarations(&module.statements, ctx);
+            if !parsed_file.is_module
+                && let Some(augmentation) = augmentation_types.get(&module.module_specifier)
+            {
+                for (name, declaration) in augmentation.iter() {
+                    if ctx.type_declarations.get(name.as_ref()).is_some() {
+                        crate::symbols::merge_augmentation_type_declaration_into_table(
+                            &mut ctx.type_declarations,
+                            name.as_ref(),
+                            declaration,
+                        );
+                    }
+                }
+            }
             record_type_declaration_table_clone(
                 timings,
                 ctx.type_declarations.len(),
@@ -1259,6 +1273,95 @@ fn resolve_ambient_export_tables(ambient_module_entries: &[AmbientModuleEntry], 
                 .insert(entry.module_specifier.clone(), resolved_export_table);
         }
     }
+}
+
+/// Go merges every augmentation into its module before anything resolves
+/// (`mergeModuleAugmentation` runs in `initializeChecker`), so a class an
+/// ambient module declares, and every signature naming it, sees the augmented
+/// members. A block is lowered and resolved as it is registered, before the
+/// augmentations written after it are, so the augmentations of script ambient
+/// modules are collected from syntax first: a module file's `declare module
+/// "x"`, and a `module "x"` nested in a script's ambient module, which resolves
+/// through the enclosing block and that block's imports.
+fn syntactic_ambient_augmentation_types(
+    parsed_files: &[ParsedProgramFile],
+    block_imports: Option<&AmbientBlockImports>,
+    ctx: &mut CheckerContext,
+) -> HashMap<String, TypeDeclarationTable> {
+    let mut augmentations: HashMap<String, TypeDeclarationTable> = HashMap::new();
+    let ambient: HashSet<&str> = parsed_files
+        .iter()
+        .filter(|parsed_file| !parsed_file.is_module)
+        .flat_map(|parsed_file| &parsed_file.statements)
+        .filter_map(|statement| match statement {
+            ParsedStatement::DeclareModuleDeclaration(module) if module.module_specifier != "global" => {
+                Some(module.module_specifier.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    if ambient.is_empty() {
+        return augmentations;
+    }
+    let saved_file_name = ctx.file_name.clone();
+    let saved_type_declarations = std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
+    let saved_scope = ctx.type_declaration_scope.take();
+    let diagnostics_before = ctx.diagnostics().len();
+    let collect = |statements: &[ParsedStatement], ctx: &mut CheckerContext| {
+        collect_type_declarations(statements, ctx);
+        std::mem::take(&mut ctx.type_declarations)
+    };
+    let mut add = |specifier: &str, table: TypeDeclarationTable, layers: Vec<Arc<TypeDeclarationTable>>| {
+        let scope = Arc::new(TypeDeclarationScope::new(layers));
+        let scoped = super::binding::attach_resolution_scope_to_declarations(&table, scope);
+        let entry = augmentations.entry(specifier.to_string()).or_default();
+        for (name, declaration) in scoped.iter() {
+            crate::symbols::merge_augmentation_type_declaration_into_table(entry, name.as_ref(), declaration);
+        }
+    };
+    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
+        for (statement_index, statement) in parsed_file.statements.iter().enumerate() {
+            let ParsedStatement::DeclareModuleDeclaration(module) = statement else {
+                continue;
+            };
+            if module.module_specifier == "global" {
+                continue;
+            }
+            if parsed_file.is_module {
+                if !ambient.contains(module.module_specifier.as_str()) {
+                    continue;
+                }
+                ctx.set_file_name(parsed_file.file_name.clone());
+                let table = collect(&module.statements, ctx);
+                let layers = vec![Arc::new(table.clone())];
+                add(&module.module_specifier, table, layers);
+                continue;
+            }
+            for nested in &module.statements {
+                let ParsedStatement::DeclareModuleDeclaration(nested) = nested else {
+                    continue;
+                };
+                if !ambient.contains(nested.module_specifier.as_str()) {
+                    continue;
+                }
+                ctx.set_file_name(parsed_file.file_name.clone());
+                let enclosing = collect(&module.statements, ctx);
+                let table = collect(&nested.statements, ctx);
+                let mut layers = vec![Arc::new(table.clone()), Arc::new(enclosing)];
+                if let Some(bindings) =
+                    block_imports.and_then(|block_imports| block_imports.get(&(file_index, statement_index)))
+                {
+                    layers.extend(bindings.scope_layers());
+                }
+                add(&nested.module_specifier, table, layers);
+            }
+        }
+    }
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    ctx.type_declarations = saved_type_declarations;
+    ctx.type_declaration_scope = saved_scope;
+    ctx.set_file_name(saved_file_name);
+    augmentations
 }
 
 /// `declare module "Map" { module "Observable" { … } }` in a script file
