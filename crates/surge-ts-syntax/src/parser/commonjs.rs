@@ -333,7 +333,12 @@ pub(crate) fn require_imports(declaration: &VariableDeclaration<'_>) -> Option<V
     }
     let mut imports = Vec::new();
     for declarator in &declaration.declarations {
-        if declarator.type_annotation.is_some() {
+        // `isVariableDeclarationInitializedToRequire` asks for no type node,
+        // and the reparser makes a `@type` tag one: the declaration is then a
+        // variable checked against its initializer, not an alias.
+        if declarator.type_annotation.is_some()
+            || super::jsdoc::declared_type_at(declarator.span.start).is_some()
+        {
             return None;
         }
         let Some(Expression::CallExpression(call)) = &declarator.init else {
