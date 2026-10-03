@@ -50,12 +50,14 @@ pub(crate) fn collect_exports_from_statement(
                         ..
                     } = &import.kind =>
             {
-                if let Some(symbol) =
-                    entity_alias_value(target, exportable_values, imported_symbols, ctx)
+                let value = entity_alias_value(target, exportable_values, imported_symbols, ctx);
+                let has_value = value.is_some();
+                if let Some(symbol) = value
                     && symbols.get(local_name).is_none()
                 {
                     symbols.insert_shared(local_name.clone(), symbol);
                 }
+                let types_before = type_declarations.len();
                 export_entity_alias_types(
                     target,
                     local_name,
@@ -64,6 +66,13 @@ pub(crate) fn collect_exports_from_statement(
                     type_declarations,
                     ctx,
                 );
+                // The alias is an export whether or not its entity resolves
+                // (Go binds it and resolves it to `unknownSymbol`): an importer
+                // of it reports nothing, only the alias's own entity does.
+                if !has_value && type_declarations.len() == types_before && symbols.get(local_name).is_none() {
+                    insert_unknown_value_import(local_name, symbols);
+                    insert_unknown_type_import(type_declarations, local_name, ctx.file_name_arc(), import.span);
+                }
             }
             ParsedExportDeclaration::Statement { declaration, .. } => {
                 collect_exports_from_statement(
@@ -710,6 +719,17 @@ fn entity_alias_value(
 ) -> Option<Arc<SymbolInfo>> {
     if let Some(symbol) = exportable_values.get_shared(target) {
         return Some(symbol);
+    }
+    // `import g = globalThis` names the global object, which is installed once
+    // module binding is done; until then the entity exists, its type unknown.
+    if target == "globalThis" {
+        return Some(ctx.ambient_global_symbols.get_shared(target).unwrap_or_else(|| {
+            Arc::new(SymbolInfo {
+                ty: Type::Unknown,
+                kind: SymbolKind::Const,
+                function_signature: None,
+            })
+        }));
     }
     let mut segments = target.split('.');
     let mut first = segments.next()?;
