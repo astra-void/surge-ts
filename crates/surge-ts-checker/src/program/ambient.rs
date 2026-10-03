@@ -397,7 +397,7 @@ pub(crate) fn collect_ambient_global_types(
 pub(crate) fn lower_ambient_global_values(
     parsed_files: &[ParsedProgramFile],
     ctx: &mut CheckerContext,
-) {
+) -> Vec<GlobalThisQueryingValue> {
     let lowered_files: Vec<&ParsedProgramFile> = parsed_files
         .iter()
         .filter(|parsed_file| {
@@ -415,6 +415,24 @@ pub(crate) fn lower_ambient_global_values(
         .map(|var| var.name.as_str())
         .collect();
     let mut deferred: Vec<(&ParsedProgramFile, &surge_ts_syntax::ParsedVariableDeclaration)> = Vec::new();
+    let mut global_this_querying = Vec::new();
+    let global_this_pending: HashSet<&str> = ctx
+        .ambient_global_symbols
+        .get("globalThis")
+        .is_none()
+        .then_some("globalThis")
+        .into_iter()
+        .collect();
+    let mut lower = |parsed_file: &ParsedProgramFile,
+                     var: &surge_ts_syntax::ParsedVariableDeclaration,
+                     ctx: &mut CheckerContext| {
+        if lower_ambient_variable(var, ctx) && queries_pending_value(var, &global_this_pending) {
+            global_this_querying.push(GlobalThisQueryingValue {
+                file_name: parsed_file.file_name.clone(),
+                var: var.clone(),
+            });
+        }
+    };
     for &parsed_file in &lowered_files {
         ctx.set_file_name(parsed_file.file_name.clone());
         let saved_type_declaration_scope = ctx.type_declaration_scope.clone();
@@ -439,7 +457,7 @@ pub(crate) fn lower_ambient_global_values(
             if waits {
                 deferred.push((parsed_file, var));
             } else {
-                lower_ambient_variable(var, ctx);
+                lower(parsed_file, var, ctx);
                 pending.remove(var.name.as_str());
             }
         }
@@ -531,7 +549,7 @@ pub(crate) fn lower_ambient_global_values(
         let saved_type_declaration_scope = ctx.type_declaration_scope.take();
         let saved_type_declarations =
             std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
-        lower_ambient_variable(var, ctx);
+        lower(parsed_file, var, ctx);
         ctx.type_declarations = saved_type_declarations;
         ctx.type_declaration_scope = saved_type_declaration_scope;
         if !deferred.iter().any(|(_, later)| later.name == var.name) {
@@ -540,6 +558,46 @@ pub(crate) fn lower_ambient_global_values(
     }
 
     lower_ambient_namespace_values(parsed_files, ctx);
+    global_this_querying
+}
+
+/// An ambient variable whose annotation queried `typeof globalThis` before the
+/// global object existed: lib.dom's `declare var window: Window & typeof
+/// globalThis`. Lowering dropped the query (`T & unknown` is `T`), so the
+/// value lacks the script globals tsc reads through it (`window.a` for a
+/// script's `var a`) until [`relower_global_this_querying_values`] runs.
+pub(crate) struct GlobalThisQueryingValue {
+    file_name: String,
+    var: surge_ts_syntax::ParsedVariableDeclaration,
+}
+
+/// Re-lowers `values` once `typeof globalThis` is installed, keeping each
+/// symbol's kind.
+pub(crate) fn relower_global_this_querying_values(
+    values: &[GlobalThisQueryingValue],
+    ctx: &mut CheckerContext,
+) {
+    if values.is_empty() || ctx.ambient_global_symbols.get("globalThis").is_none() {
+        return;
+    }
+    let original_file_name = ctx.file_name.clone();
+    for value in values {
+        let Some(declared_type) = value.var.declared_type.as_ref() else {
+            continue;
+        };
+        let Some(mut symbol) = ctx.ambient_global_symbols.get(&value.var.name).cloned() else {
+            continue;
+        };
+        ctx.set_file_name(value.file_name.clone());
+        let saved_type_declaration_scope = ctx.type_declaration_scope.take();
+        let saved_type_declarations =
+            std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
+        symbol.ty = crate::infer::map_parsed_type(declared_type.clone(), ctx);
+        ctx.type_declarations = saved_type_declarations;
+        ctx.type_declaration_scope = saved_type_declaration_scope;
+        ctx.ambient_global_symbols.insert(value.var.name.clone(), symbol);
+    }
+    ctx.set_file_name(original_file_name);
 }
 
 fn ambient_variable(statement: &ParsedStatement) -> Option<&surge_ts_syntax::ParsedVariableDeclaration> {
@@ -593,7 +651,8 @@ fn queries_pending_value(
 
 /// Declares an ambient variable in the global table unless an earlier
 /// declaration of the name already did.
-fn lower_ambient_variable(var: &surge_ts_syntax::ParsedVariableDeclaration, ctx: &mut CheckerContext) {
+/// Returns whether `var` installed the symbol (an earlier declaration wins).
+fn lower_ambient_variable(var: &surge_ts_syntax::ParsedVariableDeclaration, ctx: &mut CheckerContext) -> bool {
     let ty = var
         .declared_type
         .as_ref()
@@ -615,7 +674,9 @@ fn lower_ambient_variable(var: &surge_ts_syntax::ParsedVariableDeclaration, ctx:
                 function_signature: None,
             },
         );
+        return true;
     }
+    false
 }
 
 /// `declare namespace X { ... }` contributes a global value object whose members
