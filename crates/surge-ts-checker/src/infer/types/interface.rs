@@ -363,7 +363,10 @@ fn unscoped_declaration_scope(
     ctx: &CheckerContext,
 ) -> Option<Arc<crate::symbols::TypeDeclarationScope>> {
     let module_scope = ctx.module_scope_for_file(file_name).filter(|scope| !scope.is_empty())?;
-    if module_scope.get_handle(name).is_some_and(|declared| declared.ptr_eq(handle)) {
+    if module_scope
+        .get_handle(name)
+        .is_some_and(|declared| same_declaration(&declared, handle))
+    {
         return Some(module_scope);
     }
     let installed = ctx.type_declaration_scope.as_ref()?;
@@ -379,6 +382,22 @@ fn unscoped_declaration_scope(
         }
         None => Some(module_scope),
     }
+}
+
+/// Whether two handles name one declaration. The module scope can hold its
+/// own copy of a declaration (rescoped or merged), so payload identity alone
+/// misses it; a declaration is its file and the span of its name.
+fn same_declaration(a: &TypeDeclarationHandle, b: &TypeDeclarationHandle) -> bool {
+    if a.ptr_eq(b) {
+        return true;
+    }
+    let site = |handle: &TypeDeclarationHandle| match handle.get() {
+        crate::symbols::TypeDeclarationInfo::Interface(info) => (info.file_name.clone(), info.name_span),
+        crate::symbols::TypeDeclarationInfo::Alias(info) => (info.file_name.clone(), info.name_span),
+    };
+    let (a_file, a_span) = site(a);
+    let (b_file, b_span) = site(b);
+    a_span.is_some() && a_span == b_span && a_file == b_file
 }
 
 pub(crate) fn resolve_interface(
