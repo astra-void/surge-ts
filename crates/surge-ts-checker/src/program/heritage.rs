@@ -751,9 +751,12 @@ fn base_member_accessibility(
         if !is_static && current.body.members.iter().any(|member| member.name == name) {
             return Some(None);
         }
-        if is_static && ctx.symbols.get(&current.name).is_some_and(|symbol| {
-            matches!(symbol.ty.peeled(), Type::Object(object) if object.properties.get(name).is_some())
-        }) {
+        // The class's own statics only: its static type also carries the
+        // ones it inherits, whose modifiers belong to the class declaring
+        // them further up the chain.
+        if is_static
+            && current.body.class_members.iter().any(|member| member.is_static && member.name == name)
+        {
             return Some(None);
         }
         current = crate::checks::expr::base_interface(&current, ctx)?;
