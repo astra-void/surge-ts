@@ -210,7 +210,7 @@ pub(super) fn evaluate_index_access(
             Type::Array(Box::new(reference.arguments[0].clone()))
         }
         Type::Reference(_) => match receiver_type.peeled() {
-            peeled @ (Type::Array(_) | Type::Tuple(_)) => peeled,
+            peeled @ (Type::Array(_) | Type::Tuple(_) | Type::Any) => peeled,
             Type::OpenTuple(tuple) => Type::Array(Box::new(tuple.element_union())),
             _ => receiver_type,
         },
