@@ -63,6 +63,7 @@ pub(crate) fn collect_context_grammar_diagnostics(
         source_text: program.source_text,
         external_module: is_external_module(program),
         ambient_depth: 0,
+        ambient_reported_statements: Vec::new(),
         with_bodies: Vec::new(),
         const_enum_names: unshadowed_const_enum_names(program),
         examined_modifiers: Vec::new(),
@@ -122,6 +123,10 @@ struct ContextCollector<'a, 'o> {
     external_module: bool,
     /// How many enclosing nodes carry tsc's `NodeFlagsAmbient`.
     ambient_depth: usize,
+    /// Starts of the statements TS1036 was reported on: tsc's
+    /// `checkGrammarStatementInAmbientContext` returns true for exactly those,
+    /// and a `break`/`continue` then skips its own grammar check.
+    ambient_reported_statements: Vec<u32>,
     /// The bodies of the file's `with` statements, which tsc never checks.
     with_bodies: Vec<Span>,
     /// Top-level `const enum` names no other binding in the file reuses, so
@@ -1134,6 +1139,7 @@ impl<'a> ContextCollector<'a, '_> {
             let start = statement.span().start;
             let end = first_token_end(self.source_text, start as usize) as u32;
             self.push(1036, Span::new(start, end), &[]);
+            self.ambient_reported_statements.push(start);
         }
     }
 
@@ -2752,6 +2758,9 @@ impl<'a> ContextCollector<'a, '_> {
 
     /// tsc's `checkGrammarBreakOrContinueStatement`.
     fn check_jump(&mut self, span: Span, label: Option<&str>, is_continue: bool) {
+        if self.ambient_reported_statements.contains(&span.start) {
+            return;
+        }
         for kind in self.stack.iter().rev() {
             if is_function_like(kind) || matches!(kind, AstKind::StaticBlock(_)) {
                 self.push(1107, span, &[]);
