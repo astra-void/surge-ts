@@ -258,7 +258,13 @@ fn collect_local_declaration_meanings<'a>(
                     Some((head, _)) => head,
                     None => namespace.name.as_str(),
                 };
-                (name, MEANING_VALUE | MEANING_NAMESPACE)
+                // A namespace of types alone is `NamespaceModule`, no value.
+                let meaning = if crate::program::is_instantiated_namespace(namespace) {
+                    MEANING_VALUE | MEANING_NAMESPACE
+                } else {
+                    MEANING_NAMESPACE
+                };
+                (name, meaning)
             }
             ParsedStatement::ExportDeclaration(export) => {
                 if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
