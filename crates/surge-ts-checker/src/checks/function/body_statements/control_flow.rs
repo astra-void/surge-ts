@@ -676,7 +676,7 @@ pub(crate) fn check_function_for_of_statement(
             // no such type, and over a shape it could not model it cannot tell.
             element_type = match &iterable_type {
                 InferredExpression::Known(iterable_type)
-                    if iterable_type.is_type_variable() || iterable_type.is_unmodelled() =>
+                    if has_generic_index_type(iterable_type) || iterable_type.is_unmodelled() =>
                 {
                     Type::Unknown
                 }
@@ -877,6 +877,21 @@ pub(crate) fn check_function_for_of_statement(
     let body_types = branch_assignment_types(&assigned, scopes);
     scopes.pop_child();
     join_branch_pair(&entry_types, &body_types, scopes);
+}
+
+/// Whether `keyof ty` stays generic (`shouldDeferIndexType`): `ty` is a type
+/// variable, or a union or intersection with one among its constituents
+/// (`(T & object) | (T & null)` under a `typeof` guard).
+fn has_generic_index_type(ty: &Type) -> bool {
+    match ty {
+        _ if ty.is_type_variable() => true,
+        Type::Union(union) => union.types().iter().any(has_generic_index_type),
+        Type::Object(object) => object
+            .intersection_operands
+            .as_deref()
+            .is_some_and(|operands| operands.iter().any(has_generic_index_type)),
+        _ => false,
+    }
 }
 
 /// tsc's `checkForInStatement` right-hand rule (TS2407): with `null` and
