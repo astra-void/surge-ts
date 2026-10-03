@@ -917,6 +917,14 @@ fn javascript_this_members(
                 collector.in_constructor = false;
                 collector.visit_expression(value);
             }
+            // An `accessor` field is a property declaration to tsc's
+            // `thisContainer`.
+            ClassElement::AccessorProperty(property) => {
+                let Some(value) = &property.value else { continue };
+                collector.is_static = property.r#static;
+                collector.in_constructor = false;
+                collector.visit_expression(value);
+            }
             _ => {}
         }
     }
