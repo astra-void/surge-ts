@@ -2364,12 +2364,16 @@ fn resolve_source_namespace_members(
             properties.shift_remove(name);
             continue;
         }
+        let predicate = |function: &surge_ts_syntax::ParsedFunctionDeclaration| {
+            matches!(function.return_type, Some(surge_ts_syntax::ParsedType::Predicate(_)))
+        };
         match declaration {
             ParsedStatement::FunctionDeclaration(function)
-                if function.type_parameters.is_empty() && function_declarations.get(name) == Some(&1) =>
+                if (function.type_parameters.is_empty() || predicate(function))
+                    && function_declarations.get(name) == Some(&1) =>
             {
                 let checkpoint = ctx.diagnostics().len();
-                let function_type = map_member_signature_in_namespace_scope(
+                let mut function_type = map_member_signature_in_namespace_scope(
                     &function.parameters,
                     function.return_type.as_ref(),
                     &function.type_parameters,
@@ -2377,6 +2381,22 @@ fn resolve_source_namespace_members(
                     ctx,
                 );
                 ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+                // As a class's static member does (`static_signature_type`): the
+                // written signature rides on the handle, so `Debug.assert(x)`
+                // reads its predicate and a generic one instantiates per call.
+                if predicate(function) {
+                    function_type = function_type.with_declaration(Arc::new(crate::checks::call::DeclaredMemberSignature {
+                        signature: crate::checks::function::namespace_member_signature_info(
+                            &function.type_parameters,
+                            &function.parameters,
+                            function.return_type.as_ref(),
+                            &ctx.file_name,
+                            prefix,
+                        ),
+                        outer_type_arguments: Vec::new(),
+                        generic_shape: None,
+                    }));
+                }
                 properties.insert(name.into(), surge_ts_types::ObjectProperty::required(Type::Function(function_type)));
             }
             ParsedStatement::ClassDeclaration(class) if class.type_parameters.is_empty() && !class.is_declare => {

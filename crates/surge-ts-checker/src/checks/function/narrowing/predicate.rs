@@ -825,16 +825,26 @@ pub(super) fn narrow_predicate_call_in_scope(
     let Some(symbol) = scopes.resolve(&guard.subject) else {
         return true;
     };
+    // An optional chain (`isDefined(o?.x)`) has no path type off a nullable
+    // `o`; tsc infers from the argument expression itself.
+    let argument_ty = predicate_argument_type(&symbol.ty, &guard.path).or_else(|| {
+        call_argument(condition, guard.parameter_index)
+            .and_then(|argument| inferred_argument_type(argument, scopes.visible_symbols(), ctx))
+    });
+    let target = resolve_predicate_guard_target(&guard, argument_ty.as_ref(), scopes.visible_symbols(), ctx);
+    if branch_is_true
+        && let Some(PredicateTarget::Resolved(predicate_ty)) = &target
+        && let Some(argument) = call_argument(condition, guard.parameter_index)
+    {
+        narrow_optional_chain_containment(argument, predicate_ty, scopes);
+    }
+    let Some(symbol) = scopes.resolve(&guard.subject) else {
+        return true;
+    };
     let subject_ty = symbol.ty.clone();
     let kind = symbol.kind;
     let function_signature = symbol.function_signature.clone();
-    let argument_ty = predicate_argument_type(&subject_ty, &guard.path);
-    let narrowed = match resolve_predicate_guard_target(
-        &guard,
-        argument_ty.as_ref(),
-        scopes.visible_symbols(),
-        ctx,
-    ) {
+    let narrowed = match target {
         Some(PredicateTarget::Resolved(predicate_ty)) => {
             with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
                 narrowed_predicate_subject(&subject_ty, &guard.path, &predicate_ty, branch_is_true)
@@ -929,23 +939,47 @@ pub(crate) fn narrow_assertion_call_in_scope(
         }
         _ => return,
     };
-    if !type_arguments.is_empty() {
-        return;
-    }
     let PredicateSignature {
         signature,
         outer_type_arguments,
     } = found;
-    // A generic assertion needs its `T` bound at the call site, which this path
-    // has no inference for; leaving it alone keeps the declared type.
-    if !signature.type_parameters.is_empty() {
-        return;
-    }
     let Some(surge_ts_syntax::ParsedType::Predicate(predicate)) = signature.return_type.as_ref()
     else {
         return;
     };
-    if !predicate.asserts || predicate.parameter_name == "this" {
+    if !predicate.asserts {
+        return;
+    }
+    // tsc's `getTypePredicateArgument`: an `asserts this` signature asserts
+    // the receiver of the method call.
+    if predicate.parameter_name == "this" {
+        let ParsedExpression::PropertyCall { object, .. } = expression else {
+            return;
+        };
+        let Some(predicate_type) = predicate.ty.clone() else {
+            narrow_discriminant_in_scope(object, scopes, true, ctx);
+            return;
+        };
+        if !signature.type_parameters.is_empty() || !type_arguments.is_empty() {
+            return;
+        }
+        let Some((subject, path)) = reference_path(object) else {
+            return;
+        };
+        let mut substitution = crate::infer::TypeParameterSubstitution::new();
+        for (name, ty) in &outer_type_arguments {
+            substitution.insert(name.clone(), ty.clone());
+        }
+        let Some(target) = resolve_predicate_type_under(
+            predicate_type,
+            signature.declaring_file.as_deref(),
+            signature.namespace_prefix.as_deref(),
+            &substitution,
+            ctx,
+        ) else {
+            return;
+        };
+        narrow_asserted_reference(subject, &path, &target, scopes);
         return;
     }
     let Some(index) = signature
@@ -955,26 +989,90 @@ pub(crate) fn narrow_assertion_call_in_scope(
     else {
         return;
     };
+    // A generic assertion binds its type parameters at the call site the way
+    // a `x is T` guard does (from the written type arguments, else inferred
+    // from the arguments), so it resolves through the guard machinery.
+    if (!signature.type_parameters.is_empty() || !type_arguments.is_empty())
+        && let Some(predicate_type) = predicate.ty.clone()
+    {
+        let Some(argument) = arguments.get(index) else {
+            return;
+        };
+        let reference = reference_path(&argument.expression);
+        let (subject, path) = reference.clone().unwrap_or_default();
+        let other_arguments = if type_arguments.is_empty() {
+            arguments
+                .iter()
+                .enumerate()
+                .filter(|(position, _)| *position != index)
+                .map(|(position, argument)| (position, argument.expression.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let guard = PredicateGuardInfo {
+            subject,
+            path,
+            other_arguments,
+            predicate_type,
+            declaring_file: signature.declaring_file.clone(),
+            namespace_prefix: signature.namespace_prefix.clone(),
+            parameter_index: index,
+            signature: signature.clone(),
+            explicit_type_arguments: type_arguments.clone(),
+            outer_type_arguments,
+        };
+        let argument_ty = reference
+            .as_ref()
+            .and_then(|_| scopes.resolve(&guard.subject))
+            .and_then(|symbol| predicate_argument_type(&symbol.ty, &guard.path))
+            .or_else(|| inferred_argument_type(&argument.expression, scopes.visible_symbols(), ctx));
+        let target = resolve_predicate_guard_target(&guard, argument_ty.as_ref(), scopes.visible_symbols(), ctx);
+        if let Some(PredicateTarget::Resolved(target)) = target {
+            narrow_optional_chain_containment(&argument.expression, &target, scopes);
+            if reference.is_some() {
+                narrow_asserted_reference(guard.subject, &guard.path, &target, scopes);
+            }
+        }
+        return;
+    }
+    if predicate.ty.is_some() && (!type_arguments.is_empty() || !signature.type_parameters.is_empty()) {
+        return;
+    }
     let Some(argument) = arguments.get(index) else {
         return;
     };
     let Some((subject, path)) = reference_path(&argument.expression) else {
         // `asserts condition` over an arbitrary expression holds from the
         // statement on, exactly as the true branch of `if (condition)` does.
-        if predicate.ty.is_none() {
-            narrow_discriminant_in_scope(&argument.expression, scopes, true, ctx);
+        match predicate.ty.clone() {
+            None => narrow_discriminant_in_scope(&argument.expression, scopes, true, ctx),
+            Some(predicate_type) => {
+                let mut substitution = crate::infer::TypeParameterSubstitution::new();
+                for (name, ty) in &outer_type_arguments {
+                    substitution.insert(name.clone(), ty.clone());
+                }
+                if let Some(target) = resolve_predicate_type_under(
+                    predicate_type,
+                    signature.declaring_file.as_deref(),
+                    signature.namespace_prefix.as_deref(),
+                    &substitution,
+                    ctx,
+                ) {
+                    narrow_optional_chain_containment(&argument.expression, &target, scopes);
+                }
+            }
         }
         return;
     };
-    let Some(symbol) = scopes.resolve(&subject) else {
-        return;
-    };
-    let subject_ty = symbol.ty.clone();
-    let kind = symbol.kind;
-    let function_signature = symbol.function_signature.clone();
-
     // `asserts x` with no target proves only that `x` is truthy.
     let Some(predicate_type) = predicate.ty.clone() else {
+        let Some(symbol) = scopes.resolve(&subject) else {
+            return;
+        };
+        let subject_ty = symbol.ty.clone();
+        let kind = symbol.kind;
+        let function_signature = symbol.function_signature.clone();
         if !path.is_empty() {
             narrow_discriminant_in_scope(&argument.expression, scopes, true, ctx);
         } else {
@@ -1006,8 +1104,58 @@ pub(crate) fn narrow_assertion_call_in_scope(
     ) else {
         return;
     };
+    narrow_optional_chain_containment(&argument.expression, &target, scopes);
+    narrow_asserted_reference(subject, &path, &target, scopes);
+}
+
+fn inferred_argument_type(argument: &ParsedExpression, symbols: &SymbolTable, ctx: &mut CheckerContext) -> Option<Type> {
+    let diagnostics_before = ctx.diagnostics().len();
+    let inferred = crate::infer::infer_expression(argument, symbols, ctx);
+    ctx.truncate_diagnostics(diagnostics_before);
+    match inferred {
+        crate::infer::InferredExpression::Known(ty) if !ty.is_unmodelled() => Some(ty),
+        _ => None,
+    }
+}
+
+fn call_argument(call: &ParsedExpression, index: usize) -> Option<&ParsedExpression> {
+    match call {
+        ParsedExpression::Call { arguments, .. } | ParsedExpression::PropertyCall { arguments, .. } => {
+            arguments.get(index).map(|argument| &argument.expression)
+        }
+        _ => None,
+    }
+}
+
+/// tsc's `narrowTypeByTypePredicate` for a reference an optional-chain
+/// argument reads through (`optionalChainContainsReference`): a target that
+/// cannot be `undefined` proves the chain did not short-circuit.
+fn narrow_optional_chain_containment(argument: &ParsedExpression, target: &Type, scopes: &mut ScopeStack) {
+    let admits_undefined = |ty: &Type| matches!(ty, Type::Undefined | Type::Void) || ty.is_unmodelled();
+    let target_admits_undefined = match target.peeled() {
+        Type::Any | Type::GenuineUnknown => true,
+        Type::Union(union) => union.types().iter().any(admits_undefined),
+        other => admits_undefined(&other),
+    };
+    if target_admits_undefined {
+        return;
+    }
+    for contained in super::optional_chain_contained_references(argument) {
+        super::narrow_reference_non_null_in_scope(contained, scopes);
+    }
+}
+
+/// Narrows `subject` (or the member `path` reaches) to what an assertion
+/// proved about it, from the statement on.
+fn narrow_asserted_reference(subject: String, path: &[String], target: &Type, scopes: &mut ScopeStack) {
+    let Some(symbol) = scopes.resolve(&subject) else {
+        return;
+    };
+    let subject_ty = symbol.ty.clone();
+    let kind = symbol.kind;
+    let function_signature = symbol.function_signature.clone();
     let Some(narrowed) = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
-        narrowed_predicate_subject(&subject_ty, &path, &target, true)
+        narrowed_predicate_subject(&subject_ty, path, target, true)
     }) else {
         return;
     };
