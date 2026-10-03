@@ -2191,6 +2191,10 @@ pub struct ParsedFunctionDeclaration {
     /// value — the missing-return checks skip it.
     pub is_generator: bool,
     pub is_async: bool,
+    /// A JavaScript declaration's `@type` that is its whole signature
+    /// (`FullSignature`) and that the parser could not spread over the
+    /// parameters: the checker resolves it as the declaration's signature.
+    pub full_signature: Option<ParsedType>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

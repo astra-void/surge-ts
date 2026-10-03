@@ -85,6 +85,7 @@ pub(crate) fn parse_function_declaration_named(
         has_body: function.body.is_some(),
         is_generator: function.generator,
         is_async: function.r#async,
+        full_signature: super::jsdoc::full_signature_at(function.span.start),
         body_reads: function
             .body
             .as_ref()

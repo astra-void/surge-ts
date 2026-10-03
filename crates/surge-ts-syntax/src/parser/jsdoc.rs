@@ -1824,6 +1824,10 @@ pub(crate) struct JsDocIndex {
     /// The functions `reparseHosted` gives their `@type` as the full
     /// signature, by the function's start.
     full_signature_hosts: std::collections::HashSet<u32>,
+    /// The full signature of each such function that could not be spread over
+    /// its parameters here (a named, generic or differently sized signature),
+    /// left for the checker to resolve; by the function's start.
+    full_signatures: std::collections::HashMap<u32, ParsedType>,
     /// The `@type` of a variable, class field or accessor, by its start.
     declared: std::collections::HashMap<u32, (ParsedType, TextSpan)>,
     /// `/** @type {T} */ (e)` and `@satisfies`, by the parenthesized
@@ -1914,6 +1918,10 @@ pub(crate) fn this_type_at(function_start: u32) -> Option<ParsedType> {
 /// `@type` naming a type, whose `this` parameter is not known here.
 pub(crate) fn has_opaque_full_signature(function_start: u32) -> bool {
     with_index(|index| index.opaque_full_signatures.contains(&function_start).then_some(())).is_some()
+}
+
+pub(crate) fn full_signature_at(function_start: u32) -> Option<ParsedType> {
+    with_index(|index| index.full_signatures.get(&function_start).cloned())
 }
 
 pub(crate) fn declared_type_at(start: u32) -> Option<(ParsedType, TextSpan)> {
@@ -2531,8 +2539,13 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
         } else if tag.ty.as_ref().is_some_and(|ty| signature_takes(ty, 0).is_none()) {
             self.index.opaque_full_signatures.insert(host.start());
         }
-        if let Some(signature) = tag.ty.as_ref().and_then(single_call_signature) {
-            self.apply_full_signature(host, signature, tag.span);
+        let applied = tag
+            .ty
+            .as_ref()
+            .and_then(single_call_signature)
+            .is_some_and(|signature| self.apply_full_signature(host, signature, tag.span));
+        if !applied && let Some(ty) = &tag.ty {
+            self.index.full_signatures.entry(host.start()).or_insert_with(|| ty.clone());
         }
     }
 
@@ -2549,7 +2562,7 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
         host: FunctionHost<'_, '_>,
         signature: &ParsedFunctionType,
         span: TextSpan,
-    ) {
+    ) -> bool {
         let params = host.params();
         let start = host.start();
         let parameters: Vec<&ParsedFunctionTypeParameter> =
@@ -2564,7 +2577,7 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
                 self.index.parameters.get(&parameter.span.start).is_some_and(|entry| entry.ty.is_some())
             })
         {
-            return;
+            return false;
         }
         for (parameter, typed) in params.items.iter().zip(parameters) {
             let entry = self.index.parameters.entry(parameter.span.start).or_default();
@@ -2573,6 +2586,7 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
         }
         self.index.returns.insert(start, ((*signature.return_type).clone(), span));
         self.mark_typed(host);
+        true
     }
 
     /// tsc's `checkUnmatchedJSDocParameters` for a `@param` naming no
