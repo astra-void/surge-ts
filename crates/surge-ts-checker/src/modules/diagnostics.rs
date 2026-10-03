@@ -551,6 +551,29 @@ pub(crate) fn syntactic_export_names(
     Some(exported)
 }
 
+/// Whether the module file exports a namespace `name` by declaration
+/// (`export namespace N {}`). The binder declares that export whatever the
+/// body holds, while surge's tables only carry a namespace's members, so an
+/// empty one leaves no trace there.
+pub(crate) fn module_declares_exported_namespace(
+    resolved_index: Option<usize>,
+    program_files: &[ParsedProgramFile],
+    name: &str,
+) -> bool {
+    let Some(file) = resolved_index.and_then(|index| program_files.get(index)) else {
+        return false;
+    };
+    file.statements.iter().any(|statement| match statement {
+        ParsedStatement::ExportDeclaration(export) => matches!(
+            export.as_ref(),
+            ParsedExportDeclaration::Statement { declaration, .. }
+                if matches!(declaration.as_ref(), ParsedStatement::NamespaceDeclaration(namespace)
+                    if namespace.name.split('.').next() == Some(name))
+        ),
+        _ => false,
+    })
+}
+
 /// tsc's `errorNoModuleMemberSymbol` for a named import the module does not
 /// export: the closest exported name (TS2724), else TS2614 when the module
 /// has a default export, else TS2305.

@@ -2367,7 +2367,13 @@ fn resolve_named_import(
                 continue;
             }
 
-            if has_qualified_type_exports {
+            if has_qualified_type_exports
+                || crate::modules::module_declares_exported_namespace(
+                    resolved_index,
+                    program_files,
+                    &specifier.imported_name,
+                )
+            {
                 continue;
             }
 
@@ -2417,6 +2423,16 @@ fn resolve_named_import(
                 type_only_aliases,
             );
             found = true;
+        }
+
+        if !found
+            && crate::modules::module_declares_exported_namespace(
+                resolved_index,
+                program_files,
+                &specifier.imported_name,
+            )
+        {
+            continue;
         }
 
         if !found {

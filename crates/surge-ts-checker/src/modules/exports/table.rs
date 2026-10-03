@@ -509,7 +509,21 @@ fn report_duplicate_export_declarations(
         return;
     }
 
-    let local_meanings = local_declaration_meanings(&parsed_file.statements);
+    // Go's binder gives an exported declaration's local symbol only
+    // `ExportValue` (`declareModuleMember`), so a local `export { A }` resolves
+    // past an `export type A` to whatever else the file declares as `A`.
+    let mut local_meanings = HashMap::new();
+    for statement in &parsed_file.statements {
+        let exported = matches!(
+            statement,
+            ParsedStatement::ExportDeclaration(export)
+                if matches!(export.as_ref(), ParsedExportDeclaration::Statement { .. })
+        );
+        for (name, meaning) in local_declaration_meanings(std::slice::from_ref(statement)) {
+            let meaning = if exported { meaning & MEANING_VALUE } else { meaning };
+            *local_meanings.entry(name).or_insert(0) |= meaning;
+        }
+    }
 
     for statement in &parsed_file.statements {
         let ParsedStatement::ExportDeclaration(export) = statement else {
@@ -1061,6 +1075,16 @@ pub(crate) fn resolve_module_export_table(
                         )
                     {
                         found = true;
+                    }
+
+                    if !found
+                        && crate::modules::module_declares_exported_namespace(
+                            resolved_index,
+                            parsed_files,
+                            &specifier.local_name,
+                        )
+                    {
+                        continue;
                     }
 
                     if !found {
