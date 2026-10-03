@@ -290,6 +290,33 @@ fn evaluate_expression_with_expected_type_inner(
         };
     }
 
+    // `getContextualType` hands a non-null expression its parent's contextual
+    // type, so a generic call under `!` infers from it as it would bare:
+    // `const r: SVGRectElement = document.querySelector(s)!`.
+    if let ParsedExpression::NonNullAssertion {
+        expression: asserted,
+        span,
+        in_optional_chain: false,
+    } = expression
+        && matches!(
+            asserted.as_ref(),
+            ParsedExpression::Call { .. } | ParsedExpression::PropertyCall { .. }
+        )
+    {
+        return match evaluate_expression_with_expected_type_inner(
+            asserted,
+            span.or(fallback_span),
+            target_span,
+            Some(expected_type),
+            _expected_diagnostic,
+            symbols,
+            ctx,
+        ) {
+            InferredExpression::Known(ty) => InferredExpression::Known(surge_ts_types::remove_nullish(&ty)),
+            other => other,
+        };
+    }
+
     // A generic call whose type parameter occurs only in the return type
     // (`const c: Ctor<MyZ> = make("x", (inst) => …)`) can infer it from the
     // contextual type alone. Route the call through the expected-type entry with
