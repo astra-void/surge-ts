@@ -169,9 +169,9 @@ fn applicable_index_type(object: &surge_ts_types::ObjectType, key: &Type) -> Opt
 }
 
 /// tsc's `checkComputedPropertyName`: a key must be `null`/`undefined`-free
-/// and assignable to `string | number | symbol` — TS2464. A type parameter is
-/// left alone: without its constraint surge cannot tell `K extends string`
-/// from an unconstrained `T`.
+/// and assignable to `string | number | symbol` — TS2464. A type variable of
+/// the body being checked relates through its constraint; a placeholder
+/// parameter is left alone.
 pub(crate) fn report_invalid_computed_key(
     key: &InferredExpression,
     span: Option<SyntaxTextSpan>,
@@ -197,7 +197,8 @@ fn computed_key_type_is_invalid(ty: &Type) -> bool {
 
 fn has_unmodelled_member(ty: &Type) -> bool {
     match ty {
-        Type::Any | Type::Unknown | Type::ErrorType | Type::TypeParameter(_) => true,
+        Type::Any | Type::Unknown | Type::ErrorType => true,
+        Type::TypeParameter(_) => !ty.is_type_variable(),
         Type::Union(union) => union.types().iter().any(has_unmodelled_member),
         Type::Reference(reference) => has_unmodelled_member(&reference.resolve()),
         _ => false,
