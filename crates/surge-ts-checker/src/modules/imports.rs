@@ -355,7 +355,7 @@ fn report_import_local_declaration_conflicts(
             continue;
         }
 
-        let Some((export_table, _, _)) = try_resolve_import_module(
+        let Some((export_table, _, resolved_index)) = try_resolve_import_module(
             import,
             ctx,
             program_files,
@@ -382,11 +382,26 @@ fn report_import_local_declaration_conflicts(
                 meaning
             } else {
                 let mut meaning = 0;
-                if lookup_type_export(&export_table, imported_name).is_some() {
+                let type_export = lookup_type_export(&export_table, imported_name);
+                if type_export.is_some() {
                     meaning |= MEANING_TYPE;
                 }
                 if lookup_value_export(&export_table, imported_name).is_some() {
                     meaning |= MEANING_VALUE;
+                }
+                // Go's `SymbolFlagsNamespace` covers a namespace and an enum.
+                let enum_export = matches!(
+                    type_export,
+                    Some(crate::symbols::TypeDeclarationInfo::Alias(alias)) if alias.enum_name.is_some()
+                );
+                if enum_export
+                    || crate::modules::module_declares_exported_namespace(
+                        resolved_index,
+                        program_files,
+                        imported_name,
+                    )
+                {
+                    meaning |= MEANING_NAMESPACE;
                 }
                 meaning
             };
