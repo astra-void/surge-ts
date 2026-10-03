@@ -343,7 +343,8 @@ pub(crate) fn collect_ambient_global_types(
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) {
     for parsed_file in parsed_files {
-        if !is_ambient_global_declaration_file(parsed_file, ctx)
+        if !(is_ambient_global_declaration_file(parsed_file, ctx)
+            || is_root_source_script(parsed_file))
             || !publishes_ambient_globals(parsed_file)
         {
             continue;
@@ -783,6 +784,13 @@ fn is_ambient_global_declaration_file(
     }
 
     true
+}
+
+/// A source file with no top-level import or export: Go's `initializeChecker`
+/// merges its locals into the globals table, so a module names its types as it
+/// names a declaration file's.
+fn is_root_source_script(parsed_file: &ParsedProgramFile) -> bool {
+    parsed_file.file_kind == FileKind::RootSource && !parsed_file.is_module
 }
 
 /// Whether the file's own top-level declarations reach the *global* scope. A
