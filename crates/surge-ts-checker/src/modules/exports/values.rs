@@ -2463,7 +2463,7 @@ fn resolve_namespace_value_annotations(
                     properties.insert(
                         variable.name.as_str().into(),
                         surge_ts_types::ObjectProperty::required(ty)
-                            .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const)),
+                            .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const) && !variable.is_enum_object),
                     );
                     continue;
                 }
@@ -2478,7 +2478,7 @@ fn resolve_namespace_value_annotations(
                 properties.insert(
                     variable.name.as_str().into(),
                     surge_ts_types::ObjectProperty::required(resolved)
-                        .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const)),
+                        .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const) && !variable.is_enum_object),
                 );
             }
             ParsedStatement::NamespaceDeclaration(inner) => {
@@ -2686,7 +2686,7 @@ pub(crate) fn fill_namespace_value_properties(
                 properties.insert(
                     variable.name.as_str().into(),
                     ObjectProperty::required(Type::Any)
-                        .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const)),
+                        .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const) && !variable.is_enum_object),
                 );
             }
             ParsedStatement::ClassDeclaration(class) => {
