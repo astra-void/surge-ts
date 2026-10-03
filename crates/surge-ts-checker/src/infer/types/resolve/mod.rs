@@ -799,18 +799,18 @@ pub(crate) fn resolve_parsed_type(
             // Peel a nominal reference (`keyof User`) to read the named type's keys.
             match &resolved_inner.ty.peeled() {
                 Type::Object(object_type) => {
-                    // A computed-key member is kept under a `[…]` name so the
-                    // shape is not vacuous, but its key is a symbol tsc never
-                    // spells as a string: `keyof` must not enumerate it, or a
-                    // mapped type and `T[keyof T]` read a property that no
-                    // written key can name.
-                    for (key, _) in object_type
-                        .properties
-                        .iter()
-                        .filter(|(key, property)| !key.starts_with('[') && is_public_key(key, property))
-                    {
-                        keys.push(Type::StringLiteral(key.to_string()));
-                    }
+                    // A computed-key member other than a well-known symbol's
+                    // is kept under a `[…]` name so the shape is not vacuous,
+                    // but its key is a symbol no written key can name: `keyof`
+                    // must not enumerate it, or a mapped type and `T[keyof T]`
+                    // read a property nothing reaches.
+                    keys.extend(
+                        object_type
+                            .properties
+                            .iter()
+                            .filter(|(key, property)| is_public_key(key, property))
+                            .filter_map(|(key, _)| property_name_key_type(key)),
+                    );
                     // `getIndexType`: a string index signature keys every
                     // string and number, a number one every number. An open
                     // shape surge could not enumerate keys nothing it knows.
@@ -935,6 +935,20 @@ pub(crate) fn is_public_key(name: &str, property: &surge_ts_types::ObjectPropert
     property.restriction.is_none() && !name.starts_with('#')
 }
 
+/// The key type of a member name for `getLiteralTypeFromProperty`: a string
+/// key's literal, or the unique symbol of a well-known `[Symbol.<name>]`
+/// member. Any other computed name is a symbol surge cannot spell, and keys
+/// nothing.
+pub(crate) fn property_name_key_type(name: &str) -> Option<Type> {
+    if !name.starts_with('[') {
+        return Some(Type::StringLiteral(name.to_string()));
+    }
+    let symbol = name.strip_prefix('[')?.strip_suffix(']')?;
+    symbol
+        .starts_with("Symbol.")
+        .then(|| surge_ts_types::unique_symbol_type("", symbol))
+}
+
 /// `keyof (A | B)` is the intersection of the members' key sets (tsc's
 /// `getIndexType` over a union): a named key survives when every member has it
 /// or answers it through a string index. `None` when a member is not an object
@@ -957,7 +971,7 @@ fn union_key_type(members: &[Type]) -> Option<Type> {
         .find(|object| object.string_index_type.is_none())?
         .properties
         .iter()
-        .filter(|(key, property)| !key.starts_with('[') && is_public_key(key, property))
+        .filter(|(key, property)| is_public_key(key, property))
         .map(|(key, _)| key.as_ref())
         .collect();
     named.retain(|key| {
@@ -965,9 +979,10 @@ fn union_key_type(members: &[Type]) -> Option<Type> {
             .iter()
             .all(|object| object.string_index_type.is_some() || object.properties.contains_key(*key))
     });
-    Some(match named.len() {
+    let mut keys: Vec<Type> = named.into_iter().filter_map(property_name_key_type).collect();
+    Some(match keys.len() {
         0 => Type::Never,
-        1 => Type::StringLiteral(named[0].to_string()),
-        _ => union_type(named.into_iter().map(|key| Type::StringLiteral(key.to_string())).collect()),
+        1 => keys.remove(0),
+        _ => union_type(keys),
     })
 }

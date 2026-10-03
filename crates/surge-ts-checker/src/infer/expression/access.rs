@@ -178,13 +178,13 @@ pub(crate) fn infer_open_tuple_index_access(
         union_type(members)
     };
     if let Some(index_value) = tuple_index_value(&index_type) {
-        return InferredExpression::Known(
-            tuple
-                .leading
-                .get(index_value)
-                .cloned()
-                .unwrap_or_else(past_fixed),
-        );
+        // `getTupleElementTypeOutOfStartCount`: past every fixed element the
+        // read may run off the end, which `noUncheckedIndexedAccess` admits.
+        return InferredExpression::Known(match tuple.leading.get(index_value) {
+            Some(element) => element.clone(),
+            None if index_value >= tuple.fixed_len() => unchecked_index_read(past_fixed(), ctx),
+            None => past_fixed(),
+        });
     }
 
     if is_assignable_to(&index_type, &Type::Number) {
@@ -919,6 +919,7 @@ pub(crate) fn lib_builtin_member_type(
         Type::Number | Type::NumberLiteral(_) => ("Number", None),
         Type::Boolean | Type::BooleanLiteral(_) => ("Boolean", None),
         Type::BigInt => ("BigInt", None),
+        Type::Symbol => ("Symbol", None),
         Type::Function(_) => ("Function", None),
         // tsc's `getPropertyOfType`: an object type with call or construct
         // signatures reads the members it lacks from the global `Function`.

@@ -101,13 +101,16 @@ pub(super) fn discriminant_match(member: &Type, property: &str, literal: &Type) 
 
 /// Whether a discriminant of type `property_ty` can hold `literal`.
 pub(crate) fn discriminant_type_match(property_ty: &Type, literal: &Type) -> DiscriminantMatch {
+    if let Some(matched) = template_discriminant_match(property_ty, literal) {
+        return matched;
+    }
     let property_ty = property_ty.peeled();
     match &property_ty {
         Type::Union(union) => {
             let matches: Vec<DiscriminantMatch> = union
                 .types()
                 .iter()
-                .map(|ty| constituent_match(&ty.peeled(), literal))
+                .map(|ty| template_discriminant_match(ty, literal).unwrap_or_else(|| constituent_match(&ty.peeled(), literal)))
                 .collect();
             if matches.iter().all(|result| *result == DiscriminantMatch::No) {
                 DiscriminantMatch::No
@@ -119,6 +122,23 @@ pub(crate) fn discriminant_type_match(property_ty: &Type, literal: &Type) -> Dis
         }
         _ => constituent_match(&property_ty, literal),
     }
+}
+
+/// A template literal discriminant (`` `${string}_SUCCESS` ``), which a full
+/// peel erases to `string`: a string literal the pattern does not match is
+/// not comparable to it, and one it matches leaves the member in both
+/// branches, the pattern being no unit type.
+fn template_discriminant_match(property_ty: &Type, literal: &Type) -> Option<DiscriminantMatch> {
+    let Type::StringLiteral(_) = literal else {
+        return None;
+    };
+    let pattern = surge_ts_types::peel_to_pattern_literal(property_ty);
+    let (texts, types) = surge_ts_types::template_literal_parts(&pattern)?;
+    Some(if surge_ts_types::is_type_matched_by_template_literal(literal, &texts, &types) {
+        DiscriminantMatch::Unknown
+    } else {
+        DiscriminantMatch::No
+    })
 }
 
 /// Whether one non-union discriminant type can hold `literal`. tsc keeps a

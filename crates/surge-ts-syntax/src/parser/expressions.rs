@@ -1407,6 +1407,18 @@ pub(crate) fn parse_object_properties(
             _ => None,
         })
         .collect();
+    let computed_getter_names: Vec<String> = object_expression
+        .properties
+        .iter()
+        .filter_map(|property_kind| match property_kind {
+            ObjectPropertyKind::ObjectProperty(property)
+                if property.kind == PropertyKind::Get && property.computed =>
+            {
+                super::types::computed_key_name(&property.key)
+            }
+            _ => None,
+        })
+        .collect();
 
     object_expression
         .properties
@@ -1443,8 +1455,28 @@ pub(crate) fn parse_object_properties(
                 let Some(name) = super::types::computed_key_name(&property.key) else {
                     return unnamed_member_key(property);
                 };
+                // A computed accessor pairs with the one written under the same
+                // key, as the late-bound symbol they share does.
+                if property.kind == PropertyKind::Set && computed_getter_names.contains(&name) {
+                    return None;
+                }
                 let mut accessor = parse_object_accessor(name, property.key.span(), property)?;
                 accessor.member_key = computed_member_key(property);
+                if property.kind == PropertyKind::Get {
+                    accessor.paired_setter = object_expression.properties.iter().find_map(|other| {
+                        let ObjectPropertyKind::ObjectProperty(other) = other else {
+                            return None;
+                        };
+                        if other.kind != PropertyKind::Set || !other.computed {
+                            return None;
+                        }
+                        let Expression::FunctionExpression(function) = &other.value else {
+                            return None;
+                        };
+                        (super::types::computed_key_name(&other.key)? == accessor.name)
+                            .then(|| Box::new(function_as_arrow(function, ParsedThisBinding::Own)))
+                    });
+                }
                 return Some(accessor);
             }
 

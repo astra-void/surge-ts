@@ -1196,63 +1196,88 @@ fn writes_object_literal_union(initializer: &ParsedExpression) -> bool {
     written(initializer) >= 2
 }
 
-/// tsc's `getWidenedTypeOfObjectLiteral`: object literals widened together are
-/// normalized, each gaining the names its siblings write as `name?: undefined`,
-/// so `(c ? { a: 1 } : { a: 1, b: "x" }).b` reads `string | undefined` instead
-/// of being a missing property. The members keep the types they were written
-/// with: `type: "ok" as const` stays the discriminant it is.
+/// tsc's `getWidenedTypeWithContext` restricted to object-literal
+/// normalization: object literals widened together each gain the names their
+/// siblings write as `name?: undefined`, so `(c ? { a: 1 } : { a: 1, b: "x" }).b`
+/// reads `string | undefined` instead of being a missing property. A property
+/// is widened in the child context whose siblings are the same property of the
+/// sibling literals (`getSiblingsOfContext`), so nested literals normalize too.
+/// The members keep the types they were written with: `type: "ok" as const`
+/// stays the discriminant it is.
 fn normalize_object_literal_union(ty: &Type) -> Type {
-    let is_written_literal = |member: &Type| {
-        matches!(member, Type::Object(object)
-            if object.alias_name.is_none()
-                && !object.without_inferable_index
-                && !object.synthetic_open_index
-                && object.string_index_type.is_none()
-                && object.number_index_type.is_none()
-                && object.call_signature().is_none()
-                && object.construct_signature().is_none())
-    };
+    normalize_with_context(ty, None)
+}
+
+fn is_written_object_literal(member: &Type) -> bool {
+    matches!(member, Type::Object(object) if is_written_object_literal_object(object))
+}
+
+fn is_written_object_literal_object(object: &surge_ts_types::ObjectType) -> bool {
+    object.alias_name.is_none()
+        && !object.without_inferable_index
+        && !object.synthetic_open_index
+        && object.string_index_type.is_none()
+        && object.number_index_type.is_none()
+        && object.call_signature().is_none()
+        && object.construct_signature().is_none()
+}
+
+fn normalize_with_context(ty: &Type, siblings: Option<&[Type]>) -> Type {
     match ty {
-        Type::Array(element) => Type::Array(Box::new(normalize_object_literal_union(element))),
+        Type::Array(element) => Type::Array(Box::new(normalize_with_context(element, None))),
         Type::Union(union) => {
             let members = union.types();
-            let mut names: Vec<std::sync::Arc<str>> = Vec::new();
-            let mut literals = 0;
-            for member in members.iter().filter(|member| is_written_literal(member)) {
-                literals += 1;
-                if let Type::Object(object) = member {
-                    for name in object.properties.keys() {
-                        if !names.contains(name) {
-                            names.push(name.clone());
-                        }
-                    }
-                }
-            }
-            if literals < 2 {
-                return ty.clone();
-            }
+            let siblings = siblings.unwrap_or(members);
             let normalized = members
                 .iter()
                 .map(|member| match member {
-                    Type::Object(object) if is_written_literal(member) => {
-                        let mut properties = (*object.properties).clone();
-                        for name in &names {
-                            if !properties.contains_key(name) {
-                                properties.insert(
-                                    name.clone(),
-                                    surge_ts_types::ObjectProperty::optional(Type::Undefined),
-                                );
-                            }
-                        }
-                        Type::Object(crate::metrics::alloc_object_type(properties, None))
-                    }
-                    other => other.clone(),
+                    Type::Null | Type::Undefined => member.clone(),
+                    _ => normalize_with_context(member, Some(siblings)),
                 })
                 .collect();
             surge_ts_types::union_type(normalized)
         }
+        Type::Object(object) if is_written_object_literal(ty) => {
+            let mut properties = (*object.properties).clone();
+            for (name, property) in properties.iter_mut() {
+                let child_siblings = siblings.map(|siblings| property_siblings(siblings, name));
+                property.ty = normalize_with_context(&property.ty, child_siblings.as_deref());
+            }
+            if let Some(siblings) = siblings {
+                for sibling in siblings {
+                    let Type::Object(sibling) = sibling else { continue };
+                    if !is_written_object_literal_object(sibling) {
+                        continue;
+                    }
+                    for name in sibling.properties.keys() {
+                        if !properties.contains_key(name) {
+                            properties.insert(name.clone(), surge_ts_types::ObjectProperty::optional(Type::Undefined));
+                        }
+                    }
+                }
+            }
+            Type::Object(crate::metrics::alloc_object_type(properties, None))
+        }
         _ => ty.clone(),
     }
+}
+
+/// `getSiblingsOfContext` for a child context: the named property's type in
+/// each sibling literal, unions distributed.
+fn property_siblings(siblings: &[Type], name: &str) -> Vec<Type> {
+    let mut result = Vec::new();
+    for sibling in siblings {
+        if !is_written_object_literal(sibling) {
+            continue;
+        }
+        let Type::Object(object) = sibling else { continue };
+        let Some(property) = object.properties.get(name) else { continue };
+        match &property.ty {
+            Type::Union(union) => result.extend(union.types().iter().cloned()),
+            other => result.push(other.clone()),
+        }
+    }
+    result
 }
 
 /// tsc's `getWidenedType` without `strictNullChecks`: `null` and `undefined`

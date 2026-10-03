@@ -200,6 +200,9 @@ fn cannot_be_instanceof_target(ty: &Type) -> bool {
                     matches!(name.as_ref(), "apply" | "call" | "bind") || name.contains("hasInstance")
                 })
         }
+        // Without strictNullChecks `null` and `undefined` are subtypes of
+        // every type, `Function` included (`isTypeSubtypeOf`).
+        Type::Null | Type::Undefined if !surge_ts_types::strict_null_checks() => false,
         other => !other.is_unknown() && is_all_primitive(other),
     }
 }

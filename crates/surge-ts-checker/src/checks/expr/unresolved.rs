@@ -179,7 +179,7 @@ fn missing_member_prefix_diagnostic(
         {
             continue;
         }
-        if has_property_of_type(&class.static_type, name) {
+        if has_property_of_type(&class.static_type, name, ctx) {
             return Some(Diagnostic::ts2662(
                 name,
                 &class.class_name,
@@ -191,7 +191,7 @@ fn missing_member_prefix_diagnostic(
             && symbols
                 .get("this")
                 .is_some_and(|this| this.ty == class.instance_type)
-            && has_property_of_type(&class.instance_type, name)
+            && has_property_of_type(&class.instance_type, name, ctx)
         {
             return Some(Diagnostic::ts2663(name, ctx.file_name.clone()));
         }
@@ -207,25 +207,20 @@ fn is_degraded_class_type(ty: &Type) -> bool {
 /// its apparent type adds — `Function`'s for a callable or constructable
 /// object, `Object`'s for every object — but never an index signature, which
 /// a property read also answers from.
-fn has_property_of_type(ty: &Type, name: &str) -> bool {
+fn has_property_of_type(ty: &Type, name: &str, ctx: &CheckerContext) -> bool {
     match ty.peeled() {
         // Checker-injected openness stands in for members surge could not
         // enumerate (an expression base), any of which may be this one.
         Type::Object(object) if object.synthetic_open_index => {
             ty.get_property_access_type(name).is_some()
         }
+        // The lib decides what `Function` carries: `name` is es2015's.
         Type::Object(object) => {
             object
                 .get_property(name)
                 .is_some_and(|property| !property.index_slot)
-                || object
-                    .call_signature()
-                    .or_else(|| object.construct_signature())
-                    .is_some_and(|signature| {
-                        Type::Function(signature.clone())
-                            .get_property_access_type(name)
-                            .is_some()
-                    })
+                || (object.call_signature().is_some() || object.construct_signature().is_some())
+                    && crate::program::global_interface_declares("Function", name, ctx)
                 || surge_ts_types::object_prototype_member_type(name).is_some()
         }
         other => other.get_property_access_type(name).is_some(),

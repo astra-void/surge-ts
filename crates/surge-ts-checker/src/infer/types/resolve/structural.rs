@@ -824,6 +824,7 @@ pub(crate) fn resolve_object_type(
             (!resolved.had_error).then_some(resolved.ty)
         });
 
+    had_error |= crate::infer::types::late_bind_member_names(&mut properties, ctx);
     let mut resolved_object = alloc_object_type(properties, string_index_type)
         .with_number_index_type(number_index_type)
         .with_readonly_indexes(object_type.string_index_readonly, object_type.number_index_readonly);

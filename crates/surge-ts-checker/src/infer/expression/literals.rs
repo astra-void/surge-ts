@@ -49,6 +49,16 @@ pub(crate) fn resolve_computed_property_names<'a>(
             resolved.push(property.clone());
             continue;
         };
+        // A unique symbol key names the member by the symbol's declaration,
+        // whichever alias the key reads it through.
+        if let Type::Reference(reference) = &key_type
+            && let Some(declaration) = reference.unique_symbol_name()
+        {
+            let mut renamed = property.clone();
+            renamed.name = format!("[{declaration}]");
+            resolved.push(renamed);
+            continue;
+        }
         match key_type.peeled() {
             Type::StringLiteral(name) => {
                 let mut renamed = property.clone();
@@ -255,6 +265,29 @@ pub(crate) fn literal_member_this(
     Some(LiteralMemberThis { ty, takers })
 }
 
+#[derive(Default)]
+struct SpreadIndex {
+    string: Option<Type>,
+    number: Option<Type>,
+}
+
+impl SpreadIndex {
+    fn of(source: &surge_ts_types::ObjectType) -> Self {
+        Self {
+            string: source.string_index_type.as_deref().cloned(),
+            number: source.number_index_type.as_deref().cloned(),
+        }
+    }
+
+    fn union(self, right: Self) -> Self {
+        let both = |left: Option<Type>, right: Option<Type>| Some(union_type(vec![left?, right?]));
+        Self {
+            string: both(self.string, right.string),
+            number: both(self.number, right.number),
+        }
+    }
+}
+
 fn infer_object_literal_members(
     properties: &[ParsedObjectProperty],
     member_this: Option<&LiteralMemberThis>,
@@ -281,11 +314,22 @@ fn infer_object_literal_members(
     let mut spread_source_is_open = false;
     let mut spread_source_is_any = false;
     let mut spread_variables: Vec<Type> = Vec::new();
+    // `getSpreadType`'s index signatures: the first spread's own, then only
+    // those every later operand (a run of written properties included)
+    // declares too (`getUnionIndexInfos`). `None` before any spread.
+    let mut spread_index: Option<SpreadIndex> = None;
+    let mut written_since_spread = false;
     for property in properties {
         record_property_lookup();
         record_object_literal_property_check();
 
         if property.is_spread {
+            let left = if std::mem::take(&mut written_since_spread) {
+                Some(SpreadIndex::default())
+            } else {
+                spread_index.take()
+            };
+            spread_index = Some(SpreadIndex::default());
             // `{ ...source }` merges `source`'s own properties; later properties
             // (including later spreads) override earlier ones, matching tsc's
             // left-to-right spread semantics. The source is peeled so a nominal
@@ -330,6 +374,11 @@ fn infer_object_literal_members(
                 }
                 Type::Object(source) => {
                     spread_source_is_open |= source.synthetic_open_index;
+                    let operand = SpreadIndex::of(&source);
+                    spread_index = Some(match left {
+                        None => operand,
+                        Some(left) => left.union(operand),
+                    });
                     // `getSpreadSymbol`: a set-only accessor spreads as
                     // `undefined`. Only a spread literal still says which
                     // members are set-only.
@@ -389,6 +438,7 @@ fn infer_object_literal_members(
             continue;
         }
 
+        written_since_spread = true;
         let readonly = is_get_only_accessor(property, properties);
         let property_symbols = if matches!(property.value, ParsedExpression::ArrowFunction(_)) {
             member_symbols
@@ -421,6 +471,11 @@ fn infer_object_literal_members(
             Type::Object(object)
         } else if let Some((string_index, number_index)) = computed_index_signatures.clone() {
             Type::Object(alloc_object_type(merged_properties, string_index).with_number_index_type(number_index))
+        } else if let Some(index) = spread_index.as_ref().filter(|_| !written_since_spread) {
+            Type::Object(
+                alloc_object_type(merged_properties, index.string.clone())
+                    .with_number_index_type(index.number.clone()),
+            )
         } else {
             Type::Object(alloc_object_type(merged_properties, None))
         }

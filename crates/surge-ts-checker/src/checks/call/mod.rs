@@ -2162,6 +2162,45 @@ fn immediately_invoked_arrow_type(
     )
 }
 
+/// tsc's `isOptionalParameter` for an IIFE whose parameters are not typed
+/// from its arguments: an unannotated parameter no argument reaches is
+/// optional to the call all the same.
+fn immediately_invoked_optional_parameters(
+    callee: &surge_ts_syntax::ParsedExpression,
+    arguments: &[ParsedCallArgument],
+    function_type: surge_ts_types::FunctionType,
+) -> surge_ts_types::FunctionType {
+    let surge_ts_syntax::ParsedExpression::ArrowFunction(arrow) = callee else {
+        return function_type;
+    };
+    if arguments.iter().any(|argument| argument.spread) {
+        return function_type;
+    }
+    let required = arrow
+        .parameters
+        .iter()
+        .enumerate()
+        .filter(|(index, parameter)| {
+            !parameter.optional
+                && parameter.initializer.is_none()
+                && !parameter.rest
+                && (parameter.declared_type.is_some() || *index < arguments.len())
+        })
+        .map(|(index, _)| index + 1)
+        .max()
+        .unwrap_or(0);
+    if required >= function_type.required_parameter_count() {
+        return function_type;
+    }
+    surge_ts_types::FunctionType::new(
+        function_type.parameters().to_vec(),
+        function_type.return_type().clone(),
+        function_type.is_variadic(),
+        required,
+    )
+    .with_parameter_names(crate::checks::function::written_binding_names(&arrow.parameters))
+}
+
 /// tsc's `getSpreadArgumentType` for the arguments from a rest parameter's
 /// position on: a spread in the last position is the collection itself, and
 /// otherwise the arguments make up a tuple.
@@ -2276,7 +2315,12 @@ fn check_expression_call_unrecorded(
 
     let callee_result = match immediately_invoked_arrow_type(callee, arguments, symbols, ctx) {
         Some(function_type) => InferredExpression::Known(Type::Function(function_type)),
-        None => evaluate_expression(callee, callee_span, symbols, ctx),
+        None => match evaluate_expression(callee, callee_span, symbols, ctx) {
+            InferredExpression::Known(Type::Function(function_type)) => InferredExpression::Known(Type::Function(
+                immediately_invoked_optional_parameters(callee, arguments, function_type),
+            )),
+            other => other,
+        },
     };
 
     let callee_type = match callee_result {

@@ -41,6 +41,9 @@ fn mapped_literal_keys(constraint: &Type) -> Option<Vec<(String, Type)>> {
         Type::Never => Some(Vec::new()),
         Type::StringLiteral(value) => Some(vec![(value.clone(), constraint.clone())]),
         Type::NumberLiteral(literal) => Some(vec![(literal.value.clone(), constraint.clone())]),
+        Type::Reference(reference) if reference.is_unique_symbol() => {
+            Some(vec![(remapped_property_name(constraint)?, constraint.clone())])
+        }
         Type::Union(union) => {
             let mut keys = Vec::new();
             for variant in union.types() {
@@ -48,6 +51,19 @@ fn mapped_literal_keys(constraint: &Type) -> Option<Vec<(String, Type)>> {
             }
             Some(keys)
         }
+        _ => None,
+    }
+}
+
+/// The property an `as` clause renames a key to: a string literal, or a
+/// well-known symbol's `[Symbol.<name>]` member.
+fn remapped_property_name(key: &Type) -> Option<String> {
+    match key {
+        Type::StringLiteral(name) => Some(name.clone()),
+        Type::Reference(reference) => reference
+            .unique_symbol_name()
+            .filter(|name| name.starts_with("Symbol."))
+            .map(|name| format!("[{name}]")),
         _ => None,
     }
 }
@@ -484,8 +500,8 @@ pub(crate) fn resolve_mapped_type(
         object
             .properties
             .iter()
-            .filter(|(key, property)| !key.starts_with('[') && is_public_key(key, property))
-            .map(|(key, _)| (key.to_string(), Type::StringLiteral(key.to_string())))
+            .filter(|(key, property)| is_public_key(key, property))
+            .filter_map(|(key, _)| Some((key.to_string(), property_name_key_type(key)?)))
             .collect()
     });
     if homomorphic_keys.is_none() && mapped_key_is_open(&resolved_constraint.ty) {
@@ -580,16 +596,9 @@ pub(crate) fn resolve_mapped_type(
                 had_error |= renamed.had_error;
                 match renamed.ty {
                     Type::Never => continue,
-                    Type::StringLiteral(name) => vec![name],
                     Type::Union(union) => {
-                        let names: Option<Vec<String>> = union
-                            .types()
-                            .iter()
-                            .map(|member| match member {
-                                Type::StringLiteral(name) => Some(name.clone()),
-                                _ => None,
-                            })
-                            .collect();
+                        let names: Option<Vec<String>> =
+                            union.types().iter().map(remapped_property_name).collect();
                         match names {
                             Some(names) => names,
                             None => {
@@ -598,10 +607,13 @@ pub(crate) fn resolve_mapped_type(
                             }
                         }
                     }
-                    _ => {
-                        had_error = true;
-                        continue;
-                    }
+                    other => match remapped_property_name(&other) {
+                        Some(name) => vec![name],
+                        None => {
+                            had_error = true;
+                            continue;
+                        }
+                    },
                 }
             }
         };

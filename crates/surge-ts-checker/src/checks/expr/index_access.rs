@@ -86,6 +86,11 @@ pub(super) fn evaluate_optional_index_access(
                 | InferredExpression::MissingProperty { .. }
                 | InferredExpression::Unknown => return InferredExpression::Unknown,
             };
+            if let Some(member) =
+                well_known_symbol_member(&Type::Array(element_type.clone()), index, symbols)
+            {
+                return InferredExpression::Known(member);
+            }
 
             if !numeric_index_key(&index_type) && !indexes_as_number(index, symbols) {
                 report_non_numeric_index(
@@ -122,7 +127,13 @@ pub(super) fn evaluate_index_access(
     }
     // tsc's `checkElementAccessExpression` checks the index before it gives
     // up on an error object.
-    let Some(symbol) = symbols.get(object_name) else {
+    // As an identifier read resolves it: the module's value table backs a
+    // binding a namespace body's scope does not carry.
+    let Some(symbol) = symbols.get_handle(object_name).or_else(|| {
+        ctx.module_value_fallback
+            .as_ref()
+            .and_then(|fallback| fallback.get_handle(object_name))
+    }) else {
         if object_name != "super" {
             report_unresolved_value_name(
                 object_name,
@@ -199,7 +210,7 @@ pub(super) fn evaluate_index_access(
             Type::Array(Box::new(reference.arguments[0].clone()))
         }
         Type::Reference(_) => match receiver_type.peeled() {
-            peeled @ (Type::Array(_) | Type::Tuple(_)) => peeled,
+            peeled @ (Type::Array(_) | Type::Tuple(_) | Type::Any) => peeled,
             Type::OpenTuple(tuple) => Type::Array(Box::new(tuple.element_union())),
             _ => receiver_type,
         },
@@ -251,6 +262,9 @@ pub(super) fn evaluate_index_access(
                 | InferredExpression::MissingProperty { .. }
                 | InferredExpression::Unknown => return InferredExpression::Unknown,
             };
+            if let Some(member) = well_known_symbol_member(&receiver_type, index, symbols) {
+                return InferredExpression::Known(member);
+            }
 
             // tsc's `getPropertyTypeForIndexType`: a literal index past a fixed
             // tuple's end is TS2493 (a negative one TS2514) and reads `undefined`,
@@ -298,6 +312,11 @@ pub(super) fn evaluate_index_access(
                 | InferredExpression::MissingProperty { .. }
                 | InferredExpression::Unknown => return InferredExpression::Unknown,
             };
+            if let Some(member) =
+                well_known_symbol_member(&Type::Array(element_type.clone()), index, symbols)
+            {
+                return InferredExpression::Known(member);
+            }
 
             if !numeric_index_key(&index_type) && !indexes_as_number(index, symbols) {
                 report_non_numeric_index(
@@ -337,6 +356,7 @@ pub(super) fn evaluate_index_access(
                 InferredExpression::Known(ty) => ty,
                 _ => return InferredExpression::Unknown,
             };
+            let index_type = well_known_symbol_key_type(index, symbols).unwrap_or(index_type);
             if report_unusable_index_type(
                 &index_type,
                 choose_span(index_span, choose_span(object_span, fallback_span)),
@@ -396,6 +416,32 @@ pub(super) fn evaluate_index_access(
                             .any(|key| key.starts_with('[') && !key.starts_with("[Symbol."))
                         {
                             return InferredExpression::Unknown;
+                        }
+                    }
+                    // `getIndexedAccessType` distributes a union of literal keys,
+                    // each reading the member it names; a generic key is read
+                    // through its constraint, which is what its deferred
+                    // `T[K]` relates by.
+                    // surge reads a generic key eagerly rather than deferring
+                    // `T[K]`; its constraint is read only where an index
+                    // signature would otherwise answer for declared members.
+                    let key_union = if !index_type.is_type_variable() {
+                        index_type.clone()
+                    } else if object_type.applicable_index_type(index_is_numeric).is_some() {
+                        surge_ts_types::type_variable::base_constraint_or_type(&index_type)
+                    } else {
+                        Type::Never
+                    };
+                    // A write through a union of keys must suit every member
+                    // it may land on (`AccessFlagsWriting` intersects them); a
+                    // generic key's write stays the deferred `T[K]`, which
+                    // surge does not model.
+                    if let Some(members) = declared_literal_union_members(&object_type, &key_union) {
+                        if !is_write {
+                            return InferredExpression::Known(union_type(members));
+                        }
+                        if !index_type.is_type_variable() {
+                            return InferredExpression::Known(crate::infer::types::merge_intersection_members(members));
                         }
                     }
                     if let Some(index_value) = object_type.applicable_index_type(index_is_numeric) {
@@ -586,11 +632,22 @@ fn reads_string_by_number(receiver_type: &Type) -> bool {
     }
 }
 
+/// tsc's `isApplicableIndexType` against a number index: a key assignable to
+/// `number`, `${number}`, or a numeric string literal. A union key is looked
+/// up member by member.
 fn numeric_index_key(index_type: &Type) -> bool {
     match index_type {
         Type::StringLiteral(value) => value.parse::<f64>().is_ok(),
+        Type::Union(union) => union.types().iter().all(numeric_index_key),
+        other if is_numeric_string_type(other) => true,
         other => is_assignable_to(other, &Type::Number),
     }
+}
+
+fn is_numeric_string_type(ty: &Type) -> bool {
+    surge_ts_types::template_literal_parts(ty).is_some_and(|(texts, types)| {
+        texts.iter().all(|text| text.is_empty()) && matches!(types.as_slice(), [Type::Number])
+    })
 }
 
 /// A receiver whose only index is numeric cannot answer any other key. tsc
@@ -680,6 +737,16 @@ pub(crate) fn object_element_read(
         let Type::Object(object_type) = &peeled else {
             return None;
         };
+        let key_union = if !index_type.is_type_variable() {
+            index_type.clone()
+        } else if object_type.applicable_index_type(index_is_numeric).is_some() {
+            surge_ts_types::type_variable::base_constraint_or_type(index_type)
+        } else {
+            Type::Never
+        };
+        if let Some(members) = declared_literal_union_members(object_type, &key_union) {
+            return Some(union_type(members));
+        }
         return match object_type.applicable_index_type(index_is_numeric) {
             Some(index_value) => Some(crate::infer::unchecked_index_read(index_value.clone(), ctx)),
             None => union_literal_index_read(object_type, index_type),
@@ -808,6 +875,23 @@ fn literal_tuple_element(ty: &Type, key: &str) -> Option<Type> {
 /// reads `o["a"] | o["b"]`, and is only a missing key when one of them is. The
 /// union never reaches [`literal_index_key`], so without this it would look like
 /// a non-literal key the receiver cannot answer.
+/// The members a union of literal keys names when every one of them is a
+/// declared member, none read through an index signature.
+fn declared_literal_union_members(object_type: &surge_ts_types::ObjectType, index_type: &Type) -> Option<Vec<Type>> {
+    let Type::Union(union) = index_type else {
+        return None;
+    };
+    let mut member_types = Vec::with_capacity(union.types().len());
+    for member in union.types() {
+        let key = literal_index_key(member)?;
+        if object_type.properties.get(key.as_str()).is_none_or(|property| property.index_slot) {
+            return None;
+        }
+        member_types.push(object_type.get_property_access_type(&key)?);
+    }
+    Some(member_types)
+}
+
 fn union_literal_index_read(
     object_type: &surge_ts_types::ObjectType,
     index_type: &Type,
@@ -859,6 +943,15 @@ fn literal_index_key(index_type: &Type) -> Option<String> {
 /// symbols: a unique symbol, which names the member a class or interface
 /// declares as `[Symbol.<name>]`. surge types the lib's `unique symbol`
 /// members as `symbol`, so the key is recognised by what it reads.
+/// The member a well-known symbol key reads off an array or tuple's apparent
+/// `Array<T>`, which declares it under the same `[Symbol.<name>]`.
+fn well_known_symbol_member(receiver: &Type, index: &ParsedExpression, symbols: &SymbolTable) -> Option<Type> {
+    let Type::Reference(key) = well_known_symbol_key_type(index, symbols)? else {
+        return None;
+    };
+    receiver.get_property_access_type(&format!("[{}]", key.unique_symbol_name()?))
+}
+
 pub(crate) fn well_known_symbol_key_type(index: &ParsedExpression, symbols: &SymbolTable) -> Option<Type> {
     let ParsedExpression::PropertyAccess {
         object,

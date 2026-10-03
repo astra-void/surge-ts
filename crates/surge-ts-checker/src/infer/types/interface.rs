@@ -1213,9 +1213,12 @@ pub(crate) fn resolve_interface_declaration(
                     else {
                         continue;
                     };
+                    // Every function-valued member of the lib's `Array<T>` is
+                    // declared with method syntax, so it relates bivariantly.
+                    let is_method = matches!(member_ty, Type::Function(_));
                     properties.insert(
                         (*name).into(),
-                        surge_ts_types::ObjectProperty::required(member_ty),
+                        surge_ts_types::ObjectProperty::required(member_ty).with_method(is_method),
                     );
                 }
             }
@@ -1664,6 +1667,7 @@ pub(crate) fn resolve_interface_declaration(
     } else {
         inherited_number_index_readonly
     };
+    had_error |= super::late_bind_member_names(&mut properties, ctx);
     let mut object_type = alloc_object_type(properties, resolved_index_type)
         .with_number_index_type(resolved_number_index_type)
         .with_readonly_indexes(resolved_index_readonly, resolved_number_index_readonly)

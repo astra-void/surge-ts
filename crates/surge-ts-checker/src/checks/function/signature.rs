@@ -874,13 +874,16 @@ pub(crate) fn object_rest_type(source: &Type, omitted: &[String]) -> Type {
                 .collect(),
         ),
         Type::Object(object) => {
-            // `getRestType` keeps only spreadable members: no private name.
+            // `getRestType` keeps only spreadable members (no private name, no
+            // private or protected member), each as the writable symbol
+            // `getSpreadSymbol(prop, false)` makes of it.
             let properties: surge_ts_types::PropertyMap = object
                 .properties
                 .iter()
                 .filter(|(name, _)| !surge_ts_types::private_name::is_private_name_key(name))
+                .filter(|(_, property)| property.restriction.is_none())
                 .filter(|(name, _)| !omitted.iter().any(|omitted| omitted.as_str() == name.as_ref()))
-                .map(|(name, property)| (name.clone(), property.clone()))
+                .map(|(name, property)| (name.clone(), property.clone().with_readonly(false)))
                 .collect();
             let mut rest = crate::metrics::alloc_object_type(
                 properties,
@@ -3099,7 +3102,7 @@ pub(crate) fn check_function_body_with_signature_and_this(
 
     // The flow summary cannot see a callee's return type; the declared ones in
     // scope decide which call statements end the flow, as a `throw` does.
-    let never_calls = super::body_statements::never_call_statements(&body, &scopes);
+    let never_calls = super::body_statements::never_call_statements(&body, &scopes, ctx);
     let body_flow = if never_calls.is_empty() {
         body_flow
     } else {
@@ -3209,7 +3212,15 @@ pub(crate) fn check_function_body_with_signature_and_this(
     // tsc's `unwrapReturnType`: an async body owes the awaited return type,
     // so `async (): Promise<void>` with no `return` is exempt like `(): void`.
     let unwrapped_return_type = if is_async && !is_generator {
-        crate::checks::call::awaited_type(function_type.return_type())
+        let declared = function_type.return_type();
+        // `getAwaitedTypeNoAlias` gives up on a thenable that is no promise
+        // (its `then` takes no `onfulfilled` callback), leaving the error
+        // type, which owes no return.
+        if is_non_promise_thenable(declared) {
+            Type::ErrorType
+        } else {
+            crate::checks::call::awaited_type(declared)
+        }
     } else {
         function_type.return_type().clone()
     };
@@ -3276,5 +3287,32 @@ pub(crate) fn body_has_defaultless_switch(body: &[ParsedFunctionBodyStatement]) 
                 || body_has_defaultless_switch(&try_statement.finalizer)
         }
         _ => false,
+    })
+}
+
+/// A type with a callable `then` that `getPromisedTypeOfPromise` cannot read
+/// a promised type from: no `then` signature takes a callable first
+/// parameter.
+fn is_non_promise_thenable(ty: &Type) -> bool {
+    let Some(then) = ty.peeled().get_property_access_type("then") else {
+        return false;
+    };
+    let Type::Function(then) = then.peeled() else {
+        return false;
+    };
+    let signatures: Vec<&surge_ts_types::FunctionType> = match then.overloads() {
+        Some(overloads) => overloads.iter().collect(),
+        None => vec![&then],
+    };
+    signatures.iter().all(|signature| {
+        signature.parameters().first().is_none_or(|first| match first.peeled() {
+            Type::Function(_) => false,
+            Type::Object(object) => object.call_signature().is_none(),
+            Type::Union(union) => !union.types().iter().any(|member| {
+                matches!(member.peeled(), Type::Function(_))
+                    || matches!(member.peeled(), Type::Object(object) if object.call_signature().is_some())
+            }),
+            other => !other.is_unmodelled(),
+        })
     })
 }

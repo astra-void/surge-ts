@@ -51,6 +51,7 @@ pub(crate) use diagnostics::*;
 pub(crate) use file_classify::*;
 pub(crate) use forward_references::decorator_is_checked;
 pub(crate) use globals::*;
+pub(crate) use override_modifiers::global_interface_declares;
 pub(crate) use index_constraints::{check_type_literal_index_constraints, is_numeric_literal_name};
 pub(crate) use late_bound_members::WELL_KNOWN_SYMBOLS;
 pub(crate) use namespaces::{

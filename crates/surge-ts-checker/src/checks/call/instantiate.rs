@@ -2810,6 +2810,11 @@ fn tuple_element_constraint(constraint: &ParsedType) -> Option<&ParsedType> {
     match constraint {
         ParsedType::Array(element) => Some(element.as_ref()),
         ParsedType::Tuple(elements) => elements.first(),
+        ParsedType::VariadicTuple(elements) => elements.iter().find_map(|element| match element {
+            surge_ts_syntax::ParsedTupleElement::Fixed(element) => Some(element),
+            surge_ts_syntax::ParsedTupleElement::Rest(ParsedType::Array(element), _) => Some(element.as_ref()),
+            surge_ts_syntax::ParsedTupleElement::Rest(..) => None,
+        }),
         ParsedType::Union(members) => members.iter().find_map(tuple_element_constraint),
         _ => None,
     }
