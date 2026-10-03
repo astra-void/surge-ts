@@ -320,6 +320,9 @@ pub enum ParsedGrammarDiagnosticKind {
     TsUnderLegacyDecorators(u32),
     /// A [`Self::Ts`] error that holds only without `experimentalDecorators`.
     TsUnderEsDecorators(u32),
+    /// A [`Self::Ts`] error that holds only when class fields are not emitted
+    /// as standard fields (`GetEmitStandardClassFields` is false).
+    TsUnlessStandardClassFields(u32),
 }
 
 /// A leading `/// <reference types="..." />` directive, or the `path` form

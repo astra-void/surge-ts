@@ -1433,10 +1433,12 @@ fn grammar_finding_diagnostic(
         Kind::TsUnderStrictNullChecks(_) if !ctx.options.strict_null_checks => return None,
         Kind::TsUnderLegacyDecorators(_) if !ctx.options.experimental_decorators => return None,
         Kind::TsUnderEsDecorators(_) if ctx.options.experimental_decorators => return None,
+        Kind::TsUnlessStandardClassFields(_) if ctx.options.emit_standard_class_fields() => return None,
         Kind::Ts(number)
         | Kind::TsUnderStrictNullChecks(number)
         | Kind::TsUnderLegacyDecorators(number)
-        | Kind::TsUnderEsDecorators(number) => {
+        | Kind::TsUnderEsDecorators(number)
+        | Kind::TsUnlessStandardClassFields(number) => {
             let args: Vec<surge_ts_diagnostics::DiagnosticArg> = finding
                 .name
                 .as_deref()

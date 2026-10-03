@@ -2117,38 +2117,68 @@ impl<'a> ContextCollector<'a, '_> {
     }
 
     /// tsc's `onSuccessfullyResolvedSymbol` for a name read by a parameter's
-    /// initializer outside any deferred (function) context: the parameter
-    /// itself is TS2372, a parameter declared after it TS2373.
+    /// initializer — or a default inside a destructured parameter — outside
+    /// any deferred (function) context: the binding itself is TS2372, a
+    /// parameter binding declared after the reference, or a declaration of
+    /// the function body (which shares the parameters' scope), TS2373.
     fn check_parameter_initializer_references(&mut self, parameters: &oxc_ast::ast::FormalParameters<'_>) {
-        let names: Vec<Vec<(&str, Span)>> = parameters
-            .items
-            .iter()
-            .map(|parameter| {
-                let mut names = Vec::new();
-                collect_binding_names(&parameter.pattern, &mut names);
-                names
+        let mut bindings: Vec<(&str, Span)> = Vec::new();
+        for parameter in &parameters.items {
+            collect_binding_names(&parameter.pattern, &mut bindings);
+        }
+        if let Some(rest) = &parameters.rest {
+            collect_binding_names(&rest.rest.argument, &mut bindings);
+        }
+        let body_names: Vec<String> = match self.stack.last() {
+            Some(AstKind::Function(function)) => function
+                .body
+                .as_ref()
+                .map(|body| body_declared_names(&body.statements))
+                .unwrap_or_default(),
+            Some(AstKind::ArrowFunctionExpression(arrow)) => body_declared_names(&arrow.body.statements),
+            _ => Vec::new(),
+        };
+        let mut defaults: Vec<(Vec<(&str, Span)>, &Expression<'_>)> = Vec::new();
+        for parameter in &parameters.items {
+            if let Some(initializer) = parameter.initializer.as_deref() {
+                let mut own = Vec::new();
+                collect_binding_names(&parameter.pattern, &mut own);
+                defaults.push((own, initializer));
+            }
+            collect_pattern_defaults(&parameter.pattern, &mut defaults);
+        }
+        if let Some(rest) = &parameters.rest {
+            collect_pattern_defaults(&rest.rest.argument, &mut defaults);
+        }
+        // `useOuterVariableScopeInParameter`: the parameters resolve in the
+        // body's scope only when one of them `requiresScopeChange` — here a
+        // class expression with a static property, while class fields are not
+        // emitted as standard ones.
+        let scanned: Vec<_> = defaults
+            .into_iter()
+            .map(|(own, initializer)| {
+                let mut references = EagerReferences::default();
+                references.visit_expression(initializer);
+                (own, references)
             })
-            .chain(parameters.rest.iter().map(|rest| {
-                let mut names = Vec::new();
-                collect_binding_names(&rest.rest.argument, &mut names);
-                names
-            }))
             .collect();
-        for (index, parameter) in parameters.items.iter().enumerate() {
-            let (Some(initializer), BindingPattern::BindingIdentifier(own)) =
-                (parameter.initializer.as_deref(), &parameter.pattern)
-            else {
-                continue;
-            };
-            let mut references = EagerReferences::default();
-            references.visit_expression(initializer);
-            let is_later =
-                |name: &str| names[index + 1..].iter().flatten().any(|(later, _)| *later == name);
+        let reads_body_scope = scanned.iter().any(|(_, references)| references.static_class_property);
+        for (own, references) in scanned {
+            let Some(&(own_name, _)) = own.first() else { continue };
             for (name, span) in references.found {
-                if name == own.name.as_str() {
-                    self.push(2372, span, &[own.name.as_str()]);
-                } else if is_later(&name) {
-                    self.push(2373, span, &[own.name.as_str(), &name]);
+                if own.iter().any(|(binding, _)| *binding == name) {
+                    self.push(2372, span, &[name.as_str()]);
+                } else if bindings.iter().any(|(binding, declared)| *binding == name && declared.start > span.start) {
+                    self.push(2373, span, &[own_name, &name]);
+                } else if reads_body_scope
+                    && !bindings.iter().any(|(binding, _)| *binding == name)
+                    && body_names.iter().any(|local| *local == name)
+                {
+                    self.out.push(ParsedGrammarDiagnostic {
+                        kind: Kind::TsUnlessStandardClassFields(2373),
+                        span: text_span_from_oxc_span(span),
+                        name: Some([own_name, name.as_str()].join("\0")),
+                    });
                 }
             }
         }
@@ -3168,6 +3198,61 @@ impl<'a> ContextCollector<'a, '_> {
             }
         }
     }
+}
+
+/// The defaults written inside a destructuring pattern, each with the names
+/// its own target binds.
+fn collect_pattern_defaults<'n, 'a>(
+    pattern: &'n BindingPattern<'a>,
+    out: &mut Vec<(Vec<(&'n str, Span)>, &'n Expression<'a>)>,
+) {
+    match pattern {
+        BindingPattern::BindingIdentifier(_) => {}
+        BindingPattern::ObjectPattern(object) => {
+            for property in &object.properties {
+                collect_pattern_defaults(&property.value, out);
+            }
+            if let Some(rest) = &object.rest {
+                collect_pattern_defaults(&rest.argument, out);
+            }
+        }
+        BindingPattern::ArrayPattern(array) => {
+            for element in array.elements.iter().flatten() {
+                collect_pattern_defaults(element, out);
+            }
+            if let Some(rest) = &array.rest {
+                collect_pattern_defaults(&rest.argument, out);
+            }
+        }
+        BindingPattern::AssignmentPattern(assignment) => {
+            let mut own = Vec::new();
+            collect_binding_names(&assignment.left, &mut own);
+            out.push((own, &assignment.right));
+            collect_pattern_defaults(&assignment.left, out);
+        }
+    }
+}
+
+/// The names a function body declares at its top level.
+fn body_declared_names(statements: &[Statement<'_>]) -> Vec<String> {
+    let mut names = Vec::new();
+    for statement in statements {
+        match statement {
+            Statement::VariableDeclaration(declaration) => {
+                for declarator in &declaration.declarations {
+                    let mut bound = Vec::new();
+                    collect_binding_names(&declarator.id, &mut bound);
+                    names.extend(bound.into_iter().map(|(name, _)| name.to_string()));
+                }
+            }
+            Statement::FunctionDeclaration(function) => {
+                names.extend(function.id.as_ref().map(|id| id.name.to_string()));
+            }
+            Statement::ClassDeclaration(class) => names.extend(class.id.as_ref().map(|id| id.name.to_string())),
+            _ => {}
+        }
+    }
+    names
 }
 
 fn collect_binding_names<'n>(pattern: &'n BindingPattern<'_>, out: &mut Vec<(&'n str, Span)>) {
@@ -4426,6 +4511,8 @@ fn statement_declares_value(statement: &Statement<'_>, name: &str) -> bool {
 struct EagerReferences {
     found: Vec<(String, Span)>,
     deferred_depth: usize,
+    /// A class expression with a static property was read eagerly.
+    static_class_property: bool,
 }
 
 impl<'a> Visit<'a> for EagerReferences {
@@ -4444,7 +4531,19 @@ impl<'a> Visit<'a> for EagerReferences {
         oxc_ast_visit::walk::walk_arrow_function_expression(self, arrow);
         self.deferred_depth -= 1;
     }
-    fn visit_class(&mut self, _: &Class<'a>) {}
+    // A class's heritage is evaluated with it; its members are not read here.
+    fn visit_class(&mut self, class: &Class<'a>) {
+        if self.deferred_depth == 0
+            && class.body.body.iter().any(|element| {
+                matches!(element, oxc_ast::ast::ClassElement::PropertyDefinition(property) if property.r#static)
+            })
+        {
+            self.static_class_property = true;
+        }
+        if let Some(base) = &class.super_class {
+            self.visit_expression(base);
+        }
+    }
     fn visit_ts_type_annotation(&mut self, _: &oxc_ast::ast::TSTypeAnnotation<'a>) {}
     fn visit_ts_type(&mut self, _: &oxc_ast::ast::TSType<'a>) {}
 }
