@@ -600,9 +600,37 @@ pub(crate) fn call_statement_key(expression: &surge_ts_syntax::ParsedExpression)
     Some((span.start, span.end))
 }
 
+/// A block-scoped binding declared later in its scope: the statement that
+/// declares it, and whether a read before it is also TS2454 — not when the
+/// annotation is a type tsc assumes initialized (`checkIdentifier`'s
+/// `AnyOrUnknown | Void`, or the `errorType` a circular annotation gets).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FutureDeclaration {
+    pub(crate) index: usize,
+    pub(crate) unassigned: bool,
+}
+
+impl FutureDeclaration {
+    pub(crate) fn of(index: usize, variable: &surge_ts_syntax::ParsedVariableDeclaration) -> Self {
+        let assumed_initialized = matches!(
+            variable.declared_type,
+            Some(
+                surge_ts_syntax::ParsedType::Any
+                    | surge_ts_syntax::ParsedType::UnknownKeyword
+                    | surge_ts_syntax::ParsedType::Void
+                    | surge_ts_syntax::ParsedType::ErrorType
+            )
+        );
+        Self {
+            index,
+            unassigned: !assumed_initialized,
+        }
+    }
+}
+
 pub(crate) fn collect_future_block_scoped_declarations(
     body: &[ParsedFunctionBodyStatement],
-) -> HashMap<Arc<str>, usize> {
+) -> HashMap<Arc<str>, FutureDeclaration> {
     let mut declarations = HashMap::new();
 
     for (index, statement) in body.iter().enumerate() {
@@ -613,7 +641,7 @@ pub(crate) fn collect_future_block_scoped_declarations(
             ) {
                 declarations
                     .entry(variable.name.clone().into())
-                    .or_insert(index);
+                    .or_insert(FutureDeclaration::of(index, variable));
             }
         }
     }
