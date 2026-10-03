@@ -1245,8 +1245,18 @@ impl<'s> TagParser<'s> {
     /// `Default, { … }`, then `from "specifier"`.
     fn parse_import_tag(&mut self, start: usize) -> Option<crate::ParsedImportDeclaration> {
         use crate::{ParsedImportKind, ParsedImportSpecifier};
+        // Only a line's leading `*` is the comment's margin
+        // (`skipJsDocLeadingAsterisks`); on the tag's own line it is the
+        // namespace import's `*`.
         let skip = |parser: &mut Self| {
-            while matches!(parser.token(), Token::Whitespace | Token::NewLine | Token::Asterisk) {
+            let mut line_start = false;
+            loop {
+                match parser.token() {
+                    Token::Whitespace => {}
+                    Token::NewLine => line_start = true,
+                    Token::Asterisk if line_start => {}
+                    _ => break,
+                }
                 parser.next_token_jsdoc();
             }
         };
@@ -1318,6 +1328,7 @@ impl<'s> TagParser<'s> {
         let specifier = self.s.text[value_start..value_end].to_string();
         self.s.pos = value_end + 1;
         self.next_token_jsdoc();
+        let resolution_mode = self.parse_import_tag_resolution_mode();
         let kind = match (default, named, namespace) {
             (Some((local_name, span)), None, None) => ParsedImportKind::TypeOnlyDefault {
                 local_name,
@@ -1342,8 +1353,45 @@ impl<'s> TagParser<'s> {
             module_specifier: specifier,
             module_specifier_span: Some(TextSpan { start: literal_start, end: value_end + 1 }),
             span: Some(TextSpan { start, end: value_end + 1 }),
-            resolution_mode: None,
+            resolution_mode,
             inline_type_specifiers: false,
+        })
+    }
+
+    /// The `resolution-mode` of an `@import`'s `with { … }` attributes
+    /// (`tryParseImportAttributes`), which selects the resolution of a
+    /// declaration that is type-only as a whole, as every `@import` is.
+    fn parse_import_tag_resolution_mode(&mut self) -> Option<crate::ParsedResolutionModeAttribute> {
+        while self.token() == Token::Whitespace {
+            self.next_token_jsdoc();
+        }
+        if !(self.token() == Token::Identifier && self.s.token_text() == "with") {
+            return None;
+        }
+        let rest = &self.s.text[self.s.pos..];
+        let open = rest.find('{')?;
+        if !rest[..open].trim().is_empty() {
+            return None;
+        }
+        let close = open + rest[open..].find('}')?;
+        let attributes = &rest[open + 1..close];
+        self.s.pos += close + 1;
+        self.next_token_jsdoc();
+        let unquote = |text: &str| {
+            let text = text.trim();
+            text.strip_prefix(['"', '\'']).and_then(|text| text.strip_suffix(['"', '\''])).map(str::to_string)
+        };
+        attributes.split(',').find_map(|attribute| {
+            let (key, value) = attribute.split_once(':')?;
+            if unquote(key).or_else(|| Some(key.trim().to_string()))?.as_str() != "resolution-mode" {
+                return None;
+            }
+            let mode = match unquote(value)?.as_str() {
+                "import" => crate::ResolutionModeOverride::Import,
+                "require" => crate::ResolutionModeOverride::Require,
+                _ => return None,
+            };
+            Some(crate::ParsedResolutionModeAttribute { mode, selects_resolution: true })
         })
     }
 
