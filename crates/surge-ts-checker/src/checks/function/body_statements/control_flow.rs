@@ -880,8 +880,9 @@ pub(crate) fn check_function_for_of_statement(
 }
 
 /// tsc's `checkForInStatement` right-hand rule (TS2407): with `null` and
-/// `undefined` removed, the operand must be `any`, an object type or a type
-/// parameter. The `null` keyword leaves nothing, so it reads as `never`.
+/// `undefined` removed under strictNullChecks, the operand must be `any`, an
+/// object type or a type parameter. The `null` keyword leaves nothing, so it
+/// reads as `never`.
 fn check_for_in_right_operand(
     operand: &surge_ts_syntax::ParsedExpression,
     operand_type: &Type,
@@ -899,6 +900,14 @@ fn check_for_in_right_operand(
             Type::Union(union) => union.types().iter().all(is_object_like),
             _ => false,
         }
+    }
+    // Without strictNullChecks `getNonNullableTypeIfNeeded` keeps `null` and
+    // `undefined`, both assignable to `object`.
+    if !surge_ts_types::strict_null_checks()
+        && (matches!(operand, surge_ts_syntax::ParsedExpression::NullLiteral)
+            || matches!(operand_type.peeled(), Type::Null | Type::Undefined))
+    {
+        return;
     }
     let right_type = if matches!(operand, surge_ts_syntax::ParsedExpression::NullLiteral) {
         Type::Never
