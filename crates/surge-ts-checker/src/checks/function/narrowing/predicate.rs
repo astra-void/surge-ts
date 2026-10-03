@@ -1283,6 +1283,52 @@ pub(crate) fn narrow_predicate_guards_symbol_table(
         );
         return right_narrowed.or(left_narrowed);
     }
+    // The other branch is reached over two edges — the left operand deciding
+    // it, or the left failing to and the right deciding it — and holds the
+    // union of what each proves. A subject one edge leaves alone is not
+    // narrowed.
+    if let ParsedExpression::Logical {
+        left,
+        operator: ParsedLogicalOperator::And | ParsedLogicalOperator::Or,
+        right,
+        ..
+    } = condition
+    {
+        let left_edge = narrow_predicate_guards_symbol_table(left, symbols, branch_is_true, ctx)?;
+        let past_left = narrow_predicate_guards_symbol_table(left, symbols, !branch_is_true, ctx);
+        let right_edge = narrow_predicate_guards_symbol_table(
+            right,
+            past_left.as_ref().unwrap_or(symbols),
+            branch_is_true,
+            ctx,
+        )?;
+        let mut subjects = Vec::new();
+        predicate_guard_subjects(condition, symbols, &mut subjects, ctx);
+        let mut joined = symbols.clone_with_reason(TypeCopyReason::ScopeOrContext);
+        let mut changed = false;
+        for subject in subjects {
+            let (Some(original), Some(from_left), Some(from_right)) =
+                (symbols.get(&subject), left_edge.get(&subject), right_edge.get(&subject))
+            else {
+                continue;
+            };
+            if from_left.ty == original.ty || from_right.ty == original.ty {
+                continue;
+            }
+            let ty = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
+                surge_ts_types::union_type(vec![from_left.ty.clone(), from_right.ty.clone()])
+            });
+            let info = SymbolInfo {
+                ty,
+                kind: original.kind,
+                function_signature: original.function_signature.clone(),
+            };
+            let declared = original.ty.clone();
+            joined.insert_narrowed(subject, info, declared);
+            changed = true;
+        }
+        return changed.then_some(joined);
+    }
 
     if let Some(narrowed) =
         narrow_this_predicate_symbol_table(condition, symbols, branch_is_true, ctx)
@@ -1329,6 +1375,36 @@ pub(crate) fn narrow_predicate_guards_symbol_table(
         subject_ty,
     );
     Some(narrowed_symbols)
+}
+
+/// The bare identifiers the predicate calls in `condition` guard, through `!`,
+/// `&&` and `||`.
+fn predicate_guard_subjects(
+    condition: &ParsedExpression,
+    symbols: &SymbolTable,
+    subjects: &mut Vec<String>,
+    ctx: &mut CheckerContext,
+) {
+    match condition {
+        ParsedExpression::Unary {
+            operator: ParsedUnaryOperator::Not,
+            operand,
+            ..
+        } => predicate_guard_subjects(operand, symbols, subjects, ctx),
+        ParsedExpression::Logical { left, right, .. } => {
+            predicate_guard_subjects(left, symbols, subjects, ctx);
+            predicate_guard_subjects(right, symbols, subjects, ctx);
+        }
+        _ => {
+            if let Some(guard) = parse_type_predicate_condition(condition, &mut |callee| {
+                predicate_callee_signature(callee, |name| symbols.get(name), symbols, ctx)
+            }) && guard.path.is_empty()
+                && !subjects.contains(&guard.subject)
+            {
+                subjects.push(guard.subject);
+            }
+        }
+    }
 }
 
 /// Applies every property-path type-predicate guard the condition proves. Walks
