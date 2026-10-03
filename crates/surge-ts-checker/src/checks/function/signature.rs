@@ -832,11 +832,17 @@ pub(crate) fn rest_source_validity(source: &Type) -> Option<bool> {
 }
 
 /// tsc's `getRestType`: `source` without the `omitted` properties, taken
-/// member by member from a union and with `undefined` dropped. A type surge
-/// cannot enumerate — a sentinel, a type parameter (tsc's `Omit<T, K>`) —
-/// stays as it is, and so does a non-object type.
+/// member by member from a union and with `undefined` dropped. Over a type
+/// variable it is `Omit<T, K>`, unmodelled where surge cannot build that. A
+/// sentinel stays as it is, and so does a non-object type.
 pub(crate) fn object_rest_type(source: &Type, omitted: &[String]) -> Type {
     match source {
+        _ if source.is_type_variable() => {
+            if omitted.is_empty() {
+                return source.clone();
+            }
+            surge_ts_types::type_variable::omit_variable(source, omitted).unwrap_or(Type::Unknown)
+        }
         Type::Reference(reference) => {
             let resolved = reference.resolve();
             if matches!(resolved, Type::Object(_) | Type::Union(_)) {

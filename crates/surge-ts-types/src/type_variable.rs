@@ -423,6 +423,34 @@ pub fn mapped_variable(
     )
 }
 
+/// tsc's `Omit<source, keys>` over a type variable `source`, as `getRestType`
+/// builds it: `Pick<source, Exclude<keyof source, keys>>`. `None` when it
+/// cannot be built.
+pub fn omit_variable(source: &Type, omitted: &[String]) -> Option<Type> {
+    let keyof = keyof_variable(source)?;
+    let omitted_keys = crate::union_type(omitted.iter().map(|key| Type::StringLiteral(key.clone())).collect());
+    let mut exclude = DeferredConditional {
+        check: keyof.clone(),
+        extends: omitted_keys.clone(),
+        true_type: Type::Never,
+        false_type: keyof.clone(),
+        distributive: true,
+        distribution_dependent: true,
+        has_infer: false,
+        distributive_constraint: None,
+    };
+    exclude.distributive_constraint =
+        distributive_conditional_at(&exclude, &key_constraint()).filter(|constraint| *constraint != Type::Never);
+    let keys = conditional_variable(exclude, format!("Exclude<{}, {}>", keyof.name(), omitted_keys.name()))?;
+    mapped_variable(
+        &keys,
+        source,
+        MappedModifiers { readonly: 0, optional: 0 },
+        Some(source),
+        format!("Omit<{}, {}>", source.name(), omitted_keys.name()),
+    )
+}
+
 /// The key parameter of a generic mapped type over `keys`.
 pub fn mapped_key_variable(keys: &Type, declaration: (Arc<str>, u32), name: &str) -> Option<Type> {
     let mut bases = variable_bases(keys).unwrap_or_default();
@@ -1292,6 +1320,90 @@ fn keys_of_with(ty: &Type, no_index_signatures: bool) -> Option<Type> {
         }
         _ => None,
     }
+}
+
+/// tsc's `getLowerBoundOfKeyType`: the keys a generic mapped type over `keys`
+/// is known to have (`resolveMappedTypeMembers`). `None` when surge cannot
+/// compute them.
+pub fn lower_bound_of_key_type(ty: &Type) -> Option<Type> {
+    let _depth = ConstraintDepth::enter()?;
+    match ty {
+        Type::TypeParameter(parameter) => match deferred_type(parameter) {
+            Some(DeferredType::Keyof(operand)) => {
+                let apparent = base_constraint_or_type(&operand);
+                if is_generic(&apparent) {
+                    return None;
+                }
+                keys_of(&apparent)
+            }
+            Some(DeferredType::Conditional(conditional)) if conditional.distributive => {
+                let check = lower_bound_of_key_type(&conditional.check)?;
+                if check == conditional.check {
+                    return Some(ty.clone());
+                }
+                distributive_conditional_at(&conditional, &check)
+            }
+            _ => Some(ty.clone()),
+        },
+        Type::Union(union) => {
+            let members: Option<Vec<Type>> = union.types().iter().map(lower_bound_of_key_type).collect();
+            Some(crate::union_type(members?))
+        }
+        _ => Some(ty.clone()),
+    }
+}
+
+/// `getConditionalTypeInstantiation` of a distributive conditional with its
+/// check type replaced by the non-generic `check`, distributed over its union
+/// members. `None` when a member's branch cannot be decided or rebuilt.
+fn distributive_conditional_at(conditional: &DeferredConditional, check: &Type) -> Option<Type> {
+    let Type::TypeParameter(check_parameter) = &conditional.check else {
+        return None;
+    };
+    if conditional.has_infer || mentions_type_variable(&conditional.extends) || mentions_type_variable(check) {
+        return None;
+    }
+    let members = match check {
+        Type::Union(union) => union.types().to_vec(),
+        Type::Never => return Some(Type::Never),
+        other => vec![other.clone()],
+    };
+    let mut results = Vec::with_capacity(members.len());
+    for member in members {
+        if member.is_unknown() || matches!(member, Type::Any) {
+            return None;
+        }
+        let branch = if crate::is_assignable_to(&member, &conditional.extends) {
+            &conditional.true_type
+        } else {
+            &conditional.false_type
+        };
+        let instantiated = substitute_variable(branch, check_parameter, &member);
+        results.push(resolve_instantiated_substitution(instantiated)?);
+    }
+    Some(crate::union_type(results))
+}
+
+/// An instantiated substitution type (`check & extends` in a true branch) is
+/// its base type once that is no longer a type variable and is assignable to
+/// the constraint.
+fn resolve_instantiated_substitution(ty: Type) -> Option<Type> {
+    let Type::Object(object) = &ty else {
+        return (!ty.is_unmodelled()).then_some(ty);
+    };
+    let Some(operands) = object.intersection_operands.as_deref() else {
+        return Some(ty);
+    };
+    let [base, constraints @ ..] = operands else {
+        return None;
+    };
+    if base.is_type_variable() || base.is_unmodelled() || constraints.iter().any(mentions_type_variable) {
+        return None;
+    }
+    constraints
+        .iter()
+        .all(|constraint| crate::is_assignable_to(base, constraint))
+        .then(|| base.clone())
 }
 
 impl TypeParameterType {

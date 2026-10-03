@@ -1395,6 +1395,30 @@ pub(crate) fn optional_chain_can_short_circuit(object_type: &Type) -> bool {
     }
 }
 
+/// Whether `resolveMappedTypeMembers` gives a generic mapped type over keys
+/// whose lower bound is `keys` a member readable as `name`: a property for a
+/// literal key, an index signature for `string`/`number`. A key still generic
+/// adds nothing. `None` when a key is unmodelled.
+fn mapped_key_admits(keys: &Type, name: &str) -> Option<bool> {
+    let members = match keys {
+        Type::Union(union) => union.types().to_vec(),
+        other => vec![other.clone()],
+    };
+    let mut admits = false;
+    for key in &members {
+        match key {
+            Type::StringLiteral(literal) => admits |= literal == name,
+            Type::NumberLiteral(_) => admits |= key.name() == name,
+            Type::String | Type::Any => admits = true,
+            Type::Number => admits |= surge_ts_types::is_numeric_key(name),
+            Type::Never | Type::Symbol => {}
+            _ if key.is_type_variable() => {}
+            _ => return None,
+        }
+    }
+    Some(admits)
+}
+
 /// A member of a type variable of the body being checked, read off its
 /// apparent type (`getApparentType`): the constraint, or `{}` without one. A
 /// constraint surge did not model whole answers only what it has.
@@ -1427,16 +1451,53 @@ fn type_variable_member(
             } else { member });
         }
     }
-    if matches!(surge_ts_types::type_variable::deferred_type(parameter),
-        Some(surge_ts_types::type_variable::DeferredType::Mapped { .. }
-            | surge_ts_types::type_variable::DeferredType::MappedConstant { .. }))
-        && !OBJECT_MEMBERS.contains(&property_name)
-    {
-        return InferredExpression::MissingProperty {
-            property_name: property_name.to_string(),
-            object_type: variable.clone(),
-            span: property_span,
+    let mapped_member = match surge_ts_types::type_variable::deferred_type(parameter) {
+        Some(surge_ts_types::type_variable::DeferredType::Mapped { keys, object, modifiers, .. }) => {
+            Some((keys, Some(object), None, modifiers))
+        }
+        Some(surge_ts_types::type_variable::DeferredType::MappedConstant { keys, template, modifiers }) => {
+            Some((keys, None, Some(template), modifiers))
+        }
+        _ => None,
+    };
+    if let Some((keys, object, template, modifiers)) = mapped_member {
+        let Some(lower_bound) = surge_ts_types::type_variable::lower_bound_of_key_type(&keys) else {
+            return InferredExpression::Unknown;
         };
+        match mapped_key_admits(&lower_bound, property_name) {
+            None => return InferredExpression::Unknown,
+            Some(true) => {
+                let member = match (object, template) {
+                    (_, Some(template)) => template,
+                    (Some(object), None) => {
+                        let key = Type::StringLiteral(property_name.to_string());
+                        match surge_ts_types::type_variable::indexed_access_variable(&object, &key) {
+                            Some(access) => access,
+                            None => match surge_ts_types::type_variable::base_constraint_or_type(&object)
+                                .get_property_access_type(property_name)
+                            {
+                                Some(member) => member,
+                                None => return InferredExpression::Unknown,
+                            },
+                        }
+                    }
+                    (None, None) => return InferredExpression::Unknown,
+                };
+                return InferredExpression::Known(if modifiers.optional > 0 && surge_ts_types::strict_null_checks() {
+                    surge_ts_types::union_type(vec![member, Type::Undefined])
+                } else {
+                    member
+                });
+            }
+            Some(false) if !OBJECT_MEMBERS.contains(&property_name) => {
+                return InferredExpression::MissingProperty {
+                    property_name: property_name.to_string(),
+                    object_type: variable.clone(),
+                    span: property_span,
+                };
+            }
+            Some(false) => {}
+        }
     }
     let Some(constraint) = surge_ts_types::type_variable::active_constraint(parameter) else {
         return InferredExpression::Unknown;
