@@ -328,11 +328,15 @@ fn expand_alias_conditions(
 /// type, so this one type-dependent case is decided here, where the scope is in
 /// hand — without it the fall-through of `if (!args.file) { …; process.exit(1); }`
 /// keeps the unnarrowed `string | undefined`.
-pub(crate) fn body_ends_in_never_call(body: &[ParsedFunctionBodyStatement], scopes: &ScopeStack) -> bool {
+pub(crate) fn body_ends_in_never_call(
+    body: &[ParsedFunctionBodyStatement],
+    scopes: &ScopeStack,
+    ctx: &CheckerContext,
+) -> bool {
     match body.last() {
-        Some(ParsedFunctionBodyStatement::Block(block)) => body_ends_in_never_call(block, scopes),
+        Some(ParsedFunctionBodyStatement::Block(block)) => body_ends_in_never_call(block, scopes, ctx),
         Some(ParsedFunctionBodyStatement::Expression(expression)) => {
-            call_returns_never(expression, scopes)
+            call_returns_never(expression, scopes, ctx)
         }
         _ => false,
     }
@@ -341,44 +345,49 @@ pub(crate) fn body_ends_in_never_call(body: &[ParsedFunctionBodyStatement], scop
 /// The call statements of `body` (nested blocks included, nested functions
 /// not) whose callee is declared to return `never`, by
 /// [`crate::flow::call_statement_key`].
-pub(crate) fn never_call_statements(body: &[ParsedFunctionBodyStatement], scopes: &ScopeStack) -> Vec<(usize, usize)> {
+pub(crate) fn never_call_statements(
+    body: &[ParsedFunctionBodyStatement],
+    scopes: &ScopeStack,
+    ctx: &CheckerContext,
+) -> Vec<(usize, usize)> {
     let mut keys = Vec::new();
-    collect_never_call_statements(body, scopes, &mut keys);
+    collect_never_call_statements(body, scopes, ctx, &mut keys);
     keys
 }
 
 fn collect_never_call_statements(
     body: &[ParsedFunctionBodyStatement],
     scopes: &ScopeStack,
+    ctx: &CheckerContext,
     keys: &mut Vec<(usize, usize)>,
 ) {
     for statement in body {
         match statement {
             ParsedFunctionBodyStatement::Expression(expression) => {
-                if call_returns_never(expression, scopes)
+                if call_returns_never(expression, scopes, ctx)
                     && let Some(key) = crate::flow::call_statement_key(expression)
                 {
                     keys.push(key);
                 }
             }
-            ParsedFunctionBodyStatement::Block(statements) => collect_never_call_statements(statements, scopes, keys),
+            ParsedFunctionBodyStatement::Block(statements) => collect_never_call_statements(statements, scopes, ctx, keys),
             ParsedFunctionBodyStatement::If(statement) => {
-                collect_never_call_statements(&statement.then_body, scopes, keys);
-                collect_never_call_statements(&statement.else_body, scopes, keys);
+                collect_never_call_statements(&statement.then_body, scopes, ctx, keys);
+                collect_never_call_statements(&statement.else_body, scopes, ctx, keys);
             }
-            ParsedFunctionBodyStatement::While(statement) => collect_never_call_statements(&statement.body, scopes, keys),
-            ParsedFunctionBodyStatement::ForOf(statement) => collect_never_call_statements(&statement.body, scopes, keys),
+            ParsedFunctionBodyStatement::While(statement) => collect_never_call_statements(&statement.body, scopes, ctx, keys),
+            ParsedFunctionBodyStatement::ForOf(statement) => collect_never_call_statements(&statement.body, scopes, ctx, keys),
             ParsedFunctionBodyStatement::Switch(statement) => {
                 for case in &statement.cases {
-                    collect_never_call_statements(&case.consequent, scopes, keys);
+                    collect_never_call_statements(&case.consequent, scopes, ctx, keys);
                 }
             }
             ParsedFunctionBodyStatement::Try(statement) => {
-                collect_never_call_statements(&statement.block, scopes, keys);
+                collect_never_call_statements(&statement.block, scopes, ctx, keys);
                 if let Some(handler) = &statement.handler {
-                    collect_never_call_statements(&handler.body, scopes, keys);
+                    collect_never_call_statements(&handler.body, scopes, ctx, keys);
                 }
-                collect_never_call_statements(&statement.finalizer, scopes, keys);
+                collect_never_call_statements(&statement.finalizer, scopes, ctx, keys);
             }
             _ => {}
         }
@@ -386,7 +395,7 @@ fn collect_never_call_statements(
 }
 
 /// Whether a call expression's callee is declared to return `never`.
-pub(super) fn call_returns_never(expression: &ParsedExpression, scopes: &ScopeStack) -> bool {
+pub(super) fn call_returns_never(expression: &ParsedExpression, scopes: &ScopeStack, ctx: &CheckerContext) -> bool {
     let returns_never = |ty: &Type| {
         matches!(ty, Type::Function(function) if matches!(function.return_type(), Type::Never))
     };
@@ -410,6 +419,11 @@ pub(super) fn call_returns_never(expression: &ParsedExpression, scopes: &ScopeSt
                     .get_property_access_type(property_name)
                     .is_some_and(|ty| returns_never(&ty))
             })
+                // A namespace's function member is bound under its qualified
+                // name, outside the body's scopes.
+                || scopes.resolve(name).is_none()
+                    && crate::infer::expression::qualified_namespace_member(&format!("{name}.{property_name}"), &ctx.symbols, ctx)
+                        .is_some_and(|symbol| returns_never(&symbol.ty))
         }
         _ => false,
     }

@@ -99,14 +99,14 @@ pub(crate) fn check_function_if_statement(
     // either keeps the old return-based behavior and adds early-`continue` guards.
     let then_diverts_control = then_guarantees_value_return
         || then_flow.guarantees_exit
-        || body_ends_in_never_call(&if_statement.then_body, scopes);
+        || body_ends_in_never_call(&if_statement.then_body, scopes, ctx);
     let has_else_body = !if_statement.else_body.is_empty();
 
     let else_flow_diverts = has_else_body && {
         let else_flow = analyze_function_body_flow(&if_statement.else_body);
         else_flow.guarantees_value_return
             || else_flow.guarantees_exit
-            || body_ends_in_never_call(&if_statement.else_body, scopes)
+            || body_ends_in_never_call(&if_statement.else_body, scopes, ctx)
     };
     // tsc's post-`if` flow node joins the branches that can complete. When only
     // one can, the code after the `if` sees exactly what that branch left: its
@@ -1769,7 +1769,7 @@ pub(crate) fn check_function_try_statement(
             let flow = analyze_function_body_flow(&handler.body);
             flow.guarantees_value_return
                 || flow.guarantees_exit
-                || body_ends_in_never_call(&handler.body, scopes)
+                || body_ends_in_never_call(&handler.body, scopes, ctx)
         });
         let mut joinable_assignments = Vec::new();
         if handler_diverts && !try_guarantees_value_return {
@@ -1813,7 +1813,7 @@ pub(crate) fn check_function_try_statement(
             let catch_flow = analyze_function_body_flow(&handler_clause.body);
             let catch_exits = catch_flow.guarantees_value_return
                 || catch_flow.guarantees_exit
-                || body_ends_in_never_call(&handler_clause.body, scopes);
+                || body_ends_in_never_call(&handler_clause.body, scopes, ctx);
             // The handler can be entered from any point in the block.
             let before_catch = branch_assignment_types(&try_block_assigned, scopes);
             widen_assigned_bindings(&[&try_block_for_widening], scopes);
@@ -1884,7 +1884,7 @@ pub(crate) fn check_function_try_statement(
             let flow = analyze_function_body_flow(&handler.body);
             flow.guarantees_value_return
                 || flow.guarantees_exit
-                || body_ends_in_never_call(&handler.body, scopes)
+                || body_ends_in_never_call(&handler.body, scopes, ctx)
         });
         let mut joinable_assignments = Vec::new();
         if handler_diverts

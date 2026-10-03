@@ -542,7 +542,7 @@ pub(crate) fn check_module_if_statement(
         let flow = crate::flow::analyze_function_body_flow(body);
         flow.guarantees_value_return
             || flow.guarantees_exit
-            || crate::checks::function::body_ends_in_never_call(body, &scopes)
+            || crate::checks::function::body_ends_in_never_call(body, &scopes, ctx)
     };
     let then_diverts = diverts(&if_statement.then_body);
     let else_diverts = !if_statement.else_body.is_empty() && diverts(&if_statement.else_body);
