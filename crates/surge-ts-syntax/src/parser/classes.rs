@@ -131,9 +131,21 @@ fn parse_class_body(
             .as_ref()
             .filter(|super_class| super::types::flatten_heritage_expression(super_class).is_none())
             .map(|super_class| Box::new(parse_expression(super_class).0)),
+        // oxc folds every `implements` clause into one list; tsc's
+        // `getImplementsTypeNodes` reads the first clause only (a second one
+        // is TS1175).
         implements: class
             .implements
             .iter()
+            .enumerate()
+            .take_while(|(index, implemented)| {
+                *index == 0 || {
+                    let previous = &class.implements[index - 1];
+                    let gap = super::spans::source_text_of(oxc_span::Span::new(previous.span.end, implemented.span.start));
+                    !gap.split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '$').any(|word| word == "implements")
+                }
+            })
+            .map(|(_, implemented)| implemented)
             .filter_map(|implemented| {
                 let (name, span) = super::types::flatten_type_name(&implemented.expression)?;
                 Some(ParsedNamedType {
