@@ -2070,7 +2070,10 @@ pub(crate) fn collect_namespace_member_value_symbols(
                                     ),
                                 ),
                                 crate::checks::function::mark_overloaded(
-                                    existing.function_signature.clone(),
+                                    crate::checks::function::attach_overload_alternative(
+                                        existing.function_signature.clone(),
+                                        Some(&function_signature),
+                                    ),
                                 ),
                             )
                         }
