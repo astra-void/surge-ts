@@ -382,6 +382,12 @@ pub(crate) fn collect_exports_from_statement(
                     } else {
                         let mut signature_symbols =
                             exportable_values.clone_with_reason(TypeCopyReason::ModuleExport);
+                        // Only the export's type is wanted here, as for a named
+                        // function's signature (`analyze_module`): a local type
+                        // the signature names resolves under its preliminary
+                        // scope, which holds no imports, and the check phase
+                        // reports the signature with them bound.
+                        let checkpoint = ctx.diagnostics().len();
                         let mut function_type =
                             check_function::collect_function_declaration_signature(
                                 function,
@@ -389,6 +395,7 @@ pub(crate) fn collect_exports_from_statement(
                                 ctx,
                                 false,
                             );
+                        ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
                         if let Some(value_type) =
                             promise_value_type(&function.return_type, resolution_scope, ctx)
                         {
