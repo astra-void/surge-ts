@@ -203,6 +203,29 @@ fn unique_symbol_declaration(identifier: &oxc_ast::ast::BindingIdentifier<'_>) -
     )))
 }
 
+thread_local! {
+    static CIRCULAR_ANNOTATIONS: std::cell::RefCell<std::rc::Rc<Vec<u32>>> = Default::default();
+}
+
+/// Installs, for the duration of `f`, where the variables whose annotations
+/// are circular through `typeof` start (TS2502): tsc types each `errorType`.
+pub(crate) fn with_circular_annotations<R>(starts: std::rc::Rc<Vec<u32>>, f: impl FnOnce() -> R) -> R {
+    struct Restore(std::rc::Rc<Vec<u32>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = std::mem::take(&mut self.0);
+            CIRCULAR_ANNOTATIONS.with(|slot| *slot.borrow_mut() = previous);
+        }
+    }
+    let previous = CIRCULAR_ANNOTATIONS.with(|slot| std::mem::replace(&mut *slot.borrow_mut(), starts));
+    let _restore = Restore(previous);
+    f()
+}
+
+fn is_circular_annotation(name_start: u32) -> bool {
+    CIRCULAR_ANNOTATIONS.with(|slot| slot.borrow().binary_search(&name_start).is_ok())
+}
+
 fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<ParsedStatement> {
     let list = std::sync::Arc::new(declaration_list_shape(declaration));
     let kind = match declaration.kind {
@@ -227,6 +250,11 @@ fn parse_variable_declaration(declaration: &VariableDeclaration<'_>) -> Vec<Pars
                     ) =>
                 {
                     Some(unique_symbol_declaration(identifier))
+                }
+                (BindingPattern::BindingIdentifier(identifier), Some(_))
+                    if is_circular_annotation(identifier.span.start) =>
+                {
+                    Some(crate::ParsedType::ErrorType)
                 }
                 (_, annotation) => {
                     annotation.and_then(|annotation| parse_type_annotation(annotation))

@@ -1751,3 +1751,32 @@ mod tests {
         );
     }
 }
+
+/// The references an optional chain reads through, outermost first: tsc's
+/// `optionalChainContainsReference` walks `expression` up the chain while the
+/// node is part of it.
+pub(crate) fn optional_chain_contained_references(expression: &ParsedExpression) -> Vec<&ParsedExpression> {
+    fn in_chain(expression: &ParsedExpression) -> bool {
+        match expression {
+            ParsedExpression::OptionalPropertyAccess { .. } | ParsedExpression::OptionalIndexAccess { .. } => true,
+            ParsedExpression::PropertyAccess { object, .. } | ParsedExpression::ElementAccess { object, .. } => {
+                in_chain(object)
+            }
+            _ => false,
+        }
+    }
+    let mut contained = Vec::new();
+    let mut current = expression;
+    while in_chain(current) {
+        let (ParsedExpression::OptionalPropertyAccess { object, .. }
+        | ParsedExpression::OptionalIndexAccess { object, .. }
+        | ParsedExpression::PropertyAccess { object, .. }
+        | ParsedExpression::ElementAccess { object, .. }) = current
+        else {
+            break;
+        };
+        contained.push(object.as_ref());
+        current = object;
+    }
+    contained
+}

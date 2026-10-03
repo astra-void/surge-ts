@@ -57,57 +57,7 @@ pub(crate) fn infer_index_access(
         Type::Unknown | Type::GenuineUnknown => InferredExpression::Unknown,
         // Lowered to its element array above.
         Type::OpenTuple(_) => InferredExpression::Unknown,
-        Type::Union(union_type) => {
-            let mut result_types = vec![];
-            for ty in union_type.types() {
-                if matches!(ty, Type::Undefined | Type::Null) {
-                    result_types.push(Type::Undefined);
-                    continue;
-                }
-                match ty {
-                    Type::Tuple(elements) => {
-                        let res =
-                            infer_tuple_index_access(elements, index, index_span, symbols, ctx);
-                        if let InferredExpression::Known(ty) = res {
-                            result_types.push(ty);
-                        } else {
-                            return InferredExpression::Unknown;
-                        }
-                    }
-                    Type::Array(element_type) => {
-                        let element_type = element_type.as_ref();
-                        if element_type.is_unknown() {
-                            return InferredExpression::Unknown;
-                        }
-
-                        let index_type = match infer_expression(index, symbols, ctx) {
-                            InferredExpression::Known(ty) => ty,
-                            _ => return InferredExpression::Unknown,
-                        };
-
-                        if !surge_ts_types::is_assignable_to(&index_type, &Type::Number) {
-                            return InferredExpression::Unknown;
-                        }
-                        result_types.push(unchecked_index_read(element_type.clone(), ctx));
-                    }
-                    // Same numeric index signature `String` declares, per
-                    // member: `('all' | 'active')[0]` reads a `string` from
-                    // either side.
-                    Type::String | Type::StringLiteral(_) => {
-                        let index_type = match infer_expression(index, symbols, ctx) {
-                            InferredExpression::Known(ty) => ty,
-                            _ => return InferredExpression::Unknown,
-                        };
-                        if !is_assignable_to(&index_type, &Type::Number) {
-                            return InferredExpression::Unknown;
-                        }
-                        result_types.push(unchecked_index_read(Type::String, ctx));
-                    }
-                    _ => return InferredExpression::Unknown,
-                }
-            }
-            InferredExpression::Known(surge_ts_types::union_type(result_types))
-        }
+        Type::Union(union_type) => infer_union_index_access(union_type.types(), index, index_span, symbols, ctx),
         Type::Tuple(elements) => {
             infer_tuple_index_access(elements, index, index_span, symbols, ctx)
         }
@@ -1079,6 +1029,65 @@ fn no_lib_array_member(object_type: &Type, ctx: &CheckerContext) -> bool {
 /// Mirrors tuple/array indexing without the `| undefined` that optional access
 /// adds, so a destructured `const [, setX] = useState()` reads the exact element
 /// type (the setter) rather than `setter | undefined`.
+/// An element read off each member of a union receiver, joined.
+fn infer_union_index_access(
+    members: &[Type],
+    index: &ParsedExpression,
+    index_span: &Option<TextSpan>,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> InferredExpression {
+    let mut result_types = vec![];
+    for ty in members {
+        if matches!(ty, Type::Undefined | Type::Null) {
+            result_types.push(Type::Undefined);
+            continue;
+        }
+        match ty {
+            Type::Tuple(elements) => {
+                let res =
+                    infer_tuple_index_access(elements, index, index_span, symbols, ctx);
+                if let InferredExpression::Known(ty) = res {
+                    result_types.push(ty);
+                } else {
+                    return InferredExpression::Unknown;
+                }
+            }
+            Type::Array(element_type) => {
+                let element_type = element_type.as_ref();
+                if element_type.is_unknown() {
+                    return InferredExpression::Unknown;
+                }
+
+                let index_type = match infer_expression(index, symbols, ctx) {
+                    InferredExpression::Known(ty) => ty,
+                    _ => return InferredExpression::Unknown,
+                };
+
+                if !surge_ts_types::is_assignable_to(&index_type, &Type::Number) {
+                    return InferredExpression::Unknown;
+                }
+                result_types.push(unchecked_index_read(element_type.clone(), ctx));
+            }
+            // Same numeric index signature `String` declares, per
+            // member: `('all' | 'active')[0]` reads a `string` from
+            // either side.
+            Type::String | Type::StringLiteral(_) => {
+                let index_type = match infer_expression(index, symbols, ctx) {
+                    InferredExpression::Known(ty) => ty,
+                    _ => return InferredExpression::Unknown,
+                };
+                if !is_assignable_to(&index_type, &Type::Number) {
+                    return InferredExpression::Unknown;
+                }
+                result_types.push(unchecked_index_read(Type::String, ctx));
+            }
+            _ => return InferredExpression::Unknown,
+        }
+    }
+    InferredExpression::Known(surge_ts_types::union_type(result_types))
+}
+
 pub(crate) fn infer_element_access(
     object: &ParsedExpression,
     _object_span: &Option<TextSpan>,
@@ -1127,6 +1136,7 @@ pub(crate) fn infer_element_access(
             infer_object_element_read(&object_type, index, symbols, ctx)
         }
         Type::TypeParameter(_) => deferred_element_read(&object_type, index, symbols, ctx),
+        Type::Union(union_type) => infer_union_index_access(union_type.types(), index, index_span, symbols, ctx),
         _ => InferredExpression::Unknown,
     }
 }

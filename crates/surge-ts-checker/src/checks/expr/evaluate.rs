@@ -1344,6 +1344,21 @@ pub(crate) fn logical_right_operand_symbols(
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Option<SymbolTable> {
+    // `a && b && c` reaches `c` through `a` and then `b` (`bindLogicalLikeExpression`),
+    // so each operand narrows what the one before it left: `isU(x) && x.kind
+    // === "a" && x.a` discriminates the union the predicate proved.
+    if let ParsedExpression::Logical {
+        left: first,
+        operator: inner,
+        right: second,
+        ..
+    } = left
+        && inner == operator
+    {
+        let after_first = logical_right_operand_symbols(first, operator, symbols, ctx);
+        let base = after_first.as_ref().unwrap_or(symbols);
+        return logical_right_operand_symbols(second, operator, base, ctx).or(after_first);
+    }
     // The right operand runs after the left's assignments, and is narrowed by
     // what they assigned: `(next = it.next()) && !next.done`.
     let after_assignments = symbols_after_assignments(left, symbols, ctx);

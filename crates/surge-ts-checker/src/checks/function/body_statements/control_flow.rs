@@ -446,6 +446,14 @@ pub(crate) fn check_function_while_statement(
     // (the assignments it made) and, unless the body always runs, the state
     // before the first iteration.
     let assigned = loop_join_names(&body);
+    // With nothing in the body breaking out, the loop is left only by its
+    // condition failing, so the code after it sees the condition's false edge.
+    let exits_by_condition_only = !crate::flow::body_breaks_enclosing_loop(&body);
+    // Otherwise each `if (guard) break;` is an edge out too; what every edge
+    // proves defined is defined after the loop.
+    let exit_defined = (!exits_by_condition_only && !runs_at_least_once && flow_state.tracked_local_count() > 0)
+        .then(|| loop_exit_defined_names(&condition, &body, ctx))
+        .flatten();
     widen_loop_assigned_bindings(&body, return_type, scopes, flow_state, ctx);
     if runs_at_least_once {
         scopes.push_child();
@@ -463,6 +471,9 @@ pub(crate) fn check_function_while_statement(
             flow_state,
             ctx,
         );
+        if exits_by_condition_only {
+            narrow_by_loop_exit(&condition, scopes, flow_state, ctx);
+        }
         return;
     }
 
@@ -517,6 +528,64 @@ pub(crate) fn check_function_while_statement(
     let body_types = branch_assignment_types(&assigned, scopes);
     scopes.pop_child();
     join_branch_pair(&entry_types, &body_types, scopes);
+    if exits_by_condition_only {
+        narrow_by_loop_exit(&condition, scopes, flow_state, ctx);
+    }
+    for name in exit_defined.into_iter().flatten() {
+        flow_state.mark_assigned(&name);
+    }
+}
+
+/// The names defined on every edge out of a `while` whose body breaks only
+/// through top-level `if (guard) break;`: the condition's false edge, and each
+/// break, taken where both the loop condition and its guard held. `None` for
+/// any other break.
+fn loop_exit_defined_names(
+    condition: &ParsedExpression,
+    body: &[ParsedFunctionBodyStatement],
+    ctx: &CheckerContext,
+) -> Option<Vec<String>> {
+    let predicate = |callee: &str| crate::flow::predicate_parameter(callee, ctx);
+    let names = |expression: &ParsedExpression, when: bool| -> Vec<String> {
+        crate::flow::condition_defined_names(expression, when, &predicate)
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    };
+    let mut defined = names(condition, false);
+    let held = names(condition, true);
+    for statement in body {
+        match statement {
+            ParsedFunctionBodyStatement::If(if_statement)
+                if matches!(if_statement.then_body.as_slice(), [ParsedFunctionBodyStatement::Break])
+                    && !crate::flow::body_breaks_enclosing_loop(&if_statement.else_body) =>
+            {
+                let at_break = names(&if_statement.condition, true);
+                defined.retain(|name| held.contains(name) || at_break.contains(name));
+            }
+            other if crate::flow::body_breaks_enclosing_loop(std::slice::from_ref(other)) => return None,
+            _ => {}
+        }
+    }
+    Some(defined)
+}
+
+/// The loop's exit is its condition's false edge (`bindWhileStatement`'s
+/// `postLoopLabel`): narrowed by it, and definitely assigned by it.
+fn narrow_by_loop_exit(
+    condition: &ParsedExpression,
+    scopes: &mut ScopeStack,
+    flow_state: &mut FunctionFlowState,
+    ctx: &mut CheckerContext,
+) {
+    let tested = condition
+        .contains_assignment()
+        .then(|| condition.with_assignments_as_reads());
+    let tested = tested.as_ref().unwrap_or(condition);
+    narrow_discriminant_in_scope(tested, scopes, false, ctx);
+    if flow_state.tracked_local_count() > 0 {
+        crate::flow::mark_condition_defined(tested, false, flow_state, ctx);
+    }
 }
 
 fn check_while_condition(
@@ -803,6 +872,13 @@ pub(crate) fn check_function_for_of_statement(
     // the key it just produced is not a possibly-undefined access.
     if for_of_statement.keys_only {
         narrow_reference_non_null_in_scope(&for_of_statement.iterable, scopes);
+        // ...and on what an optional chain there reads through
+        // (`optionalChainContainsReference`): `obj.main` in `obj.main?.childs`.
+        for contained in super::super::narrowing::optional_chain_contained_references(
+            &for_of_statement.iterable,
+        ) {
+            narrow_reference_non_null_in_scope(contained, scopes);
+        }
     }
     let loop_assigned_name = match (
         &for_of_statement.binding_name,
@@ -823,6 +899,7 @@ pub(crate) fn check_function_for_of_statement(
     {
         flow_state.mark_assigned(name);
     }
+    let head_type = element_type.clone();
     insert_binding_name(&for_of_statement.binding_name, element_type, scopes);
     // A `var` head is function-scoped: it stays visible after the loop.
     if for_of_statement.binding_kind == surge_ts_syntax::ParsedForBindingKind::Var
@@ -857,6 +934,21 @@ pub(crate) fn check_function_for_of_statement(
     // head types land on the declaring frames, outside this child.
     widen_loop_assigned_bindings(&for_of_statement.body, return_type, scopes, flow_state, ctx);
     let entry_types = branch_assignment_types(&assigned, scopes);
+    // The head is assigned at the top of every iteration
+    // (`bindForInOrForOfStatement`), after the back edge joins: whatever the
+    // body writes to it, the body starts from the element.
+    if let surge_ts_syntax::ParsedBindingName::Identifier { name, .. } = &for_of_statement.binding_name
+        && let Some(symbol) = scopes.resolve(name).cloned()
+        && symbol.ty != head_type
+    {
+        scopes.insert_current(
+            name.as_str(),
+            crate::symbols::SymbolInfo {
+                ty: head_type,
+                ..symbol
+            },
+        );
+    }
     let pending_mutations = prime_loop_mutations(&for_of_statement.body, scopes, ctx);
     if flow_active {
         flow_state.begin_branch_capture();
@@ -1136,22 +1228,48 @@ pub(crate) fn iterable_reference_element_type(
     }
 }
 
-/// TS7029 under `noFallthroughCasesInSwitch`: a non-empty clause whose end is
-/// reachable falls through into the next clause. The last clause cannot fall
-/// through, and empty clauses (stacked `case` labels) are allowed to.
-pub(super) fn emit_switch_fallthrough_diagnostics(
+/// The clauses TS7029 may report: every non-empty clause but the last (empty
+/// clauses, stacked `case` labels, are allowed to fall through), with the call
+/// each ends with.
+fn fallthrough_candidates(
     switch_statement: &ParsedSwitchStatement,
+) -> Vec<(Option<surge_ts_syntax::TextSpan>, Vec<ParsedFunctionBodyStatement>, Option<(usize, usize)>)> {
+    let case_count = switch_statement.cases.len();
+    switch_statement
+        .cases
+        .iter()
+        .enumerate()
+        .filter(|(index, case)| index + 1 != case_count && !case.consequent.is_empty())
+        .map(|(_, case)| {
+            (
+                case.span,
+                case.consequent.clone(),
+                crate::checks::expr::tail_call_key(&case.consequent),
+            )
+        })
+        .collect()
+}
+
+/// TS7029 under `noFallthroughCasesInSwitch`: a clause whose end is reachable
+/// (`isReachableFlowNode` of its fallthrough flow) falls through into the next
+/// one. Decided once the clauses are checked, so a nested `switch` known to be
+/// exhaustive and a call that returns `never` end the flow as they do for tsc.
+fn emit_switch_fallthrough_diagnostics(
+    candidates: Vec<(Option<surge_ts_syntax::TextSpan>, Vec<ParsedFunctionBodyStatement>, Option<(usize, usize)>)>,
     ctx: &mut CheckerContext,
 ) {
-    let case_count = switch_statement.cases.len();
-    for (index, case) in switch_statement.cases.iter().enumerate() {
-        let is_last = index + 1 == case_count;
-        if is_last || case.consequent.is_empty() {
+    for (span, consequent, tail_call) in candidates {
+        if tail_call.is_some_and(|key| ctx.never_returning_calls.contains(&key)) {
             continue;
         }
-        if !analyze_function_body_flow(&case.consequent).guarantees_exit {
+        let flow = crate::flow::with_non_exhaustive_switches(
+            &ctx.non_exhaustive_switches,
+            &ctx.exhaustive_switches,
+            || analyze_function_body_flow(&consequent),
+        );
+        if !flow.guarantees_exit {
             let diagnostic = Diagnostic::ts7029(ctx.file_name.clone());
-            let diagnostic = match case.span {
+            let diagnostic = match span {
                 Some(span) => diagnostic.with_span(convert_span(span)),
                 None => diagnostic,
             };
@@ -1243,9 +1361,10 @@ pub(crate) fn check_function_switch_statement(
             case.test = Some(ParsedExpression::StringLiteral(text));
         }
     }
-    if ctx.options.no_fallthrough_cases_in_switch {
-        emit_switch_fallthrough_diagnostics(&switch_statement, ctx);
-    }
+    let fallthrough_candidates = ctx
+        .options
+        .no_fallthrough_cases_in_switch
+        .then(|| fallthrough_candidates(&switch_statement));
 
     let flow_active = flow_state.tracked_local_count() > 0;
     let condition_blocked = if flow_active {
@@ -1494,6 +1613,9 @@ pub(crate) fn check_function_switch_statement(
             ctx,
         );
         narrow_switch_case(condition, false, scopes, flow_state, ctx);
+    }
+    if let Some(candidates) = fallthrough_candidates {
+        emit_switch_fallthrough_diagnostics(candidates, ctx);
     }
 }
 

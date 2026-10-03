@@ -340,7 +340,7 @@ struct FlowBranchCapture {
 #[derive(Debug, Default)]
 struct FlowScope {
     locals: HashMap<Arc<str>, AssignmentState>,
-    future_block_scoped_declarations: HashMap<Arc<str>, usize>,
+    future_block_scoped_declarations: HashMap<Arc<str>, FutureDeclaration>,
     tracked_count: usize,
 }
 
@@ -669,7 +669,7 @@ impl FunctionFlowState {
 
     pub(crate) fn push_scope(
         &mut self,
-        future_block_scoped_declarations: HashMap<Arc<str>, usize>,
+        future_block_scoped_declarations: HashMap<Arc<str>, FutureDeclaration>,
     ) {
         if !self.enabled {
             return;
@@ -863,14 +863,14 @@ impl FunctionFlowState {
             return FlowReadOutcome::Declared(state);
         }
 
-        if current_scope
+        if let Some(declaration) = current_scope
             .future_block_scoped_declarations
             .get(name)
-            .is_some_and(|declaration_index| statement_index < *declaration_index)
+            .filter(|declaration| statement_index < declaration.index)
         {
             record_flow_read_lookup_count(lookup_steps);
             return FlowReadOutcome::UseBeforeDeclaration {
-                unassigned: true,
+                unassigned: declaration.unassigned,
                 circular_at: None,
             };
         }
@@ -882,14 +882,14 @@ impl FunctionFlowState {
                 return FlowReadOutcome::Declared(state);
             }
             if self.shared_statement_index
-                && scope
+                && let Some(declaration) = scope
                     .future_block_scoped_declarations
                     .get(name)
-                    .is_some_and(|declaration_index| statement_index < *declaration_index)
+                    .filter(|declaration| statement_index < declaration.index)
             {
                 record_flow_read_lookup_count(lookup_steps);
                 return FlowReadOutcome::UseBeforeDeclaration {
-                    unassigned: true,
+                    unassigned: declaration.unassigned,
                     circular_at: None,
                 };
             }

@@ -275,14 +275,16 @@ fn var_annotation<'a>(statements: &'a [ParsedStatement], name: &str) -> Option<&
     })
 }
 
-fn future_module_declarations(statements: &[ParsedStatement]) -> HashMap<Arc<str>, usize> {
+fn future_module_declarations(statements: &[ParsedStatement]) -> HashMap<Arc<str>, super::FutureDeclaration> {
     let mut declarations = HashMap::new();
     for (index, statement) in statements.iter().enumerate() {
         if let ParsedStatement::VariableDeclaration(variable) = unwrap_export(statement)
             && matches!(variable.kind, ParsedVariableKind::Let | ParsedVariableKind::Const)
             && !variable.is_declare
         {
-            declarations.entry(variable.name.as_str().into()).or_insert(index);
+            declarations
+                .entry(variable.name.as_str().into())
+                .or_insert(super::FutureDeclaration::of(index, variable));
         }
     }
     declarations

@@ -55,7 +55,9 @@ impl UnreachableCollector<'_> {
         };
         flow.bind_statements(statements, true);
         for run in flow.reported {
-            self.reported.push(run.first);
+            // Every statement of the run is reported (`reportedUnreachableNodes`),
+            // so the checker descends into none of them.
+            self.reported.extend(run.statements);
             self.out.push(ParsedGrammarDiagnostic {
                 kind: Kind::Ts(7027),
                 span: TextSpan {
@@ -142,6 +144,7 @@ impl<'a> Visit<'a> for UnreachableCollector<'_> {
 struct ReportedRun {
     first: Span,
     last_end: u32,
+    statements: Vec<Span>,
 }
 
 /// The target a `break`/`continue` can name: a loop, a `switch`, or a label
@@ -200,6 +203,7 @@ impl Flow<'_> {
             self.reported.push(ReportedRun {
                 first: statement.span(),
                 last_end: statements[last].span().end,
+                statements: statements[index..=last].iter().map(GetSpan::span).collect(),
             });
             index = last + 1;
         }

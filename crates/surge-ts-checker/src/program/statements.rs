@@ -494,6 +494,36 @@ pub(crate) fn narrow_module_assertion_call(
     }
 }
 
+/// What a module-scope IIFE's body writes holds once the call returns (see
+/// [`check_function::apply_immediately_invoked_assignments`]); each binding it
+/// changed is carried back to the module's symbols.
+fn apply_module_immediately_invoked_writes(
+    writes: check_function::ImmediatelyInvokedAssignments,
+    ctx: &mut CheckerContext,
+) {
+    let names = writes.target_names();
+    let mut scopes = crate::symbols::ScopeStack::from_root(
+        ctx.symbols.clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext),
+    );
+    let mut flow_state = crate::flow::FunctionFlowState::new(false);
+    check_function::apply_immediately_invoked_assignments(writes, &mut scopes, &mut flow_state, ctx);
+    for name in names {
+        let (Some(updated), Some(original)) = (scopes.resolve(&name), ctx.symbols.get(&name)) else {
+            continue;
+        };
+        if updated.ty == original.ty || matches!(original.kind, crate::symbols::SymbolKind::Const) {
+            continue;
+        }
+        let updated = updated.clone();
+        let declared = ctx
+            .symbols
+            .declared_type(&name)
+            .cloned()
+            .unwrap_or_else(|| original.ty.clone());
+        let _ = ctx.symbols.insert_narrowed(name, updated, declared);
+    }
+}
+
 /// A module-scope `if`: each branch is checked under its own narrowing, and
 /// when one branch cannot fall through (`if (isCancel(value)) process.exit(0)`)
 /// the statements after it see the other branch's narrowing, exactly as a
@@ -901,8 +931,12 @@ fn check_program_statement_itself(
             let assertion = assertion_candidate(&expression).then(|| (*expression).clone());
             let define_property =
                 (!ctx.javascript_expando_objects.is_empty()).then(|| (*expression).clone());
+            let immediately_invoked = check_function::immediately_invoked_writes(&expression);
             expr::check_expression_statement(*expression, ctx);
             narrow_module_assertion_call(assertion, ctx);
+            if let Some(writes) = immediately_invoked {
+                apply_module_immediately_invoked_writes(writes, ctx);
+            }
             if let Some(expression) = define_property {
                 declare_define_property_member(&expression, ctx);
             }

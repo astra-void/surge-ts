@@ -162,8 +162,53 @@ fn narrow_by_unmatched_typeof_tag(ty: &Type, keep_matching: bool) -> Option<Type
     Some(union_type(kept))
 }
 
+/// The one tag every value of a union-typed reference member reports (a
+/// numeric enum's `Color` is `"number"`): tsc's union is flat, so filtering
+/// keeps or drops all of its members together, and the member stays whole.
+fn uniform_reference_tag(member: &Type) -> Option<&'static str> {
+    let Type::Reference(reference) = member else {
+        return None;
+    };
+    if reference.is_unique_symbol() || !matches!(reference.resolve_arc().as_ref(), Type::Union(_)) {
+        return None;
+    }
+    match typeof_tags_of(member)?.as_slice() {
+        [tag] => Some(tag),
+        _ => None,
+    }
+}
+
+/// [`surge_ts_types::flatten_reference_unions`], except that a member with a
+/// [`uniform_reference_tag`] is left whole.
+fn flatten_mixed_reference_unions(ty: &Type) -> Option<Type> {
+    let Type::Union(union) = ty else {
+        return surge_ts_types::flatten_reference_unions(ty);
+    };
+    let flattens = |member: &Type| match member {
+        Type::Reference(reference) => {
+            !reference.is_unique_symbol()
+                && matches!(reference.resolve_arc().as_ref(), Type::Union(_))
+                && uniform_reference_tag(member).is_none()
+        }
+        _ => false,
+    };
+    if !union.types().iter().any(flattens) {
+        return None;
+    }
+    Some(union_type(
+        union
+            .types()
+            .iter()
+            .map(|member| match member {
+                Type::Reference(reference) if flattens(member) => reference.resolve(),
+                other => other.clone(),
+            })
+            .collect(),
+    ))
+}
+
 pub(crate) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) -> Option<Type> {
-    if let Some(flattened) = surge_ts_types::flatten_reference_unions(ty) {
+    if let Some(flattened) = flatten_mixed_reference_unions(ty) {
         return narrow_union_by_typeof(&flattened, tag, keep_matching);
     }
     if type_for_typeof_tag(tag).is_none() && !matches!(tag, "object" | "function") {
@@ -191,7 +236,7 @@ pub(crate) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) 
                 .flatten()
                 .is_some_and(|constraint| typeof_tag_of(&constraint) == Some("object"))
         })
-        .filter(|member| match typeof_tag_of(member) {
+        .filter(|member| match typeof_tag_of(member).or_else(|| uniform_reference_tag(member)) {
             Some(member_tag) => (member_tag == tag) == keep_matching,
             None => true,
         })
