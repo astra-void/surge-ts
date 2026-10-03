@@ -2605,7 +2605,7 @@ fn attach_predicate_overload(
 ///
 /// Bounded: a group declaring more overloads than this contributes only its
 /// first few, since every one folded in costs an inference run per call.
-fn attach_overload_alternative(
+pub(crate) fn attach_overload_alternative(
     kept: Option<Arc<FunctionSignatureInfo>>,
     incoming: Option<&Arc<FunctionSignatureInfo>>,
 ) -> Option<Arc<FunctionSignatureInfo>> {
