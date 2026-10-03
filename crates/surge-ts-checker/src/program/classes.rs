@@ -1301,6 +1301,7 @@ fn check_inherited_abstract_members(class: &ParsedClassDeclaration, ctx: &mut Ch
             .into_iter()
             .map(|member| member.name),
     );
+    satisfied.extend(merged_interface_member_names(class, &base.name, ctx));
 
     let mut missing: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1401,6 +1402,46 @@ fn check_inherited_abstract_members(class: &ParsedClassDeclaration, ctx: &mut Ch
         None => diagnostic,
     };
     ctx.push(diagnostic);
+}
+
+/// Members an `interface` merged with the class puts on its instance type,
+/// its own and those its heritage brings: Go's
+/// `checkKindsOfPropertyMemberOverrides` reads the derived member off that
+/// type, so they implement an inherited abstract member too.
+fn merged_interface_member_names(
+    class: &ParsedClassDeclaration,
+    base_name: &str,
+    ctx: &CheckerContext,
+) -> Vec<String> {
+    let Some(TypeDeclarationInfo::Interface(own)) = ctx.lookup_type_declaration(&class.name) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = own
+        .body
+        .members
+        .iter()
+        .filter(|member| !member.is_abstract)
+        .map(|member| member.name.clone())
+        .collect();
+    let mut pending: Vec<String> = own
+        .body
+        .extends
+        .iter()
+        .filter(|heritage| heritage.name != base_name)
+        .map(|heritage| heritage.name.clone())
+        .collect();
+    let mut visited = std::collections::HashSet::new();
+    while let Some(name) = pending.pop() {
+        if visited.len() >= 32 || !visited.insert(name.clone()) {
+            continue;
+        }
+        let Some(TypeDeclarationInfo::Interface(info)) = ctx.lookup_type_declaration(&name) else {
+            continue;
+        };
+        names.extend(info.body.members.iter().map(|member| member.name.clone()));
+        pending.extend(info.body.extends.iter().map(|heritage| heritage.name.clone()));
+    }
+    names
 }
 
 /// The name a class member declares when it is not itself abstract — what
