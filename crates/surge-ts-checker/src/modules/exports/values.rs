@@ -1147,7 +1147,7 @@ pub(crate) fn collect_nested_member_assignments<'a>(
     }
 }
 
-fn object_with_namespace_members(
+pub(crate) fn object_with_namespace_members(
     object: &surge_ts_types::ObjectType,
     members: &surge_ts_types::PropertyMap,
 ) -> surge_ts_types::ObjectType {

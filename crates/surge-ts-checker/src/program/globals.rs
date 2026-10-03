@@ -95,9 +95,9 @@ pub(crate) fn collect_global_function_signatures(
 }
 
 /// tsc merges every script's globals into one table (`mergeSymbolTable`), so a
-/// function and a namespace of one name written in two scripts are one symbol
-/// (TS2433 aside), whose members are the namespace's and the function's
-/// expandos. A namespace member is a declaration of its own: an expando write
+/// function or class and a namespace of one name written in two scripts are
+/// one symbol (TS2433 aside), whose members are the namespace's and the
+/// function's expandos or the class's statics. A namespace member is a declaration of its own: an expando write
 /// of the same name only assigns it (`SetValueDeclaration` prefers the
 /// declaration that is not an assignment), so the member's type replaces what
 /// the write declared.
@@ -106,18 +106,21 @@ fn merge_cross_file_script_namespaces(
     global_symbols: &mut SymbolTable,
     ctx: &mut CheckerContext,
 ) {
-    let mut function_files: HashMap<&str, usize> = HashMap::new();
+    let mut declaring_files: HashMap<&str, usize> = HashMap::new();
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
         if !is_script_source(parsed_file) {
             continue;
         }
         for statement in &parsed_file.statements {
             if let Some(function) = declared_function(statement) {
-                function_files.entry(function.name.as_str()).or_insert(file_index);
+                declaring_files.entry(function.name.as_str()).or_insert(file_index);
+            }
+            if let ParsedStatement::ClassDeclaration(class) = statement {
+                declaring_files.entry(class.name.as_str()).or_insert(file_index);
             }
         }
     }
-    if function_files.is_empty() {
+    if declaring_files.is_empty() {
         return;
     }
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
@@ -127,7 +130,7 @@ fn merge_cross_file_script_namespaces(
         let mut names: Vec<&str> = Vec::new();
         for statement in &parsed_file.statements {
             if let ParsedStatement::NamespaceDeclaration(namespace) = statement
-                && function_files
+                && declaring_files
                     .get(namespace.name.as_str())
                     .is_some_and(|declaring| *declaring != file_index)
                 && !names.contains(&namespace.name.as_str())
@@ -157,6 +160,18 @@ fn merge_cross_file_script_namespaces(
                 }
                 surge_ts_types::Type::Object(object) => match object.call_signature() {
                     Some(call_signature) => (call_signature.clone(), (*object.properties).clone()),
+                    None if object.construct_signature().is_some() => {
+                        let merged = crate::modules::exports::object_with_namespace_members(object, &members);
+                        let _ = global_symbols.insert(
+                            name.to_string(),
+                            crate::symbols::SymbolInfo {
+                                ty: surge_ts_types::Type::Object(merged),
+                                kind: symbol.kind,
+                                function_signature: symbol.function_signature.clone(),
+                            },
+                        );
+                        continue;
+                    }
                     None => continue,
                 },
                 _ => continue,
