@@ -694,6 +694,9 @@ impl Project {
                 .compiler_options
                 .no_property_access_from_index_signature,
             no_unchecked_indexed_access: loaded.compiler_options.no_unchecked_indexed_access,
+            no_unchecked_side_effect_imports: loaded
+                .compiler_options
+                .no_unchecked_side_effect_imports,
             exact_optional_property_types: loaded.compiler_options.exact_optional_property_types,
             // tsc's `GetAllowImportingTsExtensions`.
             allow_importing_ts_extensions: loaded.compiler_options.allow_importing_ts_extensions

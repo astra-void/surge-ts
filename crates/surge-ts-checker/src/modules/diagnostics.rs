@@ -299,6 +299,12 @@ pub(crate) fn emit_unresolved_module_diagnostic(
     ctx: &mut CheckerContext,
     import: &ParsedImportDeclaration,
 ) {
+    // Go resolves a side-effect import only under `noUncheckedSideEffectImports`.
+    if matches!(import.kind, ParsedImportKind::SideEffect)
+        && !ctx.options.no_unchecked_side_effect_imports
+    {
+        return;
+    }
     let resolution_mode = import_resolution_mode(import);
     if !matches!(import.kind, ParsedImportKind::SideEffect)
         && push_untyped_javascript_module_diagnostic(

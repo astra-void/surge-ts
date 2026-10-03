@@ -1500,7 +1500,8 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             if crate::modules::is_external_specifier(&import.module_specifier) {
                 let suppress_unresolved_diagnostic =
                     matches!(&import.kind, surge_ts_syntax::ParsedImportKind::SideEffect)
-                        && is_runtime_js_only_module(&import.module_specifier, ctx);
+                        && (!ctx.options.no_unchecked_side_effect_imports
+                            || is_runtime_js_only_module(&import.module_specifier, ctx));
 
                 if !ctx.options.stub_external_modules && !suppress_unresolved_diagnostic {
                     let mut diagnostic = match &import.kind {

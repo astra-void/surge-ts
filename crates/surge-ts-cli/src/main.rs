@@ -548,6 +548,7 @@ fn run_single_file_mode(
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
             no_unchecked_indexed_access: false,
+            no_unchecked_side_effect_imports: true,
             exact_optional_property_types: false,
             allow_importing_ts_extensions: false,
             allow_arbitrary_extensions: false,
