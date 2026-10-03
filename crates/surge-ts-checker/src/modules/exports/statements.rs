@@ -443,7 +443,13 @@ pub(crate) fn collect_exports_from_statement(
                         return;
                     }
 
+                    // Only the export's type is wanted here: the check phase
+                    // checks the expression (`check_export_assignment_expression`)
+                    // with the module's imports bound, which a type query in it
+                    // (`obj as typeof obj`) does not see from this table.
+                    let checkpoint = ctx.diagnostics().len();
                     let ty = crate::infer::infer_expression(expression, exportable_values, ctx);
+                    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
                     let ty = match ty {
                         crate::infer::InferredExpression::Known(ty) => ty,
                         crate::infer::InferredExpression::Unknown
