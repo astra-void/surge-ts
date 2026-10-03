@@ -573,7 +573,10 @@ pub(super) fn resolve_predicate_type_under(
         return None;
     }
     let ty = resolved.into_ty();
-    (!matches!(ty, Type::Unknown | Type::TypeParameter(_))).then_some(ty)
+    // A type variable of the body being checked (`Extract<T, Function>` over
+    // the caller's `T`) is a real target; a placeholder is not.
+    (!matches!(ty, Type::Unknown) && (!matches!(ty, Type::TypeParameter(_)) || ty.is_type_variable()))
+        .then_some(ty)
 }
 
 /// A zero-argument method call (`type.isUnion()`) plus the reference it is

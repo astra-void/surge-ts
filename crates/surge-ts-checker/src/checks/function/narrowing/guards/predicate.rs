@@ -239,9 +239,16 @@ pub(crate) fn narrow_by_predicate(
     // A type variable the predicate does not already cover is `T & P`
     // (`getNarrowedTypeWorker`'s fallback): it keeps its identity, and the
     // predicate's members come with it.
+    // A candidate that is itself a subtype of the variable (`Extract<T, F>`
+    // narrowing `T`) is the narrowed type.
     if keep_matching && peeled.is_type_variable() {
-        return (!predicate.is_unmodelled() && !surge_ts_types::is_assignable_to(&peeled, predicate))
-            .then(|| surge_ts_types::type_variable::intersect_type_variable(&peeled, predicate.clone()));
+        if predicate.is_unmodelled() || surge_ts_types::is_assignable_to(&peeled, predicate) {
+            return None;
+        }
+        if predicate.is_type_variable() && surge_ts_types::is_assignable_to(predicate, &peeled) {
+            return Some(predicate.clone());
+        }
+        return Some(surge_ts_types::type_variable::intersect_type_variable(&peeled, predicate.clone()));
     }
     // An already narrowed `T & X` gains the predicate as one more constituent.
     if keep_matching
