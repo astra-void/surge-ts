@@ -989,6 +989,9 @@ thread_local! {
     /// one), which is what `inferToMultipleTypes` asks when it records whether a
     /// source matched some target.
     static INFERENCES_MADE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The argument being inferred from is a written `unknown`; see
+    /// [`is_inference_hole`].
+    static WRITTEN_UNKNOWN_ARGUMENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Runs `walk` one `inferFromTypeArguments` level deeper.
@@ -1540,6 +1543,35 @@ fn enforce_inferred_constraints(
     }
 }
 
+/// What an inference neither records nor counts as inferred: surge's own
+/// degradation sentinel, a type parameter no scope binds, and `unknown`
+/// except as a whole argument read off a declaration or an assertion. An
+/// active type variable is a candidate as in tsc, and so is that `unknown`:
+/// `replaceData(prev?.data, x as unknown)` binds `TData` to `unknown`, not to
+/// the outer `TData` alone. Any other `unknown` may be the
+/// `getDefaultTypeArgumentType` of a nested generic call whose contextual
+/// type was the outer call's own type parameter, which tsc's return mapper
+/// resolves and surge does not (`m({ x: absorb() })`).
+fn is_inference_hole(ty: &Type) -> bool {
+    ty.is_degraded()
+        && !ty.is_type_variable()
+        && !(matches!(ty, Type::GenuineUnknown) && WRITTEN_UNKNOWN_ARGUMENT.get())
+}
+
+fn reads_a_written_type(expression: &ParsedExpression) -> bool {
+    matches!(
+        expression,
+        ParsedExpression::Identifier { .. }
+            | ParsedExpression::PropertyAccess { .. }
+            | ParsedExpression::OptionalPropertyAccess { .. }
+            | ParsedExpression::IndexAccess { .. }
+            | ParsedExpression::OptionalIndexAccess { .. }
+            | ParsedExpression::ElementAccess { .. }
+            | ParsedExpression::TypeAssertion { .. }
+            | ParsedExpression::SatisfiesExpression { .. }
+    )
+}
+
 pub(super) fn lacks_constraint_call_signature(candidate: &Type, constraint: &Type) -> bool {
     let target = match constraint.peeled() {
         Type::Function(signature) => signature,
@@ -2045,7 +2077,10 @@ pub(crate) fn infer_type_argument_substitution(
         // A leaked placeholder (`Mock<T>` off a `vi.fn()` whose `T` no scope
         // binds) infers garbage — `TData` as the mock's own call signature —
         // so the argument contributes nothing, as an unresolved one does.
-        if (argument_type.is_degraded() && !argument_type.is_type_variable())
+        let written_unknown = matches!(argument_type, Type::GenuineUnknown)
+            && !argument.spread
+            && reads_a_written_type(&argument.expression);
+        if (is_inference_hole(&argument_type) && !written_unknown)
             || crate::checks::expr::carries_leaked_type_parameter(&argument_type, ctx)
         {
             record_generic_call_inference_unresolved_argument_skip();
@@ -2106,10 +2141,11 @@ pub(crate) fn infer_type_argument_substitution(
             ParsedExpression::ObjectLiteral { .. } | ParsedExpression::ArrayLiteral { .. }
         ));
         let outer_fresh_source = SOURCE_IS_FRESH_LITERAL.replace(fresh_literal);
+        let outer_written_unknown = WRITTEN_UNKNOWN_ARGUMENT.replace(written_unknown);
         with_declaring_scope(function_signature, ctx, |ctx| {
             with_inference_root(parameter_type, || {
                 for candidate in &candidates {
-                    if candidate.is_degraded() && !candidate.is_type_variable() {
+                    if is_inference_hole(candidate) {
                         continue;
                     }
                     collect_inferred_type_argument(
@@ -2123,6 +2159,7 @@ pub(crate) fn infer_type_argument_substitution(
                 }
             });
         });
+        WRITTEN_UNKNOWN_ARGUMENT.set(outer_written_unknown);
         SOURCE_IS_FUNCTION_LITERAL.set(outer_literal_source);
         SOURCE_IS_OBJECT_OR_ARRAY_LITERAL.set(outer_object_literal_source);
         SOURCE_IS_FRESH_LITERAL.set(outer_fresh_source);
@@ -3031,7 +3068,7 @@ pub(crate) fn collect_inferred_type_argument(
     // substitution.
     // tsc's error type is an `any` source: `inferFromTypes` still hands it to a
     // naked type parameter, so `query(() => missing.member)` binds `$Output`.
-    if argument_type.is_degraded() && !argument_type.is_type_variable() {
+    if is_inference_hole(argument_type) {
         return;
     }
 
