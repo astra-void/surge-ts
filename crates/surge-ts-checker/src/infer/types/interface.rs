@@ -341,6 +341,14 @@ fn generic_interface_display_name(interface: &InterfaceInfo) -> String {
     format!("{name}<{parameters}>")
 }
 
+/// The bare name a merged interface's fragments declare it by: a declaration
+/// reached through an import or a namespace carries a qualified or renamed
+/// name of its own.
+fn fragment_declared_name(interface: &InterfaceInfo) -> &str {
+    let name = interface.declared_name.as_deref().unwrap_or(&interface.name);
+    name.rsplit('.').next().unwrap_or(name)
+}
+
 /// The scope a declaration without one of its own resolves its body under:
 /// its file's module scope, unless that scope does not declare it. A
 /// declaration in a `declare module` block's own table carries no scope (the
@@ -826,6 +834,7 @@ pub(crate) fn resolve_interface(
                     interface_key.as_ref(),
                     lazy_member_context,
                     interface.body.has_foreign_fragments().then(|| &*interface.body),
+                    Some((fragment_declared_name(interface), &handle)),
                 )
             })
         })
@@ -1008,6 +1017,7 @@ fn install_member_scope(
 fn foreign_fragment_scope(
     body: &crate::symbols::InterfaceBody,
     fragment: &crate::symbols::InterfaceDeclarationFragmentId,
+    merged: Option<(&str, &TypeDeclarationHandle)>,
     ctx: &CheckerContext,
 ) -> Option<(Arc<crate::symbols::TypeDeclarationScope>, Arc<str>)> {
     if let Some((_, scope)) = body
@@ -1015,6 +1025,21 @@ fn foreign_fragment_scope(
         .iter()
         .find(|(candidate, _)| candidate == fragment)
     {
+        // The augmentation's own declaration of the interface is the merged
+        // symbol in Go (`mergeModuleAugmentation`), so its name reads the merged
+        // declaration from inside the fragment, not the fragment alone.
+        if let Some((name, handle)) = merged
+            && scope.get_handle(name).is_some_and(|declared| !declared.ptr_eq(handle))
+        {
+            let mut own = crate::symbols::TypeDeclarationTable::new();
+            own.insert_handle(name, handle);
+            let mut layers = vec![Arc::new(own)];
+            layers.extend(scope.layers().iter().cloned());
+            return Some((
+                Arc::new(crate::symbols::TypeDeclarationScope::new(layers)),
+                fragment.file_name.clone(),
+            ));
+        }
         return Some((scope.clone(), fragment.file_name.clone()));
     }
     if *fragment.file_name == *ctx.file_name || !body.module_global_fragments.contains(fragment) {
@@ -1062,6 +1087,9 @@ pub(crate) fn resolve_interface_declaration(
     // file and must resolve under that file's scope rather than this
     // declaration's (`foreign_fragment_scope`).
     augmented_body: Option<&crate::symbols::InterfaceBody>,
+    // The merged declaration being resolved, under the name its fragments
+    // declare it by.
+    merged_self: Option<(&str, &TypeDeclarationHandle)>,
 ) -> ResolvedType {
     crate::program::record_interface_member_declaration_visits(members.len());
     crate::program::record_program_counter(|c| {
@@ -1095,7 +1123,7 @@ pub(crate) fn resolve_interface_declaration(
     for (base_index, base) in extends.iter().enumerate() {
         let installed_base_scope = augmented_body
             .and_then(|body| Some((body, body.extends_fragments.get(base_index)?)))
-            .and_then(|(body, fragment)| foreign_fragment_scope(body, fragment, ctx))
+            .and_then(|(body, fragment)| foreign_fragment_scope(body, fragment, merged_self, ctx))
             .map(|(scope, file_name)| install_member_scope(ctx, &scope, &file_name));
         // `resolveBaseTypesOfClass`: a class whose base is not a class derives
         // from a constructor function, and its type arguments select among the
@@ -1344,7 +1372,7 @@ pub(crate) fn resolve_interface_declaration(
         let mut deferred_method_components = false;
         let installed_member_scope = augmented_body
             .and_then(|body| Some((body, body.member_fragments.get(member_index)?)))
-            .and_then(|(body, fragment)| foreign_fragment_scope(body, fragment, ctx))
+            .and_then(|(body, fragment)| foreign_fragment_scope(body, fragment, merged_self, ctx))
             .map(|(scope, file_name)| install_member_scope(ctx, &scope, &file_name));
         let mut property_type = if let Some(function) = cached_method {
             ResolvedType {

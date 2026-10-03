@@ -492,6 +492,7 @@ pub(crate) fn validate_local_type_declaration(
                         None,
                         None,
                         interface.body.has_foreign_fragments().then(|| &*interface.body),
+                        None,
                     );
                     ctx.pop_type_parameter_scope();
                 })

@@ -1235,6 +1235,11 @@ impl TypeDeclarationTable {
         self.version += 1;
     }
 
+    /// Shares `handle`'s payload under `name`, first-wins.
+    pub(crate) fn insert_handle(&mut self, name: &str, handle: &TypeDeclarationHandle) {
+        self.insert_shared_handle(Arc::from(name), handle.declaration.clone());
+    }
+
     fn insert_shared_handle(
         &mut self,
         name: Arc<str>,
