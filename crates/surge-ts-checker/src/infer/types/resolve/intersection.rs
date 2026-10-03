@@ -862,6 +862,16 @@ fn merge_intersection_members_now(
         })
         .cloned()
         .collect();
+    // `typeof globalThis`'s members are variables, which do not take part in
+    // an intersection property's optionality (`createUnionOrIntersectionProperty`
+    // reads it off class members only): `Window & typeof globalThis` keeps
+    // Window's optional `ontouchstart` optional beside the global variable.
+    let global_object_operands: Vec<bool> = members
+        .iter()
+        .map(|member| {
+            matches!(member, Type::Reference(reference) if &*reference.id == crate::driver::GLOBAL_THIS_REFERENCE_ID)
+        })
+        .collect();
     // Peel reference operands (`StudentBulkImportRow & { … }`) so a named object
     // member contributes its properties to the merged intersection surface.
     let members: Vec<Type> = members.iter().map(Type::peeled).collect();
@@ -898,6 +908,12 @@ fn merge_intersection_members_now(
             Type::Object(object) => Some(object),
             _ => None,
         })
+        .collect();
+    let object_members_from_global_object: Vec<bool> = members
+        .iter()
+        .zip(&global_object_operands)
+        .filter(|(ty, _)| matches!(ty, Type::Object(_)))
+        .map(|(_, from_global_object)| *from_global_object)
         .collect();
 
     // An object operand excludes `null`/`undefined`, so `undefined & {}` is
@@ -995,7 +1011,9 @@ fn merge_intersection_members_now(
             }
         };
 
-        for object in &object_members {
+        let mut variable_only_properties: std::collections::HashSet<std::sync::Arc<str>> =
+            std::collections::HashSet::new();
+        for (object, from_global_object) in object_members.iter().zip(&object_members_from_global_object) {
             for (name, property) in object.properties.iter() {
                 // A property declared by more than one operand is the
                 // *intersection* of what they declare, not the first one:
@@ -1010,12 +1028,22 @@ fn merge_intersection_members_now(
                             None => shared_property_types
                                 .push((name.clone(), vec![read_type(existing), read_type(property)])),
                         }
+                        let existing_is_variable = variable_only_properties.contains(name);
+                        let optional = match (existing_is_variable, *from_global_object) {
+                            (true, true) => existing.is_optional() && property.is_optional(),
+                            (true, false) => property.is_optional(),
+                            (false, true) => existing.is_optional(),
+                            (false, false) => existing.is_optional() && property.is_optional(),
+                        };
+                        if existing_is_variable && !*from_global_object {
+                            variable_only_properties.remove(name);
+                        }
                         let merged_property = surge_ts_types::ObjectProperty {
                             ty: merge_intersection_members(vec![
                                 existing.ty.clone(),
                                 property.ty.clone(),
                             ]),
-                            optional: existing.is_optional() && property.is_optional(),
+                            optional,
                             method: existing.method,
                             readonly: false,
                             restriction: existing.restriction.clone(),
@@ -1024,6 +1052,9 @@ fn merge_intersection_members_now(
                         properties.insert(name.clone(), merged_property);
                     }
                     None => {
+                        if *from_global_object {
+                            variable_only_properties.insert(name.clone());
+                        }
                         properties.insert(name.clone(), property.clone());
                     }
                 }

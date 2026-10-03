@@ -646,6 +646,20 @@ pub(crate) fn apply_expando_members(
                     };
                 }
             }
+            // `var g = F.g = {}`: the write in the initializer declares too.
+            ParsedStatement::VariableDeclaration(variable) => {
+                let mut chained = match &variable.initializer {
+                    Some(surge_ts_syntax::ParsedExpression::MemberAssignment(inner)) => Some(inner.as_ref()),
+                    _ => None,
+                };
+                while let Some(assignment) = chained {
+                    assignments.push(assignment);
+                    chained = match &assignment.value {
+                        surge_ts_syntax::ParsedExpression::MemberAssignment(inner) => Some(inner.as_ref()),
+                        _ => None,
+                    };
+                }
+            }
             ParsedStatement::If(if_statement) => {
                 collect_nested_member_assignments(&if_statement.then_body, &[], &mut assignments);
                 collect_nested_member_assignments(&if_statement.else_body, &[], &mut assignments);
@@ -662,7 +676,7 @@ pub(crate) fn apply_expando_members(
         }
     }
     let mut members: Vec<(&str, std::borrow::Cow<'_, str>, ExpandoValue)> = Vec::new();
-    for assignment in assignments {
+    for &assignment in &assignments {
         let (name, property_name) = match &assignment.target {
             surge_ts_syntax::ParsedExpression::PropertyAccess {
                 object,
@@ -728,6 +742,18 @@ pub(crate) fn apply_expando_members(
             _ => None,
         })
         .collect();
+    // `getInitializerSymbol`: in JavaScript a class declaration is one too.
+    let classes_declared_here: std::collections::HashSet<&str> = if javascript {
+        statements
+            .iter()
+            .filter_map(|statement| match peel_exported_statement(statement) {
+                ParsedStatement::ClassDeclaration(class) => Some(class.name.as_str()),
+                _ => None,
+            })
+            .collect()
+    } else {
+        std::collections::HashSet::new()
+    };
     let mut containers: std::collections::HashMap<&str, Option<ExpandoContainer>> =
         std::collections::HashMap::new();
     // `bindDeferredExpandoAssignment` declares an expando only where no other
@@ -739,6 +765,10 @@ pub(crate) fn apply_expando_members(
         let property_name: &str = &property_name;
         let container = *containers.entry(name).or_insert_with(|| {
             let symbol = exportable_values.get_own_shared(name)?;
+            if classes_declared_here.contains(name) {
+                return matches!(&symbol.ty, Type::Object(object) if object.construct_signature().is_some())
+                    .then_some(ExpandoContainer::Class);
+            }
             expando_container(&symbol, javascript && declared_here.contains(name))
         });
         let Some(container) = container else {
@@ -746,6 +776,10 @@ pub(crate) fn apply_expando_members(
         };
         let Some(symbol) = exportable_values.get_own_shared(name) else {
             continue;
+        };
+        let class_object = match (&symbol.ty, container) {
+            (Type::Object(object), ExpandoContainer::Class) => Some(object),
+            _ => None,
         };
         let (call_signature, mut properties) = match &symbol.ty {
             Type::Function(function) => (Some(function.clone()), surge_ts_types::PropertyMap::default()),
@@ -772,10 +806,19 @@ pub(crate) fn apply_expando_members(
             property_name.into(),
             surge_ts_types::ObjectProperty::required(member_type).with_readonly(readonly),
         );
-        let object = crate::metrics::alloc_object_type(properties, None);
-        let ty = match call_signature {
-            Some(call_signature) => Type::Object(object.with_call_signature(call_signature)),
-            None => Type::Object(object),
+        let ty = if let Some(class_object) = class_object {
+            // The class's static side keeps its construct signature, statics
+            // and identity; the member joins its statics.
+            let mut class_object = class_object.clone();
+            class_object.properties = Arc::new(properties);
+            class_object.property_map_id = None;
+            Type::Object(class_object)
+        } else {
+            let object = crate::metrics::alloc_object_type(properties, None);
+            match call_signature {
+                Some(call_signature) => Type::Object(object.with_call_signature(call_signature)),
+                None => Type::Object(object),
+            }
         };
         let kind = symbol.kind;
         let function_signature = symbol.function_signature.clone();
@@ -788,6 +831,155 @@ pub(crate) fn apply_expando_members(
             },
         );
     }
+    let is_container = |name: &str| containers.get(name).is_some_and(Option::is_some);
+    apply_nested_expando_members(&assignments, javascript, &is_container, exportable_values, ctx);
+}
+
+/// `bindDeferredExpandoAssignment` for a write through expando members:
+/// `lookupEntity` resolves `F.a` in `F.a.b = v` to the member `F.a` declared,
+/// and `getInitializerSymbol` makes what it was initialized with — a
+/// function, or in JavaScript a class or an empty object literal — the
+/// container `b` is declared on. Shallower writes are applied first.
+fn apply_nested_expando_members(
+    assignments: &[&surge_ts_syntax::ParsedMemberAssignment],
+    javascript: bool,
+    is_container: &dyn Fn(&str) -> bool,
+    exportable_values: &mut SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    let writes: Vec<(&str, Vec<String>, &surge_ts_syntax::ParsedExpression)> = assignments
+        .iter()
+        .filter_map(|assignment| {
+            let (root, path) = expando_write_path(&assignment.target)?;
+            Some((root, path, &assignment.value))
+        })
+        .collect();
+    let initialized: std::collections::HashSet<(&str, &[String])> = writes
+        .iter()
+        .filter(|(_, _, value)| is_expando_initializer_value(value, javascript))
+        .map(|(root, path, _)| (*root, path.as_slice()))
+        .collect();
+    let mut nested: Vec<&(&str, Vec<String>, &surge_ts_syntax::ParsedExpression)> = writes
+        .iter()
+        .filter(|(root, path, _)| {
+            path.len() >= 2
+                && is_container(root)
+                && (1..path.len()).all(|depth| initialized.contains(&(*root, &path[..depth])))
+        })
+        .collect();
+    nested.sort_by_key(|(_, path, _)| path.len());
+    for (root, path, value) in nested {
+        let Some(symbol) = exportable_values.get_own_shared(root) else {
+            continue;
+        };
+        let Some((member_type, readonly)) =
+            expando_member_type(&ExpandoValue::Assigned(value), exportable_values, ctx)
+        else {
+            continue;
+        };
+        let (property, container_path) = path.split_last().expect("a nested write has a path");
+        let Some(ty) = with_nested_expando_member(&symbol.ty, container_path, property, member_type, readonly)
+        else {
+            continue;
+        };
+        let _ = exportable_values.insert(
+            root.to_string(),
+            SymbolInfo {
+                ty,
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            },
+        );
+    }
+}
+
+/// The receiver and member names a write's target spells
+/// (`F.a["b"].c` is `F` and `a`, `b`, `c`), when every element key is a
+/// literal.
+fn expando_write_path(target: &surge_ts_syntax::ParsedExpression) -> Option<(&str, Vec<String>)> {
+    use surge_ts_syntax::ParsedExpression;
+    let literal_key = |index: &ParsedExpression| match index {
+        ParsedExpression::StringLiteral(key) | ParsedExpression::NumberLiteral(key) => Some(key.clone()),
+        _ => None,
+    };
+    match target {
+        ParsedExpression::Identifier { name, .. } => Some((name.as_str(), Vec::new())),
+        ParsedExpression::PropertyAccess { object, property_name, .. } => {
+            let (root, mut path) = expando_write_path(object)?;
+            path.push(property_name.clone());
+            Some((root, path))
+        }
+        ParsedExpression::IndexAccess { object_name, index, .. } => {
+            Some((object_name.as_str(), vec![literal_key(index)?]))
+        }
+        ParsedExpression::ElementAccess { object, index, .. } => {
+            let (root, mut path) = expando_write_path(object)?;
+            path.push(literal_key(index)?);
+            Some((root, path))
+        }
+        _ => None,
+    }
+}
+
+/// `IsExpandoInitializer` over a written value.
+fn is_expando_initializer_value(value: &surge_ts_syntax::ParsedExpression, javascript: bool) -> bool {
+    use surge_ts_syntax::ParsedExpression;
+    match value {
+        ParsedExpression::ArrowFunction(_) => true,
+        ParsedExpression::ClassExpression(_) => javascript,
+        ParsedExpression::ObjectLiteral { properties, .. } => javascript && properties.is_empty(),
+        _ => false,
+    }
+}
+
+/// `ty` with `property` declared on the member `container_path` leads to.
+fn with_nested_expando_member(
+    ty: &Type,
+    container_path: &[String],
+    property: &str,
+    member_type: Type,
+    readonly: bool,
+) -> Option<Type> {
+    let Some((segment, rest)) = container_path.split_first() else {
+        let (call_signature, mut properties) = match ty {
+            Type::Function(function) => (Some(function.clone()), surge_ts_types::PropertyMap::default()),
+            Type::Object(object) => (None, (*object.properties).clone()),
+            _ => return None,
+        };
+        let member_type = match properties.get(property) {
+            Some(existing) => surge_ts_types::union_type(vec![existing.ty.clone(), member_type]),
+            None => member_type,
+        };
+        properties.insert(
+            property.into(),
+            surge_ts_types::ObjectProperty::required(member_type).with_readonly(readonly),
+        );
+        return Some(match (ty, call_signature) {
+            (_, Some(call_signature)) => {
+                Type::Object(crate::metrics::alloc_object_type(properties, None).with_call_signature(call_signature))
+            }
+            (Type::Object(object), None) => {
+                let mut object = object.clone();
+                object.properties = Arc::new(properties);
+                object.property_map_id = None;
+                Type::Object(object)
+            }
+            _ => return None,
+        });
+    };
+    let Type::Object(object) = ty else {
+        return None;
+    };
+    let member = object.properties.get(segment.as_str())?;
+    let inner = with_nested_expando_member(&member.ty, rest, property, member_type, readonly)?;
+    let mut member = member.clone();
+    member.ty = inner;
+    let mut properties = (*object.properties).clone();
+    properties.insert(segment.as_str().into(), member);
+    let mut object = object.clone();
+    object.properties = Arc::new(properties);
+    object.property_map_id = None;
+    Some(Type::Object(object))
 }
 
 /// A late-bound key naming a `const` of these statements that `symbols` does
@@ -874,6 +1066,8 @@ enum ExpandoContainer {
     Callable,
     /// A JavaScript variable initialized to an empty object literal.
     Object,
+    /// A JavaScript class declaration: its static side carries the members.
+    Class,
 }
 
 fn expando_container(symbol: &SymbolInfo, javascript: bool) -> Option<ExpandoContainer> {
@@ -2272,7 +2466,7 @@ fn resolve_namespace_value_annotations(
                     properties.insert(
                         variable.name.as_str().into(),
                         surge_ts_types::ObjectProperty::required(ty)
-                            .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const)),
+                            .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const) && !variable.is_enum_object),
                     );
                     continue;
                 }
@@ -2287,7 +2481,7 @@ fn resolve_namespace_value_annotations(
                 properties.insert(
                     variable.name.as_str().into(),
                     surge_ts_types::ObjectProperty::required(resolved)
-                        .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const)),
+                        .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const) && !variable.is_enum_object),
                 );
             }
             ParsedStatement::NamespaceDeclaration(inner) => {
@@ -2515,7 +2709,7 @@ pub(crate) fn fill_namespace_value_properties(
                 properties.insert(
                     variable.name.as_str().into(),
                     ObjectProperty::required(Type::Any)
-                        .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const)),
+                        .with_readonly(matches!(variable.kind, surge_ts_syntax::ParsedVariableKind::Const) && !variable.is_enum_object),
                 );
             }
             ParsedStatement::ClassDeclaration(class) => {

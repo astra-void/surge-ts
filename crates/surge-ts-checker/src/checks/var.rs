@@ -774,11 +774,13 @@ pub(crate) fn check_variable_declaration_against_symbols(
                 if reads_regular_literal(initializer, initializer_type, symbols) {
                     Some(initializer_type.clone())
                 } else {
+                    // `widenTypeInferredFromInitializer`: in JavaScript an
+                    // empty array literal's type is `any[]` either way.
                     Some(widen_implicit_variable_initializer_type(
                         symbol_kind,
                         initializer,
                         initializer_type,
-                        auto_array,
+                        auto_array || surge_ts_syntax::is_javascript_file_name(&ctx.file_name),
                     ))
                 }
             } else {

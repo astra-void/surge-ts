@@ -1080,6 +1080,65 @@ fn is_expando_receiver(object: &ParsedExpression, symbols: &SymbolTable, ctx: &C
     }
 }
 
+/// Whether `value` reads `name.property_name` outside the functions it holds.
+fn reads_own_member(value: &ParsedExpression, name: &str, property_name: &str) -> bool {
+    let mut found = false;
+    let mut visit = |expression: &ParsedExpression| {
+        if !found && reads_own_member(expression, name, property_name) {
+            found = true;
+        }
+    };
+    match value {
+        ParsedExpression::PropertyAccess { object, property_name: read, .. }
+            if read == property_name
+                && matches!(object.as_ref(), ParsedExpression::Identifier { name: object, .. } if object == name) =>
+        {
+            return true;
+        }
+        _ => value.for_each_child(&mut visit),
+    }
+    found
+}
+
+/// Declares `name.property_name` as `any` and checks the value with the member
+/// readable as such, as the circular resolution leaves it.
+fn declare_circular_expando_member(
+    name: &str,
+    property_name: &str,
+    assignment: &ParsedMemberAssignment,
+    scopes: &mut ScopeStack,
+    ctx: &mut CheckerContext,
+) {
+    let Some(symbol) = scopes.resolve(name) else {
+        return;
+    };
+    let declared = match symbol.ty.peeled() {
+        Type::Object(object) => {
+            let mut properties = (*object.properties).clone();
+            properties.insert(property_name.into(), surge_ts_types::ObjectProperty::required(Type::Any));
+            let mut object = object.clone();
+            object.properties = std::sync::Arc::new(properties);
+            object.property_map_id = None;
+            Type::Object(object)
+        }
+        Type::Function(function) => {
+            let mut properties = surge_ts_types::PropertyMap::default();
+            properties.insert(property_name.into(), surge_ts_types::ObjectProperty::required(Type::Any));
+            Type::Object(crate::metrics::alloc_object_type(properties, None).with_call_signature(function))
+        }
+        _ => return,
+    };
+    let updated = SymbolInfo {
+        ty: declared,
+        kind: symbol.kind,
+        function_signature: symbol.function_signature.clone(),
+    };
+    let mut provisional = visible_symbols(scopes).clone_with_reason(surge_ts_types::TypeCopyReason::ScopeOrContext);
+    let _ = provisional.insert(name.to_string(), updated.clone());
+    let _ = evaluate_expression(&assignment.value, assignment.value_span, &provisional, ctx);
+    let _ = scopes.update_visible(name, updated);
+}
+
 /// Records `fn.x = value` on the binding, so the reads after it see the member
 /// tsc declares there: the function becomes `{ (…): R; x: typeof value }`.
 fn declare_expando_member(
@@ -1099,6 +1158,20 @@ fn declare_expando_member(
         ParsedExpression::ObjectLiteral { span: Some(span), .. } => u32::try_from(span.start).ok(),
         _ => None,
     };
+    // The member's type is its value's (`getWidenedTypeForAssignmentDeclaration`),
+    // so a value reading the member itself (`o.K = o.K || f`) is circular:
+    // `any`, reported under noImplicitAny (`reportCircularityError`).
+    if reads_own_member(&assignment.value, name, property_name) {
+        if ctx.options.no_implicit_any {
+            let diagnostic = Diagnostic::ts7022(property_name, ctx.file_name.clone());
+            ctx.push(match assignment.target_span {
+                Some(span) => diagnostic.with_span(convert_span(span)),
+                None => diagnostic,
+            });
+        }
+        declare_circular_expando_member(name, property_name, assignment, scopes, ctx);
+        return;
+    }
     // The binder declares the member before a class body assigned to it is
     // checked, so the body may already read it (`NS.K = class { m() { new
     // NS.K() } }`); surge types it only once the class is evaluated.
@@ -1605,6 +1678,22 @@ fn check_member_assignment_itself(
     // comparison below is skipped for such a target anyway.
     let target_unresolved = crate::checks::assign::type_contains_unknown(&target_type);
     let checkpoint = ctx.diagnostics().len();
+
+    // `checkObjectLiteral`: an empty JavaScript object literal that expando
+    // writes declare members on is typed by those members, and the write
+    // initializing an expando member with it is that member's declaration —
+    // its value is the member's own type.
+    if surge_ts_syntax::is_javascript_file_name(&ctx.file_name)
+        && matches!(&assignment.value, ParsedExpression::ObjectLiteral { properties, .. } if properties.is_empty())
+        && is_expando_receiver(object, &visible_symbols, ctx)
+    {
+        crate::checks::function::narrowing::narrow_assignment_target_in_scope(
+            &assignment.target,
+            &target_type,
+            scopes,
+        );
+        return;
+    }
 
     // An expando container's member is an assignment declaration, whose
     // value has no contextual signature to take `this` from.

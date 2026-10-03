@@ -897,6 +897,23 @@ pub(crate) fn resolve_import_declaration(
         bind_shorthand_module_import(import, local_symbol_exists, type_declarations, symbols, ctx);
         return;
     }
+    if let Some(named) =
+        module_dot_exports_import(import, program_files, module_export_tables, module_resolution_scopes, ctx)
+    {
+        resolve_named_import(
+            &named,
+            program_files,
+            module_export_tables,
+            module_resolution_scopes,
+            local_symbol_exists,
+            type_declarations,
+            symbols,
+            namespace_alias_layers,
+            type_only_aliases,
+            ctx,
+        );
+        return;
+    }
     match &import.kind {
         ParsedImportKind::EntityAlias { .. } => return,
         ParsedImportKind::Unsupported => {
@@ -988,6 +1005,69 @@ pub(crate) fn resolve_import_declaration(
             ctx,
         ),
     };
+}
+
+/// Under `node20`/`nodenext` an ES module's `module.exports` named export is
+/// what `require()` of it returns, so an import that reads the module through
+/// `require` binds that export as `import { "module.exports" as local }` would:
+/// `import x = require()` and a JavaScript `require` always
+/// (`getTargetOfImportEqualsDeclaration`), a default or namespace import only
+/// when written in a CommonJS-format file importing an ESM-format one
+/// (`getTargetOfModuleDefault`, `resolveESModuleSymbol`).
+fn module_dot_exports_import(
+    import: &ParsedImportDeclaration,
+    program_files: &[ParsedProgramFile],
+    module_export_tables: &[Option<ModuleExportTable>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
+    ctx: &CheckerContext,
+) -> Option<ParsedImportDeclaration> {
+    const MODULE_EXPORTS: &str = "module.exports";
+    if !matches!(
+        ctx.options.module_emit,
+        crate::context::ModuleEmitKind::Node20 | crate::context::ModuleEmitKind::NodeNext
+    ) {
+        return None;
+    }
+    let (local_name, name_span, is_type_only, transpiled_default) = match &import.kind {
+        ParsedImportKind::Equals {
+            local_name,
+            name_span,
+            is_type_only,
+        } => (local_name, *name_span, *is_type_only, false),
+        ParsedImportKind::Default { local_name, name_span } => (local_name, *name_span, false, true),
+        ParsedImportKind::Namespace {
+            local_name,
+            name_span,
+            is_type_only,
+        } => (local_name, *name_span, *is_type_only, true),
+        _ => return None,
+    };
+    let (export_table, _, resolved_index) =
+        try_resolve_import_module(import, ctx, program_files, module_export_tables, module_resolution_scopes)?;
+    if transpiled_default {
+        let target = program_files.get(resolved_index?)?;
+        if declaration_emit_syntax(ctx) != Some(ModuleFormat::CommonJs)
+            || implied_format_for_emit(ctx, &target.file_name) != Some(ModuleFormat::Esm)
+        {
+            return None;
+        }
+    }
+    if export_table.symbols.get(MODULE_EXPORTS).is_none()
+        && crate::modules::exports::lookup_type_export(&export_table, MODULE_EXPORTS).is_none()
+    {
+        return None;
+    }
+    Some(ParsedImportDeclaration {
+        kind: ParsedImportKind::Named {
+            is_type_only,
+            specifiers: vec![surge_ts_syntax::ParsedImportSpecifier {
+                imported_name: MODULE_EXPORTS.to_string(),
+                local_name: local_name.clone(),
+                name_span,
+            }],
+        },
+        ..import.clone()
+    })
 }
 
 /// Whether `module_specifier` lands on a shorthand ambient module

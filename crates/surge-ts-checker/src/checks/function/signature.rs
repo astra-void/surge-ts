@@ -75,6 +75,20 @@ pub(crate) fn emit_parameter_diagnostics(
         {
             emit_padded_array_binding_diagnostics(pattern, initializer, ctx);
         }
+        // `widenTypeInferredFromInitializer` reports the `any[]` it makes of a
+        // JavaScript parameter's empty array initializer.
+        if contextual_type.is_none()
+            && !parameter.rest
+            && surge_ts_syntax::is_javascript_file_name(&ctx.file_name)
+            && matches!(initializer, surge_ts_syntax::ParsedExpression::ArrayLiteral { elements, .. } if elements.is_empty())
+            && let ParsedBindingName::Identifier { name, span } = &parameter.binding_name
+        {
+            let diagnostic = Diagnostic::ts7006(name, ctx.file_name.clone());
+            ctx.push(match span {
+                Some(span) => diagnostic.with_span(convert_span(*span)),
+                None => diagnostic,
+            });
+        }
         return;
     }
 
@@ -1490,8 +1504,15 @@ impl<'p> ParameterListResolver<'p> {
                 {
                     ty
                 }
+                // `widenTypeInferredFromInitializer`: in JavaScript an empty
+                // array literal's type is `any[]`.
                 InferredExpression::Known(ty) => {
-                    let widened = widen_implicit_variable_initializer_type(SymbolKind::Let, initializer, &ty, false);
+                    let widened = widen_implicit_variable_initializer_type(
+                        SymbolKind::Let,
+                        initializer,
+                        &ty,
+                        surge_ts_syntax::is_javascript_file_name(&ctx.file_name),
+                    );
                     pad_object_literal_type(parameter, initializer, widened, &symbols, ctx)
                 }
                 InferredExpression::UnresolvedIdentifier { .. }

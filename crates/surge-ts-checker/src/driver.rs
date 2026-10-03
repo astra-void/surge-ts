@@ -53,7 +53,7 @@ fn check_single_source(
     let mut ctx = CheckerContext::new(file_name.clone(), options, file_kinds);
     ctx.declaration_environment_store.mark_program_lifetime();
 
-    inject_generated_default_libs(&mut ctx);
+    let global_this_querying_values = inject_generated_default_libs(&mut ctx);
 
     let mut merged_td = ctx.ambient_global_type_declarations.as_ref().clone();
     for (k, v) in ctx.type_declarations.iter() {
@@ -109,6 +109,10 @@ fn check_single_source(
     // single-file driver does not run.
     ctx.replace_resolved_named_types(0);
     sync_global_this_symbol(&mut ctx);
+    if !global_this_querying_values.is_empty() {
+        crate::program::relower_global_this_querying_values(&global_this_querying_values, &mut ctx);
+        sync_global_this_symbol(&mut ctx);
+    }
     let mut merged_sym = ctx.ambient_global_symbols.clone();
     for (k, v) in ctx.symbols.iter() {
         let _ = merged_sym.insert(k.clone(), v.clone());
@@ -211,10 +215,12 @@ fn seed_class_value_symbol(
     symbols.insert(class.name.clone(), symbol);
 }
 
-fn inject_generated_default_libs(ctx: &mut CheckerContext) {
+fn inject_generated_default_libs(
+    ctx: &mut CheckerContext,
+) -> Vec<crate::program::GlobalThisQueryingValue> {
     let default_lib_inputs = load_generated_default_lib_inputs(ctx.options.no_lib, None);
     if default_lib_inputs.is_empty() {
-        return;
+        return Vec::new();
     }
 
     let original_file_name = ctx.file_name.clone();
@@ -256,8 +262,9 @@ fn inject_generated_default_libs(ctx: &mut CheckerContext) {
         .collect();
 
     crate::program::collect_ambient_global_types(&parsed_files, ctx, None);
-    crate::program::lower_ambient_global_values(&parsed_files, ctx);
+    let global_this_querying_values = crate::program::lower_ambient_global_values(&parsed_files, ctx);
     ctx.set_file_name(original_file_name);
+    global_this_querying_values
 }
 
 pub(crate) fn collect_type_declarations(statements: &[ParsedStatement], ctx: &mut CheckerContext) {

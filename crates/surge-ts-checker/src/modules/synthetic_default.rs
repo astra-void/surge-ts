@@ -40,7 +40,7 @@ pub(crate) fn implied_format_for_emit(ctx: &CheckerContext, file_name: &str) -> 
 
 /// tsc's `getEmitSyntaxForUsageLocation` for an import or export declaration
 /// in the file being checked: the file's emit format.
-fn declaration_emit_syntax(ctx: &CheckerContext) -> Option<ModuleFormat> {
+pub(crate) fn declaration_emit_syntax(ctx: &CheckerContext) -> Option<ModuleFormat> {
     if let Some(format) = implied_format_for_emit(ctx, &ctx.file_name) {
         return Some(format);
     }

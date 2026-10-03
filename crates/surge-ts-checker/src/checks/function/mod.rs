@@ -388,6 +388,13 @@ fn infer_member_type(
         // only methods assign; an empty array is `any[]`, and a member
         // assigned nothing but `null` or `undefined` is `any`.
         surge_ts_syntax::ParsedInferredMemberSource::ThisAssignments(assignments) => {
+            // A member only methods assign is looked up in the base class
+            // first (`getTypeOfPropertyInBaseClass`).
+            if !assignments.in_constructor
+                && let Some(base_type) = base_class_property_type(&member.class_name, &member.member_name, ctx)
+            {
+                return Some(base_type);
+            }
             let mut shadow = body_inference_shadow_context(ctx);
             let mut types = Vec::with_capacity(assignments.values.len() + 1);
             for value in &assignments.values {
@@ -412,6 +419,21 @@ fn infer_member_type(
             type_is_deeply_concrete(&ty).then_some(ty)
         }
     }
+}
+
+/// The type of `member_name` on the first base of the class `class_name`.
+fn base_class_property_type(class_name: &str, member_name: &str, ctx: &mut CheckerContext) -> Option<Type> {
+    let Some(crate::symbols::TypeDeclarationInfo::Interface(class)) = ctx.lookup_type_declaration(class_name) else {
+        return None;
+    };
+    if !class.is_class_instance {
+        return None;
+    }
+    let base = class.body.extends.first()?.clone();
+    let diagnostics_before = ctx.diagnostics().len();
+    let base_type = crate::infer::types::map_parsed_type(surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(base)), ctx);
+    ctx.truncate_diagnostics(diagnostics_before);
+    base_type.get_property_access_type(member_name).filter(|ty| !ty.is_unknown())
 }
 
 pub(crate) fn inferred_member_reference(
@@ -1212,7 +1234,10 @@ pub(crate) fn collect_function_declaration_signature(
             )
         }
     };
-    let function_type = if function.is_declare && !function.type_parameters.is_empty() {
+    let full_signature = full_signature_of(function.full_signature.as_ref(), ctx);
+    let function_type = if let Some(signature) = &full_signature {
+        signature.clone()
+    } else if function.is_declare && !function.type_parameters.is_empty() {
         with_type_parameter_scope(&function.type_parameters, ctx, map_signature)
     } else {
         map_signature(ctx)
@@ -1226,21 +1251,27 @@ pub(crate) fn collect_function_declaration_signature(
     // `TValue` came back with a bare `TValue` and assignment narrowing dropped
     // the member it should have kept; a component declared inside
     // `createHydrationStreamProvider<TShape>` kept a bare `TShape` in its props.
-    let lazy_return = lazy_body_returns(&ctx.file_name)
+    let lazy_return = full_signature.is_none()
+        && lazy_body_returns(&ctx.file_name)
         && function.type_parameters.is_empty()
         && ctx
             .type_parameter_scopes
             .iter()
             .all(|scope| scope.is_empty())
         && return_type_comes_from_body(function);
-    let function_type = match lazy_return
-        .then(|| lazy_body_return_reference(function, function_type.parameters(), ctx))
-        .or_else(|| {
-            infer_declaration_return_types(&ctx.file_name)
-                .then(|| inferred_declaration_return_type(function, &function_type, ctx))
-                .flatten()
+    let function_type = match full_signature
+        .is_none()
+        .then(|| {
+            lazy_return
+                .then(|| lazy_body_return_reference(function, function_type.parameters(), ctx))
+                .or_else(|| {
+                    infer_declaration_return_types(&ctx.file_name)
+                        .then(|| inferred_declaration_return_type(function, &function_type, ctx))
+                        .flatten()
+                })
+                .or_else(|| no_value_return_type(function, ctx))
         })
-        .or_else(|| no_value_return_type(function, ctx))
+        .flatten()
     {
         Some(return_type) => FunctionType::new(
             function_type.parameters().to_vec(),
@@ -1288,6 +1319,54 @@ pub(crate) fn collect_function_declaration_signature(
     function_type
 }
 
+/// tsc's `getSignatureOfFullSignatureType`: the single call signature of a
+/// JavaScript declaration's `@type` full signature, which is the
+/// declaration's own signature. The tag's type is reported where JSDoc types
+/// are checked, not here.
+pub(crate) fn full_signature_of(
+    full_signature: Option<&surge_ts_syntax::ParsedType>,
+    ctx: &mut CheckerContext,
+) -> Option<FunctionType> {
+    let full_signature = full_signature?;
+    if !surge_ts_syntax::is_javascript_file_name(&ctx.file_name) {
+        return None;
+    }
+    let diagnostics_before = ctx.diagnostics().len();
+    let ty = crate::infer::map_parsed_type(full_signature.clone(), ctx);
+    ctx.truncate_diagnostics(diagnostics_before);
+    single_call_signature_of(&ty)
+}
+
+fn single_call_signature_of(ty: &Type) -> Option<FunctionType> {
+    let single = |function: &FunctionType| {
+        function.overloads().is_none_or(<[FunctionType]>::is_empty).then(|| function.clone())
+    };
+    match ty {
+        Type::Function(function) => single(function),
+        Type::Object(object)
+            if object.properties.is_empty()
+                && object.string_index_type.is_none()
+                && object.number_index_type.is_none()
+                && object.construct_signature().is_none() =>
+        {
+            object.call_signature().and_then(single)
+        }
+        Type::Reference(_) => match ty.peeled() {
+            peeled @ (Type::Function(_) | Type::Object(_)) => single_call_signature_of(&peeled),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `getParameterTypeOfFullSignature`: each declared parameter is the full
+/// signature's type at its position, `any` past its end.
+fn full_signature_parameter_types(signature: &FunctionType, parameter_count: usize) -> Vec<Type> {
+    let mut types = contextual_parameter_types(signature, parameter_count);
+    types.resize(parameter_count, Type::Any);
+    types
+}
+
 pub(crate) fn check_function_declaration(
     function: ParsedFunctionDeclaration,
     ctx: &mut CheckerContext,
@@ -1307,6 +1386,7 @@ pub(crate) fn check_function_declaration(
         has_body,
         is_generator,
         is_async,
+        full_signature,
         ..
     } = function;
     check_type_parameter_declarations(&type_parameters, ctx);
@@ -1318,13 +1398,26 @@ pub(crate) fn check_function_declaration(
             return_type.as_ref(),
             &ctx.file_name,
         );
-        let function_type = map_function_signature(
+        let full_signature = full_signature_of(full_signature.as_ref(), ctx);
+        let full_signature_parameters = full_signature
+            .as_ref()
+            .map(|signature| full_signature_parameter_types(signature, parameters.len()));
+        let declared_type = map_function_signature(
             &parameters,
             return_type.as_ref(),
             &type_parameters,
-            None,
+            full_signature_parameters.as_deref(),
             ctx,
         );
+        // Callers see the full signature itself (`getSignaturesOfSymbol`); the
+        // body sees its parameters at their positions.
+        let (function_type, body_function_type) = match (&full_signature, full_signature_parameters) {
+            (Some(signature), Some(parameter_types)) => (
+                signature.clone(),
+                declared_type.with_signature_types(parameter_types, signature.return_type().clone()),
+            ),
+            _ => (declared_type.clone(), declared_type),
+        };
 
         // The first registration for this name replaces what the collection
         // pre-pass installed — the check pass resolves the signature under the
@@ -1380,10 +1473,10 @@ pub(crate) fn check_function_declaration(
             name,
             parameters,
             body,
-            &function_type,
+            &body_function_type,
             &type_parameters,
             Some(signature_info),
-            return_type.is_some(),
+            return_type.is_some() || full_signature.is_some(),
             return_type_span.or(name_span),
             is_generator,
             is_async,
@@ -1507,7 +1600,19 @@ pub(crate) fn check_function_declaration_body(
     // suppression the plain sentinel gives: a component's returned JSX then
     // reported its callback props as implicit `any`.
     let settled_signature;
-    let function_type = if function.return_type.is_none()
+    let full_signature = full_signature_of(function.full_signature.as_ref(), ctx);
+    let function_type = if let Some(signature) = &full_signature {
+        // The collected signature is the full signature itself; the body
+        // binds each parameter to its type at the parameter's position.
+        settled_signature = FunctionType::new(
+            full_signature_parameter_types(signature, function.parameters.len()),
+            signature.return_type().clone(),
+            function.parameters.last().is_some_and(|parameter| parameter.rest),
+            signature::required_parameter_count(&function.parameters),
+        )
+        .with_parameter_names(signature::written_binding_names(&function.parameters));
+        &settled_signature
+    } else if function.return_type.is_none()
         && matches!(
             function_type.return_type(),
             Type::Reference(reference) if reference.id.contains(BODY_RETURN_ID_TAG)
@@ -1561,7 +1666,7 @@ pub(crate) fn check_function_declaration_body(
         function_type,
         type_parameters,
         Some(signature_info),
-        return_type.is_some(),
+        return_type.is_some() || full_signature.is_some(),
         return_type_span.or(name_span),
         is_generator,
         is_async,

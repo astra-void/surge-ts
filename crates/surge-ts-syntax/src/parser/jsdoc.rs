@@ -60,6 +60,24 @@ fn is_line_break(ch: char) -> bool {
     matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}')
 }
 
+/// tsgo's `peekUnicodeEscape`: the character `\\uXXXX` or `\\u{X…}` at
+/// `pos` names, and the escape's length.
+fn unicode_escape_at(text: &str, pos: usize) -> Option<(char, usize)> {
+    let rest = text.get(pos..)?.strip_prefix("\\u")?;
+    let (digits, length) = match rest.strip_prefix('{') {
+        Some(braced) => {
+            let close = braced.find('}')?;
+            (&braced[..close], 2 + 1 + close + 1)
+        }
+        None => (rest.get(..4)?, 2 + 4),
+    };
+    if digits.is_empty() || !digits.chars().all(|digit| digit.is_ascii_hexdigit()) {
+        return None;
+    }
+    let ch = char::from_u32(u32::from_str_radix(digits, 16).ok()?)?;
+    Some((ch, length))
+}
+
 fn is_white_space_single_line(ch: char) -> bool {
     matches!(
         ch,
@@ -101,6 +119,47 @@ impl<'s> Scanner<'s> {
 
     fn token_text(&self) -> &'s str {
         &self.text[self.token_start..self.pos]
+    }
+
+    /// The identifier the current token spells, its unicode escapes decoded
+    /// (tsgo's `tokenValue`).
+    fn token_value(&self) -> std::borrow::Cow<'s, str> {
+        let text = self.token_text();
+        if !text.contains('\\') {
+            return std::borrow::Cow::Borrowed(text);
+        }
+        let mut value = String::with_capacity(text.len());
+        let mut pos = 0;
+        while pos < text.len() {
+            if let Some((ch, length)) = unicode_escape_at(text, pos) {
+                value.push(ch);
+                pos += length;
+            } else {
+                let ch = text[pos..].chars().next().unwrap_or_default();
+                value.push(ch);
+                pos += ch.len_utf8().max(1);
+            }
+        }
+        std::borrow::Cow::Owned(value)
+    }
+
+    /// tsgo's `scanIdentifierParts` from `self.pos`: identifier characters
+    /// and the unicode escapes of identifier characters.
+    fn scan_identifier_parts(&mut self, allow_dash: bool) {
+        while let Some(next) = self.char_at(self.pos) {
+            if is_identifier_part(next) || (allow_dash && next == '-') {
+                self.pos += next.len_utf8();
+                continue;
+            }
+            if next == '\\'
+                && let Some((escaped, length)) = unicode_escape_at(self.text, self.pos)
+                && is_identifier_part(escaped)
+            {
+                self.pos += length;
+                continue;
+            }
+            break;
+        }
     }
 
     fn mark(&self) -> ScannerState {
@@ -166,8 +225,19 @@ impl<'s> Scanner<'s> {
                     }
                     self.pos += next.len_utf8();
                 }
+                if self.char_at(self.pos) == Some('\\') {
+                    self.scan_identifier_parts(false);
+                }
                 Token::Identifier
             }
+            '\\' => match unicode_escape_at(self.text, self.token_start) {
+                Some((escaped, length)) if is_identifier_start(escaped) => {
+                    self.pos = self.token_start + length;
+                    self.scan_identifier_parts(false);
+                    Token::Identifier
+                }
+                _ => Token::Unknown,
+            },
             _ => Token::Unknown,
         };
         self.token
@@ -614,7 +684,7 @@ impl<'s> TagParser<'s> {
             return None;
         }
         let span = TextSpan { start: self.s.token_start, end: self.s.pos };
-        let text = self.s.token_text().to_string();
+        let text = self.s.token_value().into_owned();
         self.next_token_jsdoc();
         Some((text, span))
     }
@@ -830,6 +900,13 @@ impl<'s> TagParser<'s> {
         }
         let type_start = if has_brace { self.s.pos } else { self.s.token_start };
         let parsed = parse_type_text(self.s.text, type_start);
+        for (name, span) in &parsed.not_generic {
+            self.diagnostics.push(crate::ParsedGrammarDiagnostic {
+                kind: crate::ParsedGrammarDiagnosticKind::Ts(2315),
+                span: *span,
+                name: Some(name.clone()),
+            });
+        }
         for end in &parsed.missing_types {
             let bytes = self.s.text.as_bytes();
             let mut start = *end;
@@ -1101,7 +1178,28 @@ impl<'s> TagParser<'s> {
             self.skip_whitespace();
         }
         let mut is_const = false;
-        while self.token() == Token::Identifier && matches!(self.s.token_text(), "const" | "in" | "out") {
+        // `parseModifiersEx` takes every modifier keyword followed by a name;
+        // the checker, not the parser, rejects the ones a type parameter
+        // cannot carry. `default` needs a declaration keyword after it.
+        while self.token() == Token::Identifier
+            && matches!(
+                self.s.token_text(),
+                "abstract"
+                    | "accessor"
+                    | "async"
+                    | "const"
+                    | "declare"
+                    | "export"
+                    | "in"
+                    | "out"
+                    | "override"
+                    | "private"
+                    | "protected"
+                    | "public"
+                    | "readonly"
+                    | "static"
+            )
+        {
             let state = self.s.mark();
             let modifier = self.s.token_text() == "const";
             self.next_token();
@@ -1147,8 +1245,18 @@ impl<'s> TagParser<'s> {
     /// `Default, { … }`, then `from "specifier"`.
     fn parse_import_tag(&mut self, start: usize) -> Option<crate::ParsedImportDeclaration> {
         use crate::{ParsedImportKind, ParsedImportSpecifier};
+        // Only a line's leading `*` is the comment's margin
+        // (`skipJsDocLeadingAsterisks`); on the tag's own line it is the
+        // namespace import's `*`.
         let skip = |parser: &mut Self| {
-            while matches!(parser.token(), Token::Whitespace | Token::NewLine | Token::Asterisk) {
+            let mut line_start = false;
+            loop {
+                match parser.token() {
+                    Token::Whitespace => {}
+                    Token::NewLine => line_start = true,
+                    Token::Asterisk if line_start => {}
+                    _ => break,
+                }
                 parser.next_token_jsdoc();
             }
         };
@@ -1220,6 +1328,7 @@ impl<'s> TagParser<'s> {
         let specifier = self.s.text[value_start..value_end].to_string();
         self.s.pos = value_end + 1;
         self.next_token_jsdoc();
+        let resolution_mode = self.parse_import_tag_resolution_mode();
         let kind = match (default, named, namespace) {
             (Some((local_name, span)), None, None) => ParsedImportKind::TypeOnlyDefault {
                 local_name,
@@ -1244,8 +1353,45 @@ impl<'s> TagParser<'s> {
             module_specifier: specifier,
             module_specifier_span: Some(TextSpan { start: literal_start, end: value_end + 1 }),
             span: Some(TextSpan { start, end: value_end + 1 }),
-            resolution_mode: None,
+            resolution_mode,
             inline_type_specifiers: false,
+        })
+    }
+
+    /// The `resolution-mode` of an `@import`'s `with { … }` attributes
+    /// (`tryParseImportAttributes`), which selects the resolution of a
+    /// declaration that is type-only as a whole, as every `@import` is.
+    fn parse_import_tag_resolution_mode(&mut self) -> Option<crate::ParsedResolutionModeAttribute> {
+        while self.token() == Token::Whitespace {
+            self.next_token_jsdoc();
+        }
+        if !(self.token() == Token::Identifier && self.s.token_text() == "with") {
+            return None;
+        }
+        let rest = &self.s.text[self.s.pos..];
+        let open = rest.find('{')?;
+        if !rest[..open].trim().is_empty() {
+            return None;
+        }
+        let close = open + rest[open..].find('}')?;
+        let attributes = &rest[open + 1..close];
+        self.s.pos += close + 1;
+        self.next_token_jsdoc();
+        let unquote = |text: &str| {
+            let text = text.trim();
+            text.strip_prefix(['"', '\'']).and_then(|text| text.strip_suffix(['"', '\''])).map(str::to_string)
+        };
+        attributes.split(',').find_map(|attribute| {
+            let (key, value) = attribute.split_once(':')?;
+            if unquote(key).or_else(|| Some(key.trim().to_string()))?.as_str() != "resolution-mode" {
+                return None;
+            }
+            let mode = match unquote(value)?.as_str() {
+                "import" => crate::ResolutionModeOverride::Import,
+                "require" => crate::ResolutionModeOverride::Require,
+                _ => return None,
+            };
+            Some(crate::ParsedResolutionModeAttribute { mode, selects_resolution: true })
         })
     }
 
@@ -1400,6 +1546,9 @@ struct ParsedTypeText {
     /// Where each lone `?` ends: tsgo's `parseJSDocNullableType` requires a
     /// type after it and reports TS1110 at the next token.
     missing_types: Vec<usize>,
+    /// Each intended type written with type arguments (`Void<T>`), which
+    /// `checkNoTypeArguments` reports as not generic: its name and span.
+    not_generic: Vec<(String, TextSpan)>,
 }
 
 /// tsgo's `parseJSDocType` over the text at `start`: the vendored oxc parser
@@ -1420,6 +1569,7 @@ fn parse_type_text(text: &str, start: usize) -> ParsedTypeText {
             },
             end,
             missing_types: Vec::new(),
+            not_generic: Vec::new(),
         };
     };
     let span = ty.span();
@@ -1430,7 +1580,9 @@ fn parse_type_text(text: &str, start: usize) -> ParsedTypeText {
     let mut import_types = ImportTypeSpecifiers(Vec::new());
     import_types.visit_ts_type(&ty);
     IMPORT_TYPE_SPECIFIERS.with(|specifiers| specifiers.borrow_mut().extend(import_types.0));
-    IntendedTypes { ast: AstBuilder::new(&allocator) }.visit_ts_type(&mut ty);
+    let mut intended = IntendedTypes { ast: AstBuilder::new(&allocator), not_generic: Vec::new() };
+    intended.visit_ts_type(&mut ty);
+    let not_generic = intended.not_generic;
     let lowered = super::types::parse_type(&ty);
     ParsedTypeText {
         ty: JsDocType {
@@ -1443,6 +1595,7 @@ fn parse_type_text(text: &str, start: usize) -> ParsedTypeText {
         },
         end,
         missing_types,
+        not_generic,
     }
 }
 
@@ -1491,6 +1644,7 @@ fn object_or_object_array(ty: &TSType<'_>) -> (bool, bool) {
 /// primitives and `Object.<K, V>` for a record.
 struct IntendedTypes<'a> {
     ast: AstBuilder<'a>,
+    not_generic: Vec<(String, TextSpan)>,
 }
 
 impl<'a> VisitMut<'a> for IntendedTypes<'a> {
@@ -1507,18 +1661,30 @@ impl<'a> VisitMut<'a> for IntendedTypes<'a> {
                 )
             });
             if let TSTypeName::IdentifierReference(name) = &mut reference.type_name {
-                let replacement = match (name.name.as_str(), arguments) {
-                    ("String", 0) => Some(self.ast.ts_type_string_keyword(span)),
-                    ("Number", 0) => Some(self.ast.ts_type_number_keyword(span)),
-                    ("BigInt", 0) => Some(self.ast.ts_type_big_int_keyword(span)),
-                    ("Boolean", 0) => Some(self.ast.ts_type_boolean_keyword(span)),
-                    ("Void", 0) => Some(self.ast.ts_type_void_keyword(span)),
-                    ("Undefined", 0) => Some(self.ast.ts_type_undefined_keyword(span)),
-                    ("Null", 0) => Some(self.ast.ts_type_null_keyword(span)),
+                let replacement = match name.name.as_str() {
+                    "String" => Some(self.ast.ts_type_string_keyword(span)),
+                    "Number" => Some(self.ast.ts_type_number_keyword(span)),
+                    "BigInt" => Some(self.ast.ts_type_big_int_keyword(span)),
+                    "Boolean" => Some(self.ast.ts_type_boolean_keyword(span)),
+                    "Void" => Some(self.ast.ts_type_void_keyword(span)),
+                    "Undefined" => Some(self.ast.ts_type_undefined_keyword(span)),
+                    "Null" => Some(self.ast.ts_type_null_keyword(span)),
                     _ => None,
                 };
+                let intended_function = matches!(name.name.as_str(), "Function" | "function");
+                if arguments > 0 && (replacement.is_some() || intended_function) {
+                    self.not_generic.push((
+                        name.name.to_string(),
+                        TextSpan { start: span.start as usize, end: span.end as usize },
+                    ));
+                }
                 if let Some(replacement) = replacement {
                     *ty = replacement;
+                    return;
+                }
+                if intended_function && arguments > 0 {
+                    name.name = self.ast.ident("Function");
+                    reference.type_arguments = None;
                     return;
                 }
                 match (name.name.as_str(), arguments) {
@@ -1706,6 +1872,10 @@ pub(crate) struct JsDocIndex {
     /// The functions `reparseHosted` gives their `@type` as the full
     /// signature, by the function's start.
     full_signature_hosts: std::collections::HashSet<u32>,
+    /// The full signature of each such function that could not be spread over
+    /// its parameters here (a named, generic or differently sized signature),
+    /// left for the checker to resolve; by the function's start.
+    full_signatures: std::collections::HashMap<u32, ParsedType>,
     /// The `@type` of a variable, class field or accessor, by its start.
     declared: std::collections::HashMap<u32, (ParsedType, TextSpan)>,
     /// `/** @type {T} */ (e)` and `@satisfies`, by the parenthesized
@@ -1796,6 +1966,10 @@ pub(crate) fn this_type_at(function_start: u32) -> Option<ParsedType> {
 /// `@type` naming a type, whose `this` parameter is not known here.
 pub(crate) fn has_opaque_full_signature(function_start: u32) -> bool {
     with_index(|index| index.opaque_full_signatures.contains(&function_start).then_some(())).is_some()
+}
+
+pub(crate) fn full_signature_at(function_start: u32) -> Option<ParsedType> {
+    with_index(|index| index.full_signatures.get(&function_start).cloned())
 }
 
 pub(crate) fn declared_type_at(start: u32) -> Option<(ParsedType, TextSpan)> {
@@ -2242,16 +2416,14 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
                 JsDocTag::Import(import) => self.index.imports.push(import.clone()),
                 JsDocTag::Callback { name, name_span, signature, span } => {
                     check_non_identifier_name(name, *name_span, &mut self.index.parse_errors);
-                    let Some(alias_name) = name.last().filter(|name| !name.is_empty()) else {
-                        continue;
-                    };
-                    if name.len() != 1 {
+                    if name.last().is_none_or(|name| name.is_empty()) {
                         continue;
                     }
+                    // Namespaced like a `@typedef` (`wrapInJSDocNamespace`).
                     self.alias_comment_starts.push(key);
                     self.index.aliases.push(ParsedTypeAliasDeclaration {
                         is_declare: false,
-                        name: alias_name.clone(),
+                        name: name.join("."),
                         name_span: Some(*name_span),
                         type_parameters: template_parameters(&comment.tags, true),
                         ty: signature_type(signature, Vec::new()),
@@ -2413,8 +2585,13 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
         } else if tag.ty.as_ref().is_some_and(|ty| signature_takes(ty, 0).is_none()) {
             self.index.opaque_full_signatures.insert(host.start());
         }
-        if let Some(signature) = tag.ty.as_ref().and_then(single_call_signature) {
-            self.apply_full_signature(host, signature, tag.span);
+        let applied = tag
+            .ty
+            .as_ref()
+            .and_then(single_call_signature)
+            .is_some_and(|signature| self.apply_full_signature(host, signature, tag.span));
+        if !applied && let Some(ty) = &tag.ty {
+            self.index.full_signatures.entry(host.start()).or_insert_with(|| ty.clone());
         }
     }
 
@@ -2431,7 +2608,7 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
         host: FunctionHost<'_, '_>,
         signature: &ParsedFunctionType,
         span: TextSpan,
-    ) {
+    ) -> bool {
         let params = host.params();
         let start = host.start();
         let parameters: Vec<&ParsedFunctionTypeParameter> =
@@ -2446,7 +2623,7 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
                 self.index.parameters.get(&parameter.span.start).is_some_and(|entry| entry.ty.is_some())
             })
         {
-            return;
+            return false;
         }
         for (parameter, typed) in params.items.iter().zip(parameters) {
             let entry = self.index.parameters.entry(parameter.span.start).or_default();
@@ -2455,6 +2632,7 @@ impl<'s, 'c> IndexBuilder<'s, 'c> {
         }
         self.index.returns.insert(start, ((*signature.return_type).clone(), span));
         self.mark_typed(host);
+        true
     }
 
     /// tsc's `checkUnmatchedJSDocParameters` for a `@param` naming no

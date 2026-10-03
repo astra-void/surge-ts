@@ -319,6 +319,7 @@ struct GlobalCollection {
     function_signatures: HashMap<FunctionDeclarationLocation, FunctionType>,
     global_type_declarations: TypeDeclarationTable,
     type_declaration_collection_start: Instant,
+    global_this_querying_values: Vec<GlobalThisQueryingValue>,
 }
 
 struct PreliminaryPass {
@@ -718,7 +719,7 @@ fn collect_program_globals(
     // Ambient *values* lower last, against the fully merged table.
     collect_ambient_global_types(&parsed_files, ctx, timings.as_ref());
     crate::driver::collect_global_augmentations(&parsed_files, ctx);
-    lower_ambient_global_values(&parsed_files, ctx);
+    let global_this_querying_values = lower_ambient_global_values(&parsed_files, ctx);
     collect_umd_global_names(&parsed_files, ctx);
     namespaces::collect_namespace_registry(&parsed_files, ctx);
     collect_ambient_modules(&parsed_files, ctx, timings.as_ref());
@@ -767,6 +768,7 @@ fn collect_program_globals(
         function_signatures,
         global_type_declarations,
         type_declaration_collection_start,
+        global_this_querying_values,
     }
 }
 
@@ -1177,6 +1179,7 @@ fn finalize_module_bindings(
         script_values,
         function_signatures,
         global_type_declarations,
+        global_this_querying_values,
         ..
     } = globals;
     // The final analyses are built; the remaining pipeline reads declaration
@@ -1280,6 +1283,12 @@ fn finalize_module_bindings(
         }
     }
     crate::driver::sync_global_this_symbol_with_scripts(ctx, &script_members);
+    if !global_this_querying_values.is_empty() {
+        relower_global_this_querying_values(&global_this_querying_values, ctx);
+        // The global object's own `window`/`self` members read the re-lowered
+        // types.
+        crate::driver::sync_global_this_symbol_with_scripts(ctx, &script_members);
+    }
     record_program_timing(timings.as_ref(), |timings| {
         timings.module_binding += module_binding_start.elapsed()
     });
