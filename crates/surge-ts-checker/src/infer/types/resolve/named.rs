@@ -333,11 +333,12 @@ fn resolve_named_type_inner(
             return resolved;
         }
         // `class C extends number`: the class check reports the primitive as a
-        // value (TS2863), and tsc says nothing more about the base.
+        // value (TS2863), and tsc says nothing more about the base; nor about
+        // `extends undefined`, the value whose type is no constructor (TS2507).
         if ctx.resolving_class_heritage
             && matches!(
                 named_type.name.as_str(),
-                "any" | "string" | "number" | "boolean" | "never" | "unknown"
+                "any" | "string" | "number" | "boolean" | "never" | "unknown" | "undefined"
             )
         {
             return ResolvedType {
