@@ -110,18 +110,9 @@ pub(crate) fn unresolved_type_query_diagnostic(
     {
         return property.invalid_reference_diagnostic(name, span, ctx.file_name.clone());
     }
-    let message = cannot_find_name_message(name, UnresolvedNameSite::TypeQuery, ctx);
-    let file_name = ctx.file_name.clone();
-    if ctx.namespace_meaning(name) == Some(false) {
-        return Diagnostic::ts2708(name, file_name);
-    }
-    if let Some(lib) = suggested_lib_for_nonexistent_name(name) {
-        return message.render(name, lib, file_name);
-    }
-    if let Some(suggestion) = suggested_value_name(name, &ctx.symbols, ctx) {
-        return Diagnostic::ts2552(name, suggestion, file_name);
-    }
-    message.render(name, "", file_name)
+    // A query's name is an expression (`checkTypeQuery` checks it), so it
+    // fails to resolve as any value does: a name only a type has is TS2693.
+    failed_value_name_diagnostic(name, UnresolvedNameSite::TypeQuery, None, &ctx.symbols, ctx)
 }
 
 /// tsc's `onFailedToResolveSymbol` for a value: `not_found` is the resolver's
