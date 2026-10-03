@@ -509,7 +509,35 @@ fn report_duplicate_export_declarations(
         return;
     }
 
-    let local_meanings = local_declaration_meanings(&parsed_file.statements);
+    // Go's binder gives an exported declaration's local symbol only
+    // `ExportValue` (`declareModuleMember`), which no name lookup matches, so a
+    // local `export { A }` resolves to what the file declares as `A` without
+    // `export`, and only when there is none to the module's export `A` itself.
+    let mut unexported_meanings = HashMap::new();
+    let mut exported_meanings = HashMap::new();
+    for statement in &parsed_file.statements {
+        let exported = matches!(
+            statement,
+            ParsedStatement::ExportDeclaration(export)
+                if matches!(export.as_ref(), ParsedExportDeclaration::Statement { .. })
+        );
+        let meanings = if exported {
+            &mut exported_meanings
+        } else {
+            &mut unexported_meanings
+        };
+        for (name, meaning) in local_declaration_meanings(std::slice::from_ref(statement)) {
+            *meanings.entry(name).or_insert(0) |= meaning;
+        }
+    }
+    let local_meaning = |name: &str| {
+        unexported_meanings
+            .get(name)
+            .copied()
+            .filter(|meaning| *meaning != 0)
+            .or_else(|| exported_meanings.get(name).copied())
+            .unwrap_or(0)
+    };
 
     for statement in &parsed_file.statements {
         let ParsedStatement::ExportDeclaration(export) = statement else {
@@ -585,10 +613,7 @@ fn report_duplicate_export_declarations(
                     }
                     meaning
                 }
-                None => local_meanings
-                    .get(specifier.local_name.as_str())
-                    .copied()
-                    .unwrap_or(0),
+                None => local_meaning(specifier.local_name.as_str()),
             };
 
             if counts_for_redeclare {
@@ -1063,6 +1088,16 @@ pub(crate) fn resolve_module_export_table(
                         found = true;
                     }
 
+                    if !found
+                        && crate::modules::module_declares_exported_namespace(
+                            resolved_index,
+                            parsed_files,
+                            &specifier.local_name,
+                        )
+                    {
+                        continue;
+                    }
+
                     if !found {
                         if target_export_table.has_unresolved_star_export
                             || resolved_index
@@ -1135,8 +1170,12 @@ pub(crate) fn resolve_module_export_table(
                 exported_name,
                 module_specifier,
                 module_specifier_span,
+                is_type_only,
                 ..
             } => {
+                if *is_type_only {
+                    resolved_export_table.mark_type_only_export(exported_name, TypeOnlyAliasKind::Export);
+                }
                 report_synchronous_import_of_esm(
                     module_specifier,
                     *module_specifier_span,

@@ -936,7 +936,7 @@ fn parse_type_literal(type_literal: &TSTypeLiteral<'_>) -> ParsedType {
 /// The return type is taken from the first overload. This mirrors the checker's
 /// `merge_overload_signatures`, applied at parse time because a type literal
 /// stores a single call signature.
-pub(crate) fn merge_parsed_call_signatures(
+pub fn merge_parsed_call_signatures(
     a: &ParsedFunctionType,
     b: &ParsedFunctionType,
 ) -> ParsedFunctionType {

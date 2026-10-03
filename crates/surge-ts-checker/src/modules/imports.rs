@@ -310,7 +310,13 @@ fn collect_local_declaration_meanings<'a>(
                     Some((head, _)) => head,
                     None => namespace.name.as_str(),
                 };
-                (name, MEANING_VALUE | MEANING_NAMESPACE)
+                // A namespace of types alone is `NamespaceModule`, no value.
+                let meaning = if crate::program::is_instantiated_namespace(namespace) {
+                    MEANING_VALUE | MEANING_NAMESPACE
+                } else {
+                    MEANING_NAMESPACE
+                };
+                (name, meaning)
             }
             ParsedStatement::ExportDeclaration(export) => {
                 if let ParsedExportDeclaration::Statement { declaration, .. } = export.as_ref() {
@@ -401,7 +407,7 @@ fn report_import_local_declaration_conflicts(
             continue;
         }
 
-        let Some((export_table, _, _)) = try_resolve_import_module(
+        let Some((export_table, _, resolved_index)) = try_resolve_import_module(
             import,
             ctx,
             program_files,
@@ -417,7 +423,10 @@ fn report_import_local_declaration_conflicts(
             };
             let target_meaning = if imported_name == "*" {
                 let mut meaning = MEANING_NAMESPACE;
+                // `import * as x` of an `export =` module is the assigned value
+                // (`resolveESModuleSymbol`).
                 if export_table.default_symbol.is_some()
+                    || export_table.export_assignment_symbol.is_some()
                     || export_table.symbols.iter_shared().next().is_some()
                 {
                     meaning |= MEANING_VALUE;
@@ -425,11 +434,26 @@ fn report_import_local_declaration_conflicts(
                 meaning
             } else {
                 let mut meaning = 0;
-                if lookup_type_export(&export_table, imported_name).is_some() {
+                let type_export = lookup_type_export(&export_table, imported_name);
+                if type_export.is_some() {
                     meaning |= MEANING_TYPE;
                 }
                 if lookup_value_export(&export_table, imported_name).is_some() {
                     meaning |= MEANING_VALUE;
+                }
+                // Go's `SymbolFlagsNamespace` covers a namespace and an enum.
+                let enum_export = matches!(
+                    type_export,
+                    Some(crate::symbols::TypeDeclarationInfo::Alias(alias)) if alias.enum_name.is_some()
+                );
+                if enum_export
+                    || crate::modules::module_declares_exported_namespace(
+                        resolved_index,
+                        program_files,
+                        imported_name,
+                    )
+                {
+                    meaning |= MEANING_NAMESPACE;
                 }
                 meaning
             };
@@ -2505,7 +2529,13 @@ fn resolve_named_import(
                 continue;
             }
 
-            if has_qualified_type_exports {
+            if has_qualified_type_exports
+                || crate::modules::module_declares_exported_namespace(
+                    resolved_index,
+                    program_files,
+                    &specifier.imported_name,
+                )
+            {
                 continue;
             }
 
@@ -2555,6 +2585,16 @@ fn resolve_named_import(
                 type_only_aliases,
             );
             found = true;
+        }
+
+        if !found
+            && crate::modules::module_declares_exported_namespace(
+                resolved_index,
+                program_files,
+                &specifier.imported_name,
+            )
+        {
+            continue;
         }
 
         if !found {

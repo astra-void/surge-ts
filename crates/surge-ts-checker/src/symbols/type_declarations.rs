@@ -529,11 +529,16 @@ pub(crate) fn merge_interface_infos(
             .number_index_type
             .clone()
             .or_else(|| incoming.body.number_index_type.clone()),
-        existing
-            .body
-            .call_signature
-            .clone()
-            .or_else(|| incoming.body.call_signature.clone()),
+        // One permissive fold over every declaration's signatures, as the
+        // parser folds one declaration's (`merge_parsed_call_signatures`); the
+        // first declaration's fold alone made a call matching a later
+        // declaration's signature a false TS2554.
+        match (&existing.body.call_signature, &incoming.body.call_signature) {
+            (Some(existing), Some(incoming)) => {
+                Some(surge_ts_syntax::merge_parsed_call_signatures(existing, incoming))
+            }
+            (existing, incoming) => existing.clone().or_else(|| incoming.clone()),
+        },
         {
             // Merged declarations contribute their call signatures in
             // declaration order, so a call resolves against any of them.
@@ -983,6 +988,10 @@ impl TypeDeclarationHandle {
     pub(crate) fn get(&self) -> &TypeDeclarationInfo {
         self.declaration.as_ref()
     }
+
+    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.declaration, &other.declaration)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1224,6 +1233,11 @@ impl TypeDeclarationTable {
             declarations.insert(key, Arc::new(declaration));
         }
         self.version += 1;
+    }
+
+    /// Shares `handle`'s payload under `name`, first-wins.
+    pub(crate) fn insert_handle(&mut self, name: &str, handle: &TypeDeclarationHandle) {
+        self.insert_shared_handle(Arc::from(name), handle.declaration.clone());
     }
 
     fn insert_shared_handle(

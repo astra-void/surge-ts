@@ -17,7 +17,8 @@ use oxc_ast::AstBuilder;
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, BlockStatement, CatchClause, Class, Declaration,
     Expression, ForInStatement, ForOfStatement, ForStatement, ForStatementInit, ForStatementLeft,
-    FormalParameters, Function, ObjectProperty, Program, Statement, StaticBlock,
+    FormalParameters, Function, JSXMemberExpressionObject, ObjectProperty, Program, Statement,
+    StaticBlock,
     TSInterfaceDeclaration, TSModuleBlock, TSModuleDeclarationBody, TSModuleDeclarationName,
     TSModuleReference, TSQualifiedName, TSTypeAliasDeclaration, TSTypeName,
     TSTypeParameterDeclaration, TSTypeQueryExprName, VariableDeclaration, VariableDeclarationKind,
@@ -174,6 +175,19 @@ impl<'a> AliasExpander<'a> {
         expression
     }
 
+    fn expanded_jsx_object(&self, span: Span, path: &[String]) -> JSXMemberExpressionObject<'a> {
+        let mut object = self
+            .ast
+            .jsx_member_expression_object_identifier_reference(span, self.ast.ident(&path[0]));
+        for segment in &path[1..] {
+            let property = self.ast.jsx_identifier(span, self.ast.str(segment));
+            object = self
+                .ast
+                .jsx_member_expression_object_member_expression(span, object, property);
+        }
+        object
+    }
+
     fn expanded_type_name(&self, span: Span, path: &[String]) -> TSTypeName<'a> {
         let mut name = self.ast.ts_type_name_identifier_reference(span, self.ast.ident(&path[0]));
         for segment in &path[1..] {
@@ -317,6 +331,19 @@ impl<'a> VisitMut<'a> for AliasExpander<'a> {
             return;
         }
         walk_mut::walk_expression(self, expression);
+    }
+
+    /// A tag's leftmost name resolves as a value (`<alias.Member />`), so it
+    /// is rewritten like any other value reference.
+    fn visit_jsx_member_expression_object(&mut self, object: &mut JSXMemberExpressionObject<'a>) {
+        if let JSXMemberExpressionObject::IdentifierReference(identifier) = object {
+            if let Some(path) = self.resolve(identifier.name.as_str(), Meaning::Value) {
+                let span = identifier.span;
+                *object = self.expanded_jsx_object(span, &path);
+            }
+            return;
+        }
+        walk_mut::walk_jsx_member_expression_object(self, object);
     }
 
     fn visit_object_property(&mut self, property: &mut ObjectProperty<'a>) {

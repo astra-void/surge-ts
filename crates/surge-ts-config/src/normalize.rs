@@ -114,6 +114,11 @@ pub(crate) fn normalize_compiler_options(
                     parse_bool_option(key, value, config_dir, diagnostics)
                         .unwrap_or(normalized.no_property_access_from_index_signature);
             }
+            "noUncheckedSideEffectImports" => {
+                normalized.no_unchecked_side_effect_imports =
+                    parse_bool_option(key, value, config_dir, diagnostics)
+                        .unwrap_or(normalized.no_unchecked_side_effect_imports);
+            }
             "noUncheckedIndexedAccess" => {
                 normalized.no_unchecked_indexed_access =
                     parse_bool_option(key, value, config_dir, diagnostics)

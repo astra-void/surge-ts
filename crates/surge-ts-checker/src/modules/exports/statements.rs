@@ -50,12 +50,14 @@ pub(crate) fn collect_exports_from_statement(
                         ..
                     } = &import.kind =>
             {
-                if let Some(symbol) =
-                    entity_alias_value(target, exportable_values, imported_symbols, ctx)
+                let value = entity_alias_value(target, exportable_values, imported_symbols, ctx);
+                let has_value = value.is_some();
+                if let Some(symbol) = value
                     && symbols.get(local_name).is_none()
                 {
                     symbols.insert_shared(local_name.clone(), symbol);
                 }
+                let types_before = type_declarations.len();
                 export_entity_alias_types(
                     target,
                     local_name,
@@ -64,6 +66,13 @@ pub(crate) fn collect_exports_from_statement(
                     type_declarations,
                     ctx,
                 );
+                // The alias is an export whether or not its entity resolves
+                // (Go binds it and resolves it to `unknownSymbol`): an importer
+                // of it reports nothing, only the alias's own entity does.
+                if !has_value && type_declarations.len() == types_before && symbols.get(local_name).is_none() {
+                    insert_unknown_value_import(local_name, symbols);
+                    insert_unknown_type_import(type_declarations, local_name, ctx.file_name_arc(), import.span);
+                }
             }
             ParsedExportDeclaration::Statement { declaration, .. } => {
                 collect_exports_from_statement(
@@ -394,6 +403,12 @@ pub(crate) fn collect_exports_from_statement(
                     } else {
                         let mut signature_symbols =
                             exportable_values.clone_with_reason(TypeCopyReason::ModuleExport);
+                        // Only the export's type is wanted here, as for a named
+                        // function's signature (`analyze_module`): a local type
+                        // the signature names resolves under its preliminary
+                        // scope, which holds no imports, and the check phase
+                        // reports the signature with them bound.
+                        let checkpoint = ctx.diagnostics().len();
                         let mut function_type =
                             check_function::collect_function_declaration_signature(
                                 function,
@@ -401,6 +416,7 @@ pub(crate) fn collect_exports_from_statement(
                                 ctx,
                                 false,
                             );
+                        ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
                         if let Some(value_type) =
                             promise_value_type(&function.return_type, resolution_scope, ctx)
                         {
@@ -464,7 +480,13 @@ pub(crate) fn collect_exports_from_statement(
                         return;
                     }
 
+                    // Only the export's type is wanted here: the check phase
+                    // checks the expression (`check_export_assignment_expression`)
+                    // with the module's imports bound, which a type query in it
+                    // (`obj as typeof obj`) does not see from this table.
+                    let checkpoint = ctx.diagnostics().len();
                     let ty = crate::infer::infer_expression(expression, exportable_values, ctx);
+                    ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
                     let ty = match ty {
                         crate::infer::InferredExpression::Known(ty) => ty,
                         crate::infer::InferredExpression::Unknown
@@ -725,6 +747,17 @@ fn entity_alias_value(
 ) -> Option<Arc<SymbolInfo>> {
     if let Some(symbol) = exportable_values.get_shared(target) {
         return Some(symbol);
+    }
+    // `import g = globalThis` names the global object, which is installed once
+    // module binding is done; until then the entity exists, its type unknown.
+    if target == "globalThis" {
+        return Some(ctx.ambient_global_symbols.get_shared(target).unwrap_or_else(|| {
+            Arc::new(SymbolInfo {
+                ty: Type::Unknown,
+                kind: SymbolKind::Const,
+                function_signature: None,
+            })
+        }));
     }
     let mut segments = target.split('.');
     let mut first = segments.next()?;

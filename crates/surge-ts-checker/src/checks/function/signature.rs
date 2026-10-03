@@ -456,7 +456,7 @@ pub(crate) fn check_parameter_pattern_accessibility(
         name: String::new(),
         span: None,
     };
-    for element in &pattern.elements {
+    for element in pattern.elements.iter().filter(|element| !element.computed_key) {
         crate::checks::expr::check_member_accessibility(
             &source,
             bound_type,
@@ -751,7 +751,11 @@ pub(crate) fn insert_object_binding_pattern_bindings(
     scopes: &mut ScopeStack,
 ) {
     for element in &pattern.elements {
-        let mut element_type = object_binding_element_type(&parameter_type, &element.property_name);
+        let mut element_type = if element.computed_key {
+            Type::Any
+        } else {
+            object_binding_element_type(&parameter_type, &element.property_name)
+        };
         // `const { numRefs = 0 } = params` binds the default when the property is
         // absent, so the binding is never `undefined`.
         if element.has_default {
@@ -763,6 +767,7 @@ pub(crate) fn insert_object_binding_pattern_bindings(
         // name with a default is not a plain read of its property.
         if let (ParsedBindingName::Identifier { name, .. }, false, Some(span)) =
             (&element.binding_name, element.has_default, pattern.span)
+            && !element.computed_key
             && matches!(parameter_type.peeled(), Type::Union(_))
         {
             scopes.record_tuple_destructure(
@@ -782,6 +787,7 @@ pub(crate) fn insert_object_binding_pattern_bindings(
         let omitted: Vec<String> = pattern
             .elements
             .iter()
+            .filter(|element| !element.computed_key)
             .map(|element| element.property_name.clone())
             .collect();
         insert_binding_name(
@@ -1607,7 +1613,8 @@ fn binding_pattern_implied_type(binding: &ParsedBindingName) -> Option<ParsedTyp
     match binding {
         ParsedBindingName::ObjectPattern(pattern) => {
             let mut properties = Vec::with_capacity(pattern.elements.len());
-            for element in &pattern.elements {
+            // `getTypeFromObjectBindingPattern` leaves a computed name out.
+            for element in pattern.elements.iter().filter(|element| !element.computed_key) {
                 let ty = if element.has_default {
                     ParsedType::Any
                 } else {

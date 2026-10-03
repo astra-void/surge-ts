@@ -156,6 +156,8 @@ pub struct CheckerOptions {
     pub no_implicit_override: bool,
     pub no_property_access_from_index_signature: bool,
     pub no_unchecked_indexed_access: bool,
+    /// `noUncheckedSideEffectImports`: an unresolved `import "m"` is TS2882.
+    pub no_unchecked_side_effect_imports: bool,
     /// `exactOptionalPropertyTypes`: an optional property is written and
     /// related as declared, without the `undefined` a read of it adds.
     pub exact_optional_property_types: bool,
@@ -316,6 +318,7 @@ impl Default for CheckerOptions {
             no_implicit_override: false,
             no_property_access_from_index_signature: false,
             no_unchecked_indexed_access: false,
+            no_unchecked_side_effect_imports: true,
             exact_optional_property_types: false,
             allow_importing_ts_extensions: false,
             allow_arbitrary_extensions: false,

@@ -92,6 +92,49 @@ pub(crate) fn collect_global_function_signatures(
         }
     }
     merge_cross_file_script_namespaces(parsed_files, global_symbols, ctx);
+    merge_script_functions_into_ambient_namespaces(parsed_files, global_symbols, ctx);
+}
+
+/// A script's function and a declaration file's `declare namespace` of the
+/// same name are one global symbol in Go: callable, with the namespace's
+/// exports. The ambient table answers the name for every file, so the merged
+/// value replaces the namespace object there.
+fn merge_script_functions_into_ambient_namespaces(
+    parsed_files: &[ParsedProgramFile],
+    global_symbols: &mut SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    for parsed_file in parsed_files.iter().filter(|parsed_file| is_script_source(parsed_file)) {
+        for statement in &parsed_file.statements {
+            let Some(function) = declared_function(statement) else {
+                continue;
+            };
+            let Some(surge_ts_types::Type::Function(call_signature)) =
+                global_symbols.get_own(&function.name).map(|symbol| symbol.ty.clone())
+            else {
+                continue;
+            };
+            let Some(namespace) = ctx.ambient_global_symbols.get(&function.name) else {
+                continue;
+            };
+            let surge_ts_types::Type::Object(namespace_object) = &namespace.ty else {
+                continue;
+            };
+            if namespace_object.call_signature.is_some() || namespace_object.construct_signature.is_some() {
+                continue;
+            }
+            let merged = crate::symbols::SymbolInfo {
+                ty: surge_ts_types::Type::Object(
+                    crate::metrics::alloc_object_type(namespace_object.properties.as_ref().clone(), None)
+                        .with_call_signature(call_signature),
+                ),
+                kind: crate::symbols::SymbolKind::Function,
+                function_signature: None,
+            };
+            let _ = global_symbols.insert(function.name.clone(), merged.clone());
+            ctx.ambient_global_symbols.insert(function.name.clone(), merged);
+        }
+    }
 }
 
 /// tsc merges every script's globals into one table (`mergeSymbolTable`), so a
@@ -234,17 +277,15 @@ fn signature_declared_names(parsed_files: &[ParsedProgramFile]) -> std::collecti
 /// Each script file's own top-level values, for the other files to see: the
 /// binder declares every script's `var`/`let`/`const`/namespace in the one
 /// global table, so `let greeting` in `a.ts` is in scope in `b.ts` and in every
-/// module. Only a program where another script or a module reads them needs
-/// them.
+/// module. `typeof globalThis` reads them too (`script_global_object_members`),
+/// so even a lone script's are collected.
 pub(crate) fn collect_script_values(
     parsed_files: &[ParsedProgramFile],
     global_symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) -> Vec<Option<Arc<SymbolTable>>> {
     let mut values = vec![None; parsed_files.len()];
-    let scripts = parsed_files.iter().filter(|parsed_file| is_script_source(parsed_file)).count();
-    let read_elsewhere = scripts >= 2 || parsed_files.iter().any(|parsed_file| parsed_file.is_module);
-    if scripts == 0 || !read_elsewhere {
+    if !parsed_files.iter().any(is_script_source) {
         return values;
     }
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
@@ -272,7 +313,54 @@ pub(crate) fn collect_script_values(
         values[file_index] = Some(Arc::new(own));
     }
     merge_script_namespace_values(parsed_files, &mut values);
+    merge_script_namespaces_into_ambient_namespaces(parsed_files, &mut values, ctx);
     values
+}
+
+/// A script's `namespace A` and a declaration file's `declare namespace A` are
+/// one global namespace in Go, its members merged at every depth; the ambient
+/// table answers the name for every file, so the merged value replaces both.
+fn merge_script_namespaces_into_ambient_namespaces(
+    parsed_files: &[ParsedProgramFile],
+    values: &mut [Option<Arc<SymbolTable>>],
+    ctx: &mut CheckerContext,
+) {
+    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
+        if !is_script_source(parsed_file) {
+            continue;
+        }
+        for statement in &parsed_file.statements {
+            let ParsedStatement::NamespaceDeclaration(namespace) = statement else {
+                continue;
+            };
+            let Some(script) = values[file_index]
+                .as_ref()
+                .and_then(|table| table.get_own_shared(&namespace.name))
+            else {
+                continue;
+            };
+            let Some(ambient) = ctx.ambient_global_symbols.get_shared(&namespace.name) else {
+                continue;
+            };
+            let (surge_ts_types::Type::Object(ambient_object), surge_ts_types::Type::Object(_)) =
+                (&ambient.ty, &script.ty)
+            else {
+                continue;
+            };
+            if ambient_object.call_signature.is_some() || ambient_object.construct_signature.is_some() {
+                continue;
+            }
+            let merged = crate::symbols::SymbolInfo {
+                ty: crate::modules::merge_namespace_value_objects(&ambient.ty, &script.ty),
+                kind: script.kind,
+                function_signature: None,
+            };
+            ctx.ambient_global_symbols.insert(namespace.name.clone(), merged.clone());
+            if let Some(table) = values[file_index].as_mut() {
+                let _ = Arc::make_mut(table).insert(namespace.name.clone(), merged);
+            }
+        }
+    }
 }
 
 /// `namespace A` reopened in several scripts is one merged namespace, so every

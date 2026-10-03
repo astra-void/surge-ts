@@ -1121,9 +1121,11 @@ fn check_namespace_body(
                 .and_then(|fallback| fallback.get_handle(&namespace.name))
         })
     };
-    if let Some(merged) = merged
-        && let surge_ts_types::Type::Object(object) = &merged.ty
-    {
+    let merged_object = merged.and_then(|merged| match &merged.ty {
+        surge_ts_types::Type::Object(object) => Some(object.clone()),
+        _ => None,
+    });
+    if let Some(object) = &merged_object {
         for (name, property) in object.properties.iter() {
             let own = body_values.get_own(name).map(|symbol| symbol.ty.clone());
             // Another block's export, or this block's nested namespace, which
@@ -1157,6 +1159,27 @@ fn check_namespace_body(
         &mut function_signatures,
         ctx,
     );
+    // A function this block declares is one symbol with a same-named
+    // namespace another block of the namespace exports, so it carries that
+    // namespace's members here too.
+    if let Some(object) = &merged_object {
+        for (name, property) in object.properties.iter() {
+            let merged_function = matches!(&property.ty, surge_ts_types::Type::Object(member) if member.call_signature.is_some())
+                && symbols
+                    .get_own(name)
+                    .is_some_and(|symbol| matches!(symbol.ty, surge_ts_types::Type::Function(_)));
+            if merged_function && let Some(symbol) = symbols.get_own_shared(name) {
+                let _ = symbols.insert(
+                    name.to_string(),
+                    crate::symbols::SymbolInfo {
+                        ty: property.ty.clone(),
+                        kind: symbol.kind,
+                        function_signature: symbol.function_signature.clone(),
+                    },
+                );
+            }
+        }
+    }
     let saved_symbols = std::mem::take(&mut ctx.symbols);
     ctx.set_symbols(symbols);
     if let Some(prefix) = ctx.namespace_member_prefix_stack.last().cloned() {

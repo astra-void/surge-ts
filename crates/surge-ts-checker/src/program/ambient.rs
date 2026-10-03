@@ -343,7 +343,8 @@ pub(crate) fn collect_ambient_global_types(
     timings: Option<&Arc<Mutex<ProgramTimings>>>,
 ) {
     for parsed_file in parsed_files {
-        if !is_ambient_global_declaration_file(parsed_file, ctx)
+        if !(is_ambient_global_declaration_file(parsed_file, ctx)
+            || is_root_source_script(parsed_file))
             || !publishes_ambient_globals(parsed_file)
         {
             continue;
@@ -739,10 +740,40 @@ fn lower_ambient_namespace_values(parsed_files: &[ParsedProgramFile], ctx: &mut 
     let global_augmentation_value_names = global_augmentation_value_names(parsed_files);
 
     for name in order {
-        if ctx.ambient_global_symbols.get(&name).is_some() {
+        let properties = merged.remove(&name).unwrap_or_default();
+        if let Some(existing) = ctx.ambient_global_symbols.get(&name) {
+            // A function or class the namespace merges with keeps its call or
+            // construct signature and gains the namespace's exports.
+            let merged_value = match &existing.ty {
+                surge_ts_types::Type::Function(function) if !properties.is_empty() => Some(
+                    crate::metrics::alloc_object_type(properties, None)
+                        .with_call_signature(function.clone()),
+                ),
+                surge_ts_types::Type::Object(object)
+                    if !properties.is_empty()
+                        && (object.call_signature.is_some() || object.construct_signature.is_some()) =>
+                {
+                    let mut extended = object.clone();
+                    let mut members = (*object.properties).clone();
+                    for (member, property) in properties.iter() {
+                        members.entry(member.clone()).or_insert_with(|| property.clone());
+                    }
+                    extended.properties = Arc::new(members);
+                    extended.property_map_id = None;
+                    Some(extended)
+                }
+                _ => None,
+            };
+            if let Some(merged_value) = merged_value {
+                let symbol = crate::symbols::SymbolInfo {
+                    ty: surge_ts_types::Type::Object(merged_value),
+                    kind: existing.kind,
+                    function_signature: existing.function_signature.clone(),
+                };
+                ctx.ambient_global_symbols.insert(name, symbol);
+            }
             continue;
         }
-        let properties = merged.remove(&name).unwrap_or_default();
         // A namespace with no value members contributes nothing but an empty
         // object, and this pass runs before `declare global` blocks are lowered
         // (`collect_global_augmentations`) — claiming the name here would freeze
@@ -844,6 +875,17 @@ fn is_ambient_global_declaration_file(
     }
 
     true
+}
+
+/// A source file with no top-level import or export: Go's `initializeChecker`
+/// merges its locals into the globals table, so a module names its types as it
+/// names a declaration file's. A JavaScript script's JSDoc types are left to
+/// the script pass: published this early, an `import("./m")` typedef resolves
+/// before modules are bound and loses the TS1340 its use reports.
+fn is_root_source_script(parsed_file: &ParsedProgramFile) -> bool {
+    parsed_file.file_kind == FileKind::RootSource
+        && !parsed_file.is_module
+        && !surge_ts_syntax::is_javascript_file_name(&parsed_file.file_name)
 }
 
 /// Whether the file's own top-level declarations reach the *global* scope. A
@@ -955,6 +997,7 @@ fn register_ambient_blocks(
 ) -> Vec<AmbientModuleEntry> {
     let mut ambient_module_entries = Vec::<AmbientModuleEntry>::new();
     let mut ambient_module_indexes = HashMap::<String, usize>::new();
+    let augmentation_types = syntactic_ambient_augmentation_types(parsed_files, block_imports, ctx);
 
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
         ctx.set_file_name(parsed_file.file_name.clone());
@@ -1010,6 +1053,19 @@ fn register_ambient_blocks(
 
             let collect_start = Instant::now();
             collect_type_declarations(&module.statements, ctx);
+            if !parsed_file.is_module
+                && let Some(augmentation) = augmentation_types.get(&module.module_specifier)
+            {
+                for (name, declaration) in augmentation.iter() {
+                    if ctx.type_declarations.get(name.as_ref()).is_some() {
+                        crate::symbols::merge_augmentation_type_declaration_into_table(
+                            &mut ctx.type_declarations,
+                            name.as_ref(),
+                            declaration,
+                        );
+                    }
+                }
+            }
             record_type_declaration_table_clone(
                 timings,
                 ctx.type_declarations.len(),
@@ -1154,6 +1210,16 @@ fn register_ambient_blocks(
             ctx.type_declarations = current_type_declarations;
             ctx.symbols = current_symbols;
 
+            if !parsed_file.is_module {
+                register_nested_ambient_module_augmentations(
+                    parsed_file,
+                    module,
+                    &current_type_declarations_scope,
+                    &imported_symbols,
+                    ctx,
+                );
+            }
+
             if parsed_file.is_module {
                 // `declare module "x"` inside a module file augments an existing
                 // module rather than declaring a new ambient one. It is merged
@@ -1164,11 +1230,12 @@ fn register_ambient_blocks(
                     parsed_files,
                     ctx,
                 );
-                let declaring_file_contributions = if key
-                    .starts_with(MODULE_AUGMENTATION_FILE_KEY_PREFIX)
-                {
-                    Vec::new()
-                } else {
+                // Go's `mergeModuleAugmentation` merges an export the target only
+                // re-exports (`export *`) into the symbol it resolves to, so a
+                // relative augmentation reaches the declaring file too; the target
+                // file's own declarations already take the file-keyed entry.
+                let target_identity = key.strip_prefix(MODULE_AUGMENTATION_FILE_KEY_PREFIX);
+                let declaring_file_contributions: Vec<_> =
                     augmentation_contributions_by_declaring_file(
                         &parsed_file.file_name,
                         &module.module_specifier,
@@ -1176,9 +1243,11 @@ fn register_ambient_blocks(
                         parsed_files,
                         ctx,
                     )
-                };
+                    .into_iter()
+                    .filter(|(file_identity, _)| Some(file_identity.as_str()) != target_identity)
+                    .collect();
                 match Arc::make_mut(&mut ctx.module_augmentations).get_mut(&key) {
-                    Some(existing) => merge_module_export_tables(existing, &raw_export_table),
+                    Some(existing) => merge_module_augmentation_tables(existing, &raw_export_table),
                     None => {
                         Arc::make_mut(&mut ctx.module_augmentations).insert(key, raw_export_table);
                     }
@@ -1186,7 +1255,7 @@ fn register_ambient_blocks(
                 for (file_identity, contribution) in declaring_file_contributions {
                     let file_key = module_augmentation_file_key(&file_identity);
                     match Arc::make_mut(&mut ctx.module_augmentations).get_mut(&file_key) {
-                        Some(existing) => merge_module_export_tables(existing, &contribution),
+                        Some(existing) => merge_module_augmentation_tables(existing, &contribution),
                         None => {
                             Arc::make_mut(&mut ctx.module_augmentations)
                                 .insert(file_key, contribution);
@@ -1259,6 +1328,160 @@ fn resolve_ambient_export_tables(ambient_module_entries: &[AmbientModuleEntry], 
         ) {
             Arc::make_mut(&mut ctx.ambient_modules)
                 .insert(entry.module_specifier.clone(), resolved_export_table);
+        }
+    }
+}
+
+/// Go merges every augmentation into its module before anything resolves
+/// (`mergeModuleAugmentation` runs in `initializeChecker`), so a class an
+/// ambient module declares, and every signature naming it, sees the augmented
+/// members. A block is lowered and resolved as it is registered, before the
+/// augmentations written after it are, so the augmentations of script ambient
+/// modules are collected from syntax first: a module file's `declare module
+/// "x"`, and a `module "x"` nested in a script's ambient module, which resolves
+/// through the enclosing block and that block's imports.
+fn syntactic_ambient_augmentation_types(
+    parsed_files: &[ParsedProgramFile],
+    block_imports: Option<&AmbientBlockImports>,
+    ctx: &mut CheckerContext,
+) -> HashMap<String, TypeDeclarationTable> {
+    let mut augmentations: HashMap<String, TypeDeclarationTable> = HashMap::new();
+    let ambient: HashSet<&str> = parsed_files
+        .iter()
+        .filter(|parsed_file| !parsed_file.is_module)
+        .flat_map(|parsed_file| &parsed_file.statements)
+        .filter_map(|statement| match statement {
+            ParsedStatement::DeclareModuleDeclaration(module) if module.module_specifier != "global" => {
+                Some(module.module_specifier.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    if ambient.is_empty() {
+        return augmentations;
+    }
+    let saved_file_name = ctx.file_name.clone();
+    let saved_type_declarations = std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
+    let saved_scope = ctx.type_declaration_scope.take();
+    let diagnostics_before = ctx.diagnostics().len();
+    let collect = |statements: &[ParsedStatement], ctx: &mut CheckerContext| {
+        collect_type_declarations(statements, ctx);
+        std::mem::take(&mut ctx.type_declarations)
+    };
+    let mut add = |specifier: &str, table: TypeDeclarationTable, layers: Vec<Arc<TypeDeclarationTable>>| {
+        let scope = Arc::new(TypeDeclarationScope::new(layers));
+        let scoped = super::binding::attach_resolution_scope_to_declarations(&table, scope);
+        let entry = augmentations.entry(specifier.to_string()).or_default();
+        for (name, declaration) in scoped.iter() {
+            crate::symbols::merge_augmentation_type_declaration_into_table(entry, name.as_ref(), declaration);
+        }
+    };
+    for (file_index, parsed_file) in parsed_files.iter().enumerate() {
+        for (statement_index, statement) in parsed_file.statements.iter().enumerate() {
+            let ParsedStatement::DeclareModuleDeclaration(module) = statement else {
+                continue;
+            };
+            if module.module_specifier == "global" {
+                continue;
+            }
+            if parsed_file.is_module {
+                if !ambient.contains(module.module_specifier.as_str()) {
+                    continue;
+                }
+                ctx.set_file_name(parsed_file.file_name.clone());
+                let table = collect(&module.statements, ctx);
+                let layers = vec![Arc::new(table.clone())];
+                add(&module.module_specifier, table, layers);
+                continue;
+            }
+            for nested in &module.statements {
+                let ParsedStatement::DeclareModuleDeclaration(nested) = nested else {
+                    continue;
+                };
+                if !ambient.contains(nested.module_specifier.as_str()) {
+                    continue;
+                }
+                ctx.set_file_name(parsed_file.file_name.clone());
+                let enclosing = collect(&module.statements, ctx);
+                let table = collect(&nested.statements, ctx);
+                let mut layers = vec![Arc::new(table.clone()), Arc::new(enclosing)];
+                if let Some(bindings) =
+                    block_imports.and_then(|block_imports| block_imports.get(&(file_index, statement_index)))
+                {
+                    layers.extend(bindings.scope_layers());
+                }
+                add(&nested.module_specifier, table, layers);
+            }
+        }
+    }
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    ctx.type_declarations = saved_type_declarations;
+    ctx.type_declaration_scope = saved_scope;
+    ctx.set_file_name(saved_file_name);
+    augmentations
+}
+
+/// `declare module "Map" { module "Observable" { … } }` in a script file
+/// augments "Observable": Go's `isModuleAugmentationExternal` treats a
+/// string-named module directly inside a top-level ambient module of a
+/// non-module file as an augmentation. Its body resolves names through the
+/// enclosing block (that block's declarations and imports).
+fn register_nested_ambient_module_augmentations(
+    parsed_file: &ParsedProgramFile,
+    module: &surge_ts_syntax::ParsedDeclareModuleDeclaration,
+    enclosing_scope: &Arc<TypeDeclarationScope>,
+    enclosing_imports: &SymbolTable,
+    ctx: &mut CheckerContext,
+) {
+    for statement in &module.statements {
+        let ParsedStatement::DeclareModuleDeclaration(nested) = statement else {
+            continue;
+        };
+        if nested.module_specifier == "global" {
+            continue;
+        }
+        let saved_type_declarations =
+            std::mem::replace(&mut ctx.type_declarations, TypeDeclarationTable::new());
+        let saved_symbols = std::mem::replace(&mut ctx.symbols, SymbolTable::new());
+        let saved_scope = ctx.type_declaration_scope.clone();
+
+        collect_type_declarations(&nested.statements, ctx);
+        let mut layers = vec![Arc::new(ctx.type_declarations.clone())];
+        layers.extend(enclosing_scope.layers().iter().cloned());
+        let scope = Arc::new(TypeDeclarationScope::new(layers));
+        ctx.type_declaration_scope = Some(scope.clone());
+        let mut local_function_signatures = HashMap::new();
+        let mut nested_symbols = std::mem::take(&mut ctx.symbols);
+        collect_function_signatures_from_statements(
+            &nested.statements,
+            0,
+            &mut nested_symbols,
+            &mut local_function_signatures,
+            ctx,
+        );
+
+        let mut temp_file = parsed_file.clone();
+        temp_file.statements = nested.statements.clone();
+        let nested_type_declarations = std::mem::take(&mut ctx.type_declarations);
+        let table = build_module_export_table(
+            &temp_file,
+            &nested_type_declarations,
+            &nested_symbols,
+            enclosing_imports,
+            Some(scope),
+            ctx,
+        );
+
+        ctx.type_declarations = saved_type_declarations;
+        ctx.symbols = saved_symbols;
+        ctx.type_declaration_scope = saved_scope;
+
+        let augmentations = Arc::make_mut(&mut ctx.module_augmentations);
+        match augmentations.get_mut(&nested.module_specifier) {
+            Some(existing) => merge_module_augmentation_tables(existing, &table),
+            None => {
+                augmentations.insert(nested.module_specifier.clone(), table);
+            }
         }
     }
 }
@@ -1440,7 +1663,7 @@ pub(crate) fn collect_ambient_modules(
 /// Resolves `specifier` written in `from_file` to a program file index, taking
 /// the package resolver's answer for a bare specifier and the relative resolver
 /// otherwise.
-fn module_file_index_for_specifier(
+pub(crate) fn module_file_index_for_specifier(
     from_file: &str,
     specifier: &str,
     parsed_files: &[ParsedProgramFile],
@@ -1490,8 +1713,14 @@ fn declaring_file_for_exported_type(
         let Some(file) = parsed_files.get(index) else {
             continue;
         };
+        if export_assignment_namespace(&file.statements).is_some_and(|namespace| {
+            namespace_reexported_local(&file.statements, namespace, type_name).is_none()
+        }) {
+            return Some(crate::modules::canonical_file_identity(&file.file_name));
+        }
         let declares = |statement: &ParsedStatement| match statement {
             ParsedStatement::InterfaceDeclaration(declaration) => declaration.name == type_name,
+            ParsedStatement::ClassDeclaration(declaration) => declaration.name == type_name,
             _ => false,
         };
         for statement in &file.statements {
@@ -1543,7 +1772,7 @@ fn declaring_file_for_exported_type(
     None
 }
 
-/// Splits a bare-specifier augmentation into the per-file contributions that
+/// Splits an augmentation into the per-file contributions that
 /// [`declaring_file_for_exported_type`] can place, so each augmented interface
 /// also merges into the declaration table its subtypes resolve against. The
 /// specifier-keyed entry stays registered alongside: names with no resolvable
@@ -1658,9 +1887,50 @@ pub(crate) fn apply_file_keyed_module_augmentation(
                 let _ = export_table
                     .symbols
                     .insert_shared(name.clone(), symbol.clone());
+                // The namespace object was computed before the augmentation's
+                // values joined the table.
+                export_table.namespace_export_object_type = None;
             }
         }
+        merge_augmentation_values_into_export_assignment(export_table, augmentation);
     }
+}
+
+/// Go merges an augmentation into what `export =` resolves to when that is a
+/// namespace (`mergeModuleAugmentation`), so the augmentation's values are
+/// members of the assigned value — a nested namespace merging member by member.
+fn merge_augmentation_values_into_export_assignment(
+    export_table: &mut ModuleExportTable,
+    augmentation: &ModuleExportTable,
+) {
+    let Some(assignment) = export_table.export_assignment_symbol.as_ref() else {
+        return;
+    };
+    if !matches!(assignment.ty, surge_ts_types::Type::Object(_)) {
+        return;
+    }
+    let mut members = surge_ts_types::PropertyMap::default();
+    for (name, symbol) in augmentation.symbols.iter_shared() {
+        if !name.contains('.') {
+            members.insert(
+                name.as_ref().into(),
+                surge_ts_types::ObjectProperty::required(symbol.ty.clone()),
+            );
+        }
+    }
+    if members.is_empty() {
+        return;
+    }
+    let merged = crate::modules::merge_namespace_value_objects(
+        &assignment.ty,
+        &surge_ts_types::Type::Object(crate::metrics::alloc_object_type(members, None)),
+    );
+    export_table.export_assignment_symbol = Some(Arc::new(crate::symbols::SymbolInfo {
+        ty: merged,
+        kind: assignment.kind,
+        function_signature: assignment.function_signature.clone(),
+    }));
+    export_table.namespace_export_object_type = None;
 }
 
 pub(crate) fn has_file_keyed_module_augmentations(ctx: &CheckerContext) -> bool {
@@ -1679,20 +1949,88 @@ pub(crate) fn has_file_keyed_module_augmentations(ctx: &CheckerContext) -> bool 
 pub(crate) fn merge_file_keyed_module_augmentation_into_declarations(
     table: &mut crate::symbols::TypeDeclarationTable,
     file_identity: &str,
+    statements: &[ParsedStatement],
     ctx: &CheckerContext,
 ) {
     if let Some(augmentation) = ctx
         .module_augmentations
         .get(&module_augmentation_file_key(file_identity))
     {
+        // Go merges an augmentation into what `export =` resolves to when that
+        // is a namespace (`mergeModuleAugmentation`), so its types are the
+        // namespace's members.
+        let namespace = export_assignment_namespace(statements);
         for (name, declaration) in augmentation.type_declarations.iter() {
+            // A member the namespace re-exports (`export type { Req }`) is an
+            // alias: Go merges into what it resolves to, not into a new
+            // namespace member that would shadow it.
+            let name = match namespace {
+                Some(namespace) => match namespace_reexported_local(statements, namespace, name) {
+                    Some(local) => local.to_string(),
+                    None => format!("{namespace}.{name}"),
+                },
+                None => name.to_string(),
+            };
             crate::symbols::merge_augmentation_type_declaration_into_table(
                 table,
-                name.as_ref(),
+                &name,
                 declaration,
             );
         }
     }
+}
+
+/// The namespace a module's `export = X` names, when the module declares one.
+fn export_assignment_namespace(statements: &[ParsedStatement]) -> Option<&str> {
+    let exported = statements.iter().find_map(|statement| match statement {
+        ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+            ParsedExportDeclaration::Equals { exported_name, .. } => Some(exported_name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    })?;
+    statements
+        .iter()
+        .any(|statement| {
+            matches!(
+                crate::modules::peel_exported_statement(statement),
+                ParsedStatement::NamespaceDeclaration(namespace) if namespace.name == exported
+            )
+        })
+        .then_some(exported)
+}
+
+/// The local name a top-level `namespace` re-exports as `name` through an
+/// export specifier (`export { Local as name }`).
+fn namespace_reexported_local<'a>(
+    statements: &'a [ParsedStatement],
+    namespace: &str,
+    name: &str,
+) -> Option<&'a str> {
+    statements.iter().find_map(|statement| {
+        let ParsedStatement::NamespaceDeclaration(declaration) =
+            crate::modules::peel_exported_statement(statement)
+        else {
+            return None;
+        };
+        if declaration.name != namespace {
+            return None;
+        }
+        declaration.statements.iter().find_map(|member| match member {
+            ParsedStatement::ExportDeclaration(export) => match export.as_ref() {
+                ParsedExportDeclaration::Named {
+                    specifiers,
+                    module_specifier: None,
+                    ..
+                } => specifiers
+                    .iter()
+                    .find(|specifier| specifier.exported_name == name)
+                    .map(|specifier| specifier.local_name.as_str()),
+                _ => None,
+            },
+            _ => None,
+        })
+    })
 }
 
 pub(crate) fn apply_module_augmentation(
@@ -1712,6 +2050,20 @@ pub(crate) fn apply_module_augmentation(
             let _ = base.symbols.insert_shared(name.clone(), symbol.clone());
         }
     }
+}
+
+/// [`merge_module_export_tables`] for two augmentations of one module: each
+/// interface fragment keeps the scope of the block that wrote it, as it does
+/// once merged into the target (`merge_augmentation_type_declaration_into_table`).
+fn merge_module_augmentation_tables(target: &mut ModuleExportTable, source: &ModuleExportTable) {
+    for (name, declaration) in source.type_declarations.iter() {
+        crate::symbols::merge_augmentation_type_declaration_into_table(
+            Arc::make_mut(&mut target.type_declarations),
+            name.as_ref(),
+            declaration,
+        );
+    }
+    merge_module_export_tables(target, source);
 }
 
 pub(crate) fn merge_module_export_tables(

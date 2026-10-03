@@ -891,7 +891,11 @@ pub struct ParsedObjectBindingPattern {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedObjectBindingElement {
+    /// Empty for a [`Self::computed_key`] element.
     pub property_name: String,
+    /// `{ [key]: name }` with a key that is not a literal name: the element
+    /// reads whatever the key indexes, which names no property surge knows.
+    pub computed_key: bool,
     /// `{ a }` rather than `{ a: a }`. Unused-binding reporting keys on it:
     /// tsc exempts an `_`-prefixed local only when it renames a property.
     pub shorthand: bool,
@@ -1392,6 +1396,8 @@ pub enum ParsedExportDeclaration {
         module_specifier: String,
         module_specifier_span: Option<TextSpan>,
         span: Option<TextSpan>,
+        /// `export type * as ns from "x"`.
+        is_type_only: bool,
     },
     Empty {
         span: Option<TextSpan>,

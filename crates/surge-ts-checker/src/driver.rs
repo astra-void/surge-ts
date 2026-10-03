@@ -294,6 +294,7 @@ pub(crate) fn collect_global_augmentations(
                     block_statements,
                     enclosing_statements,
                     &parsed_file.statements,
+                    parsed_files,
                     ctx,
                 );
                 let block_table = if enclosing_statements.is_none() {
@@ -348,6 +349,7 @@ pub(crate) fn collect_global_augmentations_from_statements(
                 block_statements,
                 enclosing_statements,
                 statements,
+                &[],
                 ctx,
             ));
         },
@@ -421,6 +423,7 @@ fn collect_global_augmentation_block_types(
     block_statements: &[ParsedStatement],
     enclosing_statements: Option<&[ParsedStatement]>,
     file_statements: &[ParsedStatement],
+    parsed_files: &[crate::program::ParsedProgramFile],
     ctx: &mut CheckerContext,
 ) -> crate::symbols::TypeDeclarationTable {
     let saved_type_declarations = std::mem::replace(
@@ -456,6 +459,7 @@ fn collect_global_augmentation_block_types(
     publish_global_augmentation_alias_types(
         block_statements,
         enclosing_statements.unwrap_or(file_statements),
+        parsed_files,
         &mut block_table,
         ctx,
     );
@@ -475,6 +479,7 @@ fn collect_global_augmentation_block_types(
 fn publish_global_augmentation_alias_types(
     block_statements: &[ParsedStatement],
     enclosing_statements: &[ParsedStatement],
+    parsed_files: &[crate::program::ParsedProgramFile],
     block_table: &mut crate::symbols::TypeDeclarationTable,
     ctx: &mut CheckerContext,
 ) {
@@ -516,6 +521,10 @@ fn publish_global_augmentation_alias_types(
             });
             if names_entity(enclosing_table, target) {
                 entity_alias_type_entries(enclosing_table, target, local, Some(&*enclosing_scope))
+            } else if let Some(entries) =
+                imported_entity_alias_type_entries(enclosing_statements, target, local, parsed_files, ctx)
+            {
+                entries
             } else {
                 entity_alias_type_entries(&ctx.ambient_global_type_declarations, target, local, None)
             }
@@ -524,6 +533,54 @@ fn publish_global_augmentation_alias_types(
             let _ = block_table.insert(name, declaration);
         }
     }
+}
+
+/// [`entity_alias_type_entries`] for an entity whose root the enclosing file
+/// imports by name (`import { JSXInternal } from ".."` then `export import JSX =
+/// JSXInternal` in its `declare global`): the entity is read from the imported
+/// file's own declarations, which is where it resolves.
+fn imported_entity_alias_type_entries(
+    enclosing_statements: &[ParsedStatement],
+    target: &str,
+    local: &str,
+    parsed_files: &[crate::program::ParsedProgramFile],
+    ctx: &mut CheckerContext,
+) -> Option<Vec<(String, TypeDeclarationInfo)>> {
+    let (root, rest) = match target.split_once('.') {
+        Some((root, rest)) => (root, Some(rest)),
+        None => (target, None),
+    };
+    let (module_specifier, imported_name) = enclosing_statements.iter().find_map(|statement| {
+        let ParsedStatement::ImportDeclaration(import) = statement else {
+            return None;
+        };
+        let surge_ts_syntax::ParsedImportKind::Named { specifiers, .. } = &import.kind else {
+            return None;
+        };
+        specifiers
+            .iter()
+            .find(|specifier| specifier.local_name == root)
+            .map(|specifier| (import.module_specifier.as_str(), specifier.imported_name.as_str()))
+    })?;
+    let index = crate::program::module_file_index_for_specifier(
+        &ctx.file_name.clone(),
+        module_specifier,
+        parsed_files,
+        ctx,
+    )?;
+    let imported_file = parsed_files.get(index)?;
+    let saved = std::mem::replace(&mut ctx.type_declarations, crate::symbols::TypeDeclarationTable::new());
+    let diagnostics_before = ctx.diagnostics().len();
+    collect_type_declarations(&imported_file.statements, ctx);
+    ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+    let table = std::mem::replace(&mut ctx.type_declarations, saved);
+    let scope = Arc::new(crate::symbols::TypeDeclarationScope::new(vec![Arc::new(table.clone())]));
+    let entity = match rest {
+        Some(rest) => format!("{imported_name}.{rest}"),
+        None => imported_name.to_string(),
+    };
+    let entries = entity_alias_type_entries(&table, &entity, local, Some(&scope));
+    (!entries.is_empty()).then_some(entries)
 }
 
 /// The type declarations the entity path `target` names in `source`, keyed
@@ -848,17 +905,24 @@ pub(crate) fn sync_global_this_symbol_with_scripts(
     // and assignability walked an unbounded unfolding of the same type; a
     // reference keeps `typeof globalThis` deferred inside the intersection and
     // tsc-shaped in diagnostics.
-    let global_object =
-        surge_ts_types::Type::Object(crate::metrics::alloc_object_type(properties, None));
+    //
+    // Go declares `globalThis` in the globals table it exports, so the global
+    // object has itself as a read-only member. The member holds the object
+    // weakly: a strong self-reference would be a cycle nothing reclaims.
+    let global_object = std::sync::Arc::new_cyclic(|own: &std::sync::Weak<surge_ts_types::Type>| {
+        properties.insert(
+            "globalThis".into(),
+            surge_ts_types::ObjectProperty::required(global_object_reference(std::sync::Arc::new(
+                WeakGlobalObjectType(own.clone()),
+            )))
+            .with_readonly(true),
+        );
+        surge_ts_types::Type::Object(crate::metrics::alloc_object_type(properties, None))
+    });
     ctx.ambient_global_symbols.insert(
         "globalThis".to_string(),
         crate::symbols::SymbolInfo {
-            ty: surge_ts_types::Type::Reference(surge_ts_types::TypeReference::new(
-                GLOBAL_THIS_REFERENCE_ID,
-                "typeof globalThis",
-                Vec::new(),
-                std::sync::Arc::new(GlobalObjectType(std::sync::Arc::new(global_object))),
-            )),
+            ty: global_object_reference(std::sync::Arc::new(GlobalObjectType(global_object))),
             kind: crate::symbols::SymbolKind::Const,
             function_signature: None,
         },
@@ -870,7 +934,37 @@ pub(crate) fn sync_global_this_symbol_with_scripts(
 /// ids.
 pub(crate) const GLOBAL_THIS_REFERENCE_ID: &str = "\u{0}globalThis";
 
+fn global_object_reference(
+    resolver: std::sync::Arc<dyn surge_ts_types::ResolveReference>,
+) -> surge_ts_types::Type {
+    surge_ts_types::Type::Reference(surge_ts_types::TypeReference::new(
+        GLOBAL_THIS_REFERENCE_ID,
+        "typeof globalThis",
+        Vec::new(),
+        resolver,
+    ))
+}
+
 struct GlobalObjectType(std::sync::Arc<surge_ts_types::Type>);
+
+/// `globalThis.globalThis`: the global object, held weakly by its own member.
+struct WeakGlobalObjectType(std::sync::Weak<surge_ts_types::Type>);
+
+impl surge_ts_types::ResolveReference for WeakGlobalObjectType {
+    fn resolve(&self) -> surge_ts_types::Type {
+        self.0.upgrade().map_or(surge_ts_types::Type::Unknown, |object| (*object).clone())
+    }
+
+    fn resolve_arc(&self) -> std::sync::Arc<surge_ts_types::Type> {
+        self.0
+            .upgrade()
+            .unwrap_or_else(|| std::sync::Arc::new(surge_ts_types::Type::Unknown))
+    }
+
+    fn peek_resolved(&self) -> Option<std::sync::Arc<surge_ts_types::Type>> {
+        self.0.upgrade()
+    }
+}
 
 impl surge_ts_types::ResolveReference for GlobalObjectType {
     fn resolve(&self) -> surge_ts_types::Type {
@@ -1507,7 +1601,8 @@ fn check_statement(statement: ParsedStatement, ctx: &mut CheckerContext) {
             if crate::modules::is_external_specifier(&import.module_specifier) {
                 let suppress_unresolved_diagnostic =
                     matches!(&import.kind, surge_ts_syntax::ParsedImportKind::SideEffect)
-                        && is_runtime_js_only_module(&import.module_specifier, ctx);
+                        && (!ctx.options.no_unchecked_side_effect_imports
+                            || is_runtime_js_only_module(&import.module_specifier, ctx));
 
                 if !ctx.options.stub_external_modules && !suppress_unresolved_diagnostic {
                     let mut diagnostic = match &import.kind {
@@ -2071,8 +2166,19 @@ fn filter_conflicting_interface_members(
     ctx: &mut CheckerContext,
 ) -> InterfaceInfo {
     // First declaration of each name wins, matching the `find` this replaces.
+    // A script's own declaration already sits in the global interface
+    // (`collect_ambient_global_types` publishes it), and is no earlier
+    // declaration of its own members.
     let mut existing_by_name = HashMap::new();
-    for member in &existing.body.members {
+    for (index, member) in existing.body.members.iter().enumerate() {
+        let own = existing
+            .body
+            .member_fragments
+            .get(index)
+            .is_some_and(|fragment| incoming.body.declaration_fragments.contains(fragment));
+        if own {
+            continue;
+        }
         existing_by_name
             .entry(member.name.as_str())
             .or_insert(member);

@@ -366,9 +366,18 @@ pub(super) fn suggested_value_name(
             && candidate.len().abs_diff(name.len()) <= max_length_difference
             && (candidate.len() >= 3 || candidate.eq_ignore_ascii_case(name))
     };
+    // The file's own values bound past the statement scope (a namespace, a
+    // later declaration) are in scope for tsc's `resolveName` too.
+    let file_values = ctx.module_value_fallback.as_deref();
     let mut candidates: Vec<&str> = symbols
         .visible_names()
         .chain(ctx.symbols.visible_names())
+        .chain(
+            file_values
+                .into_iter()
+                .flat_map(|values| values.visible_names())
+                .filter(|candidate| !candidate.contains('.')),
+        )
         .chain(ctx.ambient_global_symbols.visible_names())
         .map(|candidate| candidate.as_ref())
         // Globals the lib does not declare as bindings.

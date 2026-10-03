@@ -299,6 +299,12 @@ pub(crate) fn emit_unresolved_module_diagnostic(
     ctx: &mut CheckerContext,
     import: &ParsedImportDeclaration,
 ) {
+    // Go resolves a side-effect import only under `noUncheckedSideEffectImports`.
+    if matches!(import.kind, ParsedImportKind::SideEffect)
+        && !ctx.options.no_unchecked_side_effect_imports
+    {
+        return;
+    }
     let resolution_mode = import_resolution_mode(import);
     if !matches!(import.kind, ParsedImportKind::SideEffect)
         && push_untyped_javascript_module_diagnostic(
@@ -543,6 +549,29 @@ pub(crate) fn syntactic_export_names(
         }
     }
     Some(exported)
+}
+
+/// Whether the module file exports a namespace `name` by declaration
+/// (`export namespace N {}`). The binder declares that export whatever the
+/// body holds, while surge's tables only carry a namespace's members, so an
+/// empty one leaves no trace there.
+pub(crate) fn module_declares_exported_namespace(
+    resolved_index: Option<usize>,
+    program_files: &[ParsedProgramFile],
+    name: &str,
+) -> bool {
+    let Some(file) = resolved_index.and_then(|index| program_files.get(index)) else {
+        return false;
+    };
+    file.statements.iter().any(|statement| match statement {
+        ParsedStatement::ExportDeclaration(export) => matches!(
+            export.as_ref(),
+            ParsedExportDeclaration::Statement { declaration, .. }
+                if matches!(declaration.as_ref(), ParsedStatement::NamespaceDeclaration(namespace)
+                    if namespace.name.split('.').next() == Some(name))
+        ),
+        _ => false,
+    })
 }
 
 /// tsc's `errorNoModuleMemberSymbol` for a named import the module does not

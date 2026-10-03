@@ -54,6 +54,9 @@ pub struct NormalizedCompilerOptions {
     pub no_property_access_from_index_signature: bool,
     /// `compilerOptions.noUncheckedIndexedAccess`. Independent of `strict`; defaults off.
     pub no_unchecked_indexed_access: bool,
+    /// `compilerOptions.noUncheckedSideEffectImports`. tsgo reads it as a
+    /// tristate whose unset value is on (`IsTrueOrUnknown`).
+    pub no_unchecked_side_effect_imports: bool,
     /// `compilerOptions.exactOptionalPropertyTypes`. Independent of `strict`; defaults off.
     pub exact_optional_property_types: bool,
     /// `compilerOptions.allowImportingTsExtensions`. Defaults off; without it an
@@ -175,6 +178,7 @@ impl Default for NormalizedCompilerOptions {
             verbatim_module_syntax: false,
             no_property_access_from_index_signature: false,
             no_unchecked_indexed_access: false,
+            no_unchecked_side_effect_imports: true,
             exact_optional_property_types: false,
             allow_importing_ts_extensions: false,
             rewrite_relative_import_extensions: false,

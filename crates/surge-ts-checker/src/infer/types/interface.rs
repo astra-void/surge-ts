@@ -341,6 +341,65 @@ fn generic_interface_display_name(interface: &InterfaceInfo) -> String {
     format!("{name}<{parameters}>")
 }
 
+/// The bare name a merged interface's fragments declare it by: a declaration
+/// reached through an import or a namespace carries a qualified or renamed
+/// name of its own.
+fn fragment_declared_name(interface: &InterfaceInfo) -> &str {
+    let name = interface.declared_name.as_deref().unwrap_or(&interface.name);
+    name.rsplit('.').next().unwrap_or(name)
+}
+
+/// The scope a declaration without one of its own resolves its body under:
+/// its file's module scope, unless that scope does not declare it. A
+/// declaration in a `declare module` block's own table carries no scope (the
+/// table and the block scope would hold each other) and is reached through the
+/// block scope installed where it is referenced; the names around it are that
+/// scope's from the layer declaring it outward, as Go resolves a declaration's
+/// names where it is written.
+fn unscoped_declaration_scope(
+    file_name: &str,
+    name: &str,
+    handle: &TypeDeclarationHandle,
+    ctx: &CheckerContext,
+) -> Option<Arc<crate::symbols::TypeDeclarationScope>> {
+    let module_scope = ctx.module_scope_for_file(file_name).filter(|scope| !scope.is_empty())?;
+    if module_scope
+        .get_handle(name)
+        .is_some_and(|declared| same_declaration(&declared, handle))
+    {
+        return Some(module_scope);
+    }
+    let installed = ctx.type_declaration_scope.as_ref()?;
+    let layers = installed.layers();
+    match layers
+        .iter()
+        .position(|layer| layer.get_handle(name).is_some_and(|declared| declared.ptr_eq(handle)))
+    {
+        Some(position) => {
+            let scope = crate::symbols::TypeDeclarationScope::new(layers[position..].to_vec())
+                .with_lexical_layers(installed.lexical_layer_count().saturating_sub(position));
+            Some(Arc::new(if installed.is_preliminary() { scope.preliminary() } else { scope }))
+        }
+        None => Some(module_scope),
+    }
+}
+
+/// Whether two handles name one declaration. The module scope can hold its
+/// own copy of a declaration (rescoped or merged), so payload identity alone
+/// misses it; a declaration is its file and the span of its name.
+fn same_declaration(a: &TypeDeclarationHandle, b: &TypeDeclarationHandle) -> bool {
+    if a.ptr_eq(b) {
+        return true;
+    }
+    let site = |handle: &TypeDeclarationHandle| match handle.get() {
+        crate::symbols::TypeDeclarationInfo::Interface(info) => (info.file_name.clone(), info.name_span),
+        crate::symbols::TypeDeclarationInfo::Alias(info) => (info.file_name.clone(), info.name_span),
+    };
+    let (a_file, a_span) = site(a);
+    let (b_file, b_span) = site(b);
+    a_span.is_some() && a_span == b_span && a_file == b_file
+}
+
 pub(crate) fn resolve_interface(
     interface: &InterfaceInfo,
     handle: TypeDeclarationHandle,
@@ -426,10 +485,10 @@ pub(crate) fn resolve_interface(
     // scope is empty. A sibling declaration reached through the installed block
     // scope carries no resolution_scope of its own; replacing the block scope
     // with the empty fallback made every name in the sibling's body miss.
-    let declaration_effective_scope = interface.resolution_scope.clone().or_else(|| {
-        ctx.module_scope_for_file(&interface.file_name)
-            .filter(|scope| !scope.is_empty())
-    });
+    let declaration_effective_scope = interface
+        .resolution_scope
+        .clone()
+        .or_else(|| unscoped_declaration_scope(&interface.file_name, &interface.name, &handle, ctx));
     // See `resolve_type_alias`: a default names its namespace siblings bare.
     let default_prefix = crate::infer::types::utility::namespace_member_prefix(
         interface.declared_name.as_deref(),
@@ -796,6 +855,7 @@ pub(crate) fn resolve_interface(
                     interface_key.as_ref(),
                     lazy_member_context,
                     interface.body.has_foreign_fragments().then(|| &*interface.body),
+                    Some((fragment_declared_name(interface), &handle)),
                 )
             })
         })
@@ -978,6 +1038,7 @@ fn install_member_scope(
 fn foreign_fragment_scope(
     body: &crate::symbols::InterfaceBody,
     fragment: &crate::symbols::InterfaceDeclarationFragmentId,
+    merged: Option<(&str, &TypeDeclarationHandle)>,
     ctx: &CheckerContext,
 ) -> Option<(Arc<crate::symbols::TypeDeclarationScope>, Arc<str>)> {
     if let Some((_, scope)) = body
@@ -985,6 +1046,21 @@ fn foreign_fragment_scope(
         .iter()
         .find(|(candidate, _)| candidate == fragment)
     {
+        // The augmentation's own declaration of the interface is the merged
+        // symbol in Go (`mergeModuleAugmentation`), so its name reads the merged
+        // declaration from inside the fragment, not the fragment alone.
+        if let Some((name, handle)) = merged
+            && scope.get_handle(name).is_some_and(|declared| !declared.ptr_eq(handle))
+        {
+            let mut own = crate::symbols::TypeDeclarationTable::new();
+            own.insert_handle(name, handle);
+            let mut layers = vec![Arc::new(own)];
+            layers.extend(scope.layers().iter().cloned());
+            return Some((
+                Arc::new(crate::symbols::TypeDeclarationScope::new(layers)),
+                fragment.file_name.clone(),
+            ));
+        }
         return Some((scope.clone(), fragment.file_name.clone()));
     }
     if *fragment.file_name == *ctx.file_name || !body.module_global_fragments.contains(fragment) {
@@ -1032,6 +1108,9 @@ pub(crate) fn resolve_interface_declaration(
     // file and must resolve under that file's scope rather than this
     // declaration's (`foreign_fragment_scope`).
     augmented_body: Option<&crate::symbols::InterfaceBody>,
+    // The merged declaration being resolved, under the name its fragments
+    // declare it by.
+    merged_self: Option<(&str, &TypeDeclarationHandle)>,
 ) -> ResolvedType {
     crate::program::record_interface_member_declaration_visits(members.len());
     crate::program::record_program_counter(|c| {
@@ -1065,7 +1144,7 @@ pub(crate) fn resolve_interface_declaration(
     for (base_index, base) in extends.iter().enumerate() {
         let installed_base_scope = augmented_body
             .and_then(|body| Some((body, body.extends_fragments.get(base_index)?)))
-            .and_then(|(body, fragment)| foreign_fragment_scope(body, fragment, ctx))
+            .and_then(|(body, fragment)| foreign_fragment_scope(body, fragment, merged_self, ctx))
             .map(|(scope, file_name)| install_member_scope(ctx, &scope, &file_name));
         // `resolveBaseTypesOfClass`: a class whose base is not a class derives
         // from a constructor function, and its type arguments select among the
@@ -1317,7 +1396,7 @@ pub(crate) fn resolve_interface_declaration(
         let mut deferred_method_components = false;
         let installed_member_scope = augmented_body
             .and_then(|body| Some((body, body.member_fragments.get(member_index)?)))
-            .and_then(|(body, fragment)| foreign_fragment_scope(body, fragment, ctx))
+            .and_then(|(body, fragment)| foreign_fragment_scope(body, fragment, merged_self, ctx))
             .map(|(scope, file_name)| install_member_scope(ctx, &scope, &file_name));
         let mut property_type = if let Some(function) = cached_method {
             ResolvedType {
