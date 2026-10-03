@@ -309,6 +309,27 @@ fn resolve_named_type_inner(
             had_error: false,
         };
     }
+    // Likewise a bare `array` is `any[]` and a bare `promise` is
+    // `Promise<any>`.
+    if matches!(named_type.name.as_str(), "array" | "promise")
+        && named_type.type_arguments.is_empty()
+        && !ctx.options.no_implicit_any
+        && resolving.is_empty()
+        && surge_ts_syntax::is_javascript_file_name(&ctx.file_name)
+    {
+        if named_type.name == "array" {
+            return ResolvedType {
+                ty: Type::Array(Box::new(Type::Any)),
+                had_error: false,
+            };
+        }
+        let promise = std::sync::Arc::new(ParsedNamedType {
+            name: "Promise".to_string(),
+            span: named_type.span,
+            type_arguments: vec![ParsedType::Any],
+        });
+        return resolve_named_type_inner(promise, ctx, resolving, substitution);
+    }
 
     // Look up the declaration through a context-independent handle so resolution
     // can read the (often large) interface/alias payload while `ctx` is borrowed
