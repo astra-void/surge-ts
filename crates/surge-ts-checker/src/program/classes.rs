@@ -1293,7 +1293,7 @@ fn check_inherited_abstract_members(class: &ParsedClassDeclaration, ctx: &mut Ch
     const LISTED_WHEN_TRUNCATED: usize = 4;
     const MAX_LISTED: usize = 5;
 
-    if class.is_abstract || class.is_declare {
+    if class.is_abstract {
         return;
     }
     let Some(base) = class.extends.first() else {
@@ -1325,9 +1325,10 @@ fn check_inherited_abstract_members(class: &ParsedClassDeclaration, ctx: &mut Ch
         else {
             return;
         };
-        // A base whose declaration surge resolved out of a declaration file may
-        // not be the class the oracle sees; stay quiet rather than guess.
-        if info.file_name.ends_with(".d.ts") {
+        // A base whose declaration surge resolved out of another declaration
+        // file may not be the class the oracle sees; stay quiet rather than
+        // guess.
+        if info.file_name.ends_with(".d.ts") && *info.file_name != *ctx.file_name {
             return;
         }
         for member in &info.body.members {

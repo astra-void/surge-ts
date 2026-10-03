@@ -5161,3 +5161,59 @@ status = "emitted"
 oracle = [
   "isolated-modules-enum-cross-file-member",
 ]
+
+[TS1048]
+status = "emitted"
+fixtures = [
+  "tests/checker/grammar_and_member_checks",
+]
+
+[TS1186]
+status = "emitted"
+fixtures = [
+  "tests/checker/grammar_and_member_checks",
+]
+
+[TS1355]
+status = "emitted"
+fixtures = [
+  "tests/checker/grammar_and_member_checks",
+]
+
+[TS1493]
+status = "emitted"
+fixtures = [
+  "tests/checker/grammar_and_member_checks",
+]
+
+[TS1494]
+status = "emitted"
+fixtures = [
+  "tests/checker/grammar_and_member_checks",
+]
+
+[TS2795]
+status = "emitted"
+fixtures = [
+  "tests/checker/grammar_and_member_checks",
+]
+
+[TS2838]
+status = "emitted"
+fixtures = [
+  "tests/checker/grammar_and_member_checks",
+]
+
+[TS2855]
+status = "emitted"
+fixtures = [
+  "tests/checker/grammar_and_member_checks",
+]
+
+[TS17012]
+status = "catalog-only"
+reason = "Reported by the grammar walker, but oxc rejects the misspelled meta-property before it runs"
+
+[TS18061]
+status = "catalog-only"
+reason = "Reported by the grammar walker, but oxc rejects the misspelled meta-property before it runs"

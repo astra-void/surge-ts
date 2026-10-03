@@ -295,6 +295,7 @@ impl ResolveReference for LazyInstantiation {
                 self.decl.clone(),
                 self.type_arguments.clone(),
                 None,
+                None,
                 &mut ctx,
                 &mut resolving,
                 &self.substitution,

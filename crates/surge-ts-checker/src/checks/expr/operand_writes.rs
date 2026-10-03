@@ -424,8 +424,13 @@ pub(crate) fn check_update_operand(
         return;
     };
 
-    // tsc runs `checkNonNullType` on the operand first, so a possibly-undefined
-    // operand is reported as that and never as a bad arithmetic operand.
+    // tsc runs `checkNonNullType` on the operand first, so an `unknown` or
+    // possibly-undefined operand is reported as that and never as a bad
+    // arithmetic operand.
+    if *operand_type == Type::GenuineUnknown && super::report_unknown_operand(operand, Some(span), ctx) {
+        report_rejected_target(ctx);
+        return;
+    }
     if super::maybe_emit_possibly_undefined_receiver(
         operand,
         operand_type,

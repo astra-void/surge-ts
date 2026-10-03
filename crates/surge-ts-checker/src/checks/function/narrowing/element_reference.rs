@@ -170,7 +170,7 @@ pub(super) fn narrowed_element_references(
             crate::infer::InferredExpression::Known(ty) => ty,
             _ => continue,
         };
-        if declared.is_unmodelled() {
+        if declared.is_unmodelled() && declared != Type::GenuineUnknown {
             continue;
         }
         let Some((narrowed_ty, _)) = guard.narrow_leaf(&declared, false) else {

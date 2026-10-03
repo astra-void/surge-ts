@@ -470,15 +470,23 @@ fn parse_class_heritage(class: &Class<'_>) -> Vec<ParsedNamedType> {
         }];
     };
 
-    let type_arguments = class
-        .super_type_arguments
-        .as_deref()
-        .and_then(parse_type_arguments)
-        .or_else(|| super::jsdoc::extends_type_arguments_at(class.span.start))
-        .unwrap_or_default();
+    let (type_arguments, type_argument_spans) =
+        match class.super_type_arguments.as_deref().and_then(parse_type_arguments) {
+            Some(arguments) => (arguments, Vec::new()),
+            // The arguments are written on the `@augments` tag, where tsc
+            // reports what is wrong with them.
+            None => match super::jsdoc::extends_type_arguments_at(class.span.start) {
+                Some((arguments, Some(tag_span))) => {
+                    let spans = vec![tag_span; arguments.len()];
+                    (arguments, spans)
+                }
+                Some((arguments, None)) => (arguments, Vec::new()),
+                None => (Vec::new(), Vec::new()),
+            },
+        };
 
     vec![ParsedNamedType {
-        type_argument_spans: Vec::new(),
+        type_argument_spans,
         name,
         span: Some(span),
         type_arguments,

@@ -1892,7 +1892,7 @@ pub(crate) struct JsDocIndex {
     return_casts: std::collections::HashMap<u32, (ParsedType, TextSpan, bool)>,
     /// A class's `@augments` type arguments for its `extends` clause, by the
     /// class's start.
-    extends_type_arguments: std::collections::HashMap<u32, Vec<ParsedType>>,
+    extends_type_arguments: std::collections::HashMap<u32, (Vec<ParsedType>, Option<crate::TextSpan>)>,
     /// The parse errors of the attached JSDoc comments.
     diagnostics: Vec<crate::ParsedGrammarDiagnostic>,
     /// What reparsing a tag finds wrong: a parse error of the file itself
@@ -2004,7 +2004,7 @@ pub(crate) fn return_cast_at(start: u32) -> Option<(ParsedType, TextSpan, bool)>
     with_index(|index| index.return_casts.get(&start).cloned())
 }
 
-pub(crate) fn extends_type_arguments_at(class_start: u32) -> Option<Vec<ParsedType>> {
+pub(crate) fn extends_type_arguments_at(class_start: u32) -> Option<(Vec<ParsedType>, Option<crate::TextSpan>)> {
     with_index(|index| index.extends_type_arguments.get(&class_start).cloned())
 }
 
@@ -3060,7 +3060,7 @@ impl IndexBuilder<'_, '_> {
                     self.index
                         .extends_type_arguments
                         .entry(class.span.start)
-                        .or_insert_with(|| named.type_arguments.clone());
+                        .or_insert_with(|| (named.type_arguments.clone(), named.span));
                 }
             }
         }

@@ -890,6 +890,9 @@ pub(crate) fn lib_lacks_builtin_member(receiver: &Type, name: &str, ctx: &Checke
     let interface_name = match receiver {
         Type::Array(_) | Type::Tuple(_) => "Array",
         Type::String | Type::StringLiteral(_) => "String",
+        Type::Number | Type::NumberLiteral(_) => "Number",
+        Type::BigInt => "BigInt",
+        Type::Symbol => "Symbol",
         _ => return false,
     };
     match ctx.lookup_type_declaration(interface_name) {

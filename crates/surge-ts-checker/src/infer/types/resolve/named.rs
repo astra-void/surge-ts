@@ -538,6 +538,7 @@ fn resolve_named_type_inner(
                 handle.clone(),
                 named_type.type_arguments.clone(),
                 named_type.span,
+                type_argument_report_span(&named_type),
                 ctx,
                 resolving,
                 substitution,
@@ -1060,6 +1061,7 @@ fn resolve_named_type_inner(
             handle.clone(),
             named_type.type_arguments.clone(),
             named_type.span,
+            type_argument_report_span(&named_type),
             ctx,
             resolving,
             substitution,
@@ -1663,6 +1665,7 @@ fn complete_interface_default_arguments(
         named_type.type_arguments.clone(),
         &interface.name,
         interface.name_span,
+        interface.name_span,
         ctx,
         resolving,
         substitution,
@@ -2184,4 +2187,14 @@ fn report_interface_type_argument_count(
         ctx,
     );
     true
+}
+
+/// Where a reference's argument errors go: the arguments themselves when the
+/// reference records them apart from its name (a JS class's `@augments` tag),
+/// otherwise the reference.
+fn type_argument_report_span(named_type: &ParsedNamedType) -> Option<surge_ts_syntax::TextSpan> {
+    match named_type.type_argument_spans.as_slice() {
+        [first, ..] if named_type.type_argument_spans.len() == named_type.type_arguments.len() => Some(*first),
+        _ => named_type.span,
+    }
 }

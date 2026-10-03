@@ -579,6 +579,14 @@ fn check_property_call_like_unrecorded(
     }
     let object_ty =
         match crate::checks::expr::evaluate_expression(object, object_span, symbols, ctx) {
+            // `checkNonNullExpression`: an `unknown` receiver is reported and
+            // the call goes on as the error type.
+            crate::infer::InferredExpression::Known(Type::GenuineUnknown)
+                if crate::checks::expr::report_unknown_operand(object, object_span.or(call_span), ctx) =>
+            {
+                evaluate_arguments_on_error_type(arguments, symbols, ctx);
+                return Some(Type::ErrorType);
+            }
             // `Promise<T>` is modelled as its awaited `T` (see the `.then`
             // arm below), so a `void`-resolving promise looks `undefined` to
             // the receiver check; the promise itself is never nullish.

@@ -369,6 +369,31 @@ fn evaluate_arithmetic_binary(
     fallback_span: Option<SyntaxTextSpan>,
     ctx: &mut CheckerContext,
 ) -> InferredExpression {
+    // `errorType` is `any` to `checkArithmeticOperandType`: the other
+    // operand is still checked.
+    let is_error = |result: &InferredExpression| {
+        matches!(
+            result,
+            InferredExpression::UnresolvedIdentifier { .. }
+                | InferredExpression::MissingProperty { .. }
+                | InferredExpression::Known(Type::ErrorType)
+        )
+    };
+    if is_error(&left_result) || is_error(&right_result) {
+        let invalid = |result: &InferredExpression| {
+            !is_error(result)
+                && inferred_type(result).is_some_and(|ty| !is_unmodelled(ty) && !is_valid_arithmetic_operand(ty))
+        };
+        if invalid(&left_result) {
+            let file_name = ctx.file_name.clone();
+            push_diagnostic(ctx, Diagnostic::ts2362(file_name), left_span);
+        }
+        if invalid(&right_result) {
+            let file_name = ctx.file_name.clone();
+            push_diagnostic(ctx, Diagnostic::ts2363(file_name), right_span);
+        }
+        return InferredExpression::Unknown;
+    }
     let Some(left_type) = inferred_type(&left_result) else {
         return InferredExpression::Unknown;
     };

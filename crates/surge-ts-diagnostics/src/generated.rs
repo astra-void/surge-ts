@@ -3372,7 +3372,7 @@ pub const TS17012: DiagnosticDescriptor = DiagnosticDescriptor {
     category: DiagnosticCategory::Error,
     message_template: "'{0}' is not a valid meta-property for keyword '{1}'. Did you mean '{2}'?",
     argument_count: 3,
-    support: DiagnosticSupport::Emitted,
+    support: DiagnosticSupport::CatalogOnly,
 };
 
 pub const TS18061: DiagnosticDescriptor = DiagnosticDescriptor {
@@ -3381,6 +3381,26 @@ pub const TS18061: DiagnosticDescriptor = DiagnosticDescriptor {
     source: DiagnosticSource::TypeScript,
     category: DiagnosticCategory::Error,
     message_template: "'{0}' is not a valid meta-property for keyword 'import'. Did you mean 'meta' or 'defer'?",
+    argument_count: 1,
+    support: DiagnosticSupport::CatalogOnly,
+};
+
+pub const TS2795: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2795",
+    number: Some(2795),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "The 'intrinsic' keyword can only be used to declare compiler provided intrinsic types.",
+    argument_count: 0,
+    support: DiagnosticSupport::Emitted,
+};
+
+pub const TS2838: DiagnosticDescriptor = DiagnosticDescriptor {
+    code: "TS2838",
+    number: Some(2838),
+    source: DiagnosticSource::TypeScript,
+    category: DiagnosticCategory::Error,
+    message_template: "All declarations of '{0}' must have identical constraints.",
     argument_count: 1,
     support: DiagnosticSupport::Emitted,
 };
@@ -8454,6 +8474,8 @@ pub const DIAGNOSTIC_CATALOG: &[DiagnosticDescriptor] = &[
     TS1214,
     TS17012,
     TS18061,
+    TS2795,
+    TS2838,
     TS2855,
     TS1048,
     TS1186,
@@ -11782,6 +11804,20 @@ impl Diagnostic {
     pub fn ts18061(arg0: impl ToString, file_name: impl Into<String>) -> Self {
         Self::from_descriptor(
             &TS18061,
+            vec![DiagnosticArg::from(arg0.to_string())],
+            file_name,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2795(file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(&TS2795, Vec::<DiagnosticArg>::new(), file_name)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn ts2838(arg0: impl ToString, file_name: impl Into<String>) -> Self {
+        Self::from_descriptor(
+            &TS2838,
             vec![DiagnosticArg::from(arg0.to_string())],
             file_name,
         )

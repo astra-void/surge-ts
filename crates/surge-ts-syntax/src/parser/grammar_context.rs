@@ -69,6 +69,7 @@ pub(crate) fn collect_context_grammar_diagnostics(
         examined_modifiers: Vec::new(),
         global_this_starts: Vec::new(),
         literal_this_members: Vec::new(),
+        infer_declarations: Vec::new(),
     };
     collector.visit_program(program);
     let examined = std::mem::take(&mut collector.examined_modifiers);
@@ -140,6 +141,9 @@ fn has_top_level_module_syntax(program: &Program<'_>) -> bool {
 
 struct ContextCollector<'a, 'o> {
     stack: Vec<AstKind<'a>>,
+    /// `infer` declarations by the conditional type whose `extends` clause
+    /// binds them: (conditional start, name, name span, constraint text).
+    infer_declarations: Vec<(u32, &'a str, Span, Option<&'a str>)>,
     out: &'o mut Vec<ParsedGrammarDiagnostic>,
     source_text: &'a str,
     external_module: bool,
@@ -2057,14 +2061,24 @@ impl<'a> ContextCollector<'a, '_> {
     /// of a signature with no body reads as a type annotation but renames `a`
     /// — TS2842 unless the new name is used (only a `typeof` can use it).
     fn check_renamed_binding_in_signature(&mut self, property: &oxc_ast::ast::BindingProperty<'_>) {
-        if property.shorthand || property.computed {
+        if property.shorthand {
             return;
         }
         let BindingPattern::BindingIdentifier(name) = &property.value else {
             return;
         };
-        let Some(property_name) = property.key.static_name() else {
-            return;
+        let property_name = if property.computed {
+            let start = property.span.start as usize;
+            let key_end = property.key.span().end as usize;
+            let Some(close) = self.source_text[key_end..].find(']') else {
+                return;
+            };
+            std::borrow::Cow::Owned(self.source_text[start..key_end + close + 1].to_string())
+        } else {
+            let Some(property_name) = property.key.static_name() else {
+                return;
+            };
+            property_name
         };
         let mut in_parameter = false;
         for kind in self.stack.iter().rev() {
@@ -3127,6 +3141,61 @@ impl<'a> ContextCollector<'a, '_> {
         }
     }
 
+    fn record_infer_declaration(&mut self, infer: &oxc_ast::ast::TSInferType<'a>) {
+        let mut child_span = infer.span;
+        let owner = self.stack.iter().rev().find_map(|kind| {
+            if let AstKind::TSConditionalType(conditional) = kind
+                && conditional.extends_type.span() == child_span
+            {
+                return Some(conditional.span.start);
+            }
+            child_span = kind.span();
+            None
+        });
+        let Some(owner) = owner else {
+            return;
+        };
+        let parameter = &infer.type_parameter;
+        let constraint = parameter.constraint.as_ref().map(|constraint| {
+            let span = constraint.span();
+            &self.source_text[span.start as usize..span.end as usize]
+        });
+        self.infer_declarations
+            .push((owner, parameter.name.name.as_str(), parameter.name.span, constraint));
+    }
+
+    /// tsc's `checkInferType`: the `infer` declarations of one name merge
+    /// into one type parameter, and two that constrain it differently are
+    /// TS2838 at every declaration.
+    fn check_infer_constraints(&mut self, owner: u32) {
+        let declarations: Vec<_> = self
+            .infer_declarations
+            .iter()
+            .filter(|(start, ..)| *start == owner)
+            .copied()
+            .collect();
+        self.infer_declarations.retain(|(start, ..)| *start != owner);
+        let mut reported: Vec<&str> = Vec::new();
+        for (_, name, _, _) in &declarations {
+            if reported.contains(name) {
+                continue;
+            }
+            reported.push(name);
+            let same: Vec<_> = declarations.iter().filter(|(_, other, ..)| other == name).collect();
+            let normalize = |text: &str| text.split_whitespace().collect::<String>();
+            let mut constraints = same.iter().filter_map(|(.., constraint)| constraint.map(normalize));
+            let Some(first) = constraints.next() else {
+                continue;
+            };
+            if constraints.all(|constraint| constraint == first) {
+                continue;
+            }
+            for (_, _, span, _) in &same {
+                self.push(2838, *span, &[name]);
+            }
+        }
+    }
+
     fn check_infer_type(&mut self, span: Span) {
         let mut child_span = span;
         for kind in self.stack.iter().rev() {
@@ -3507,12 +3576,26 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
             {
                 self.check_this_type(this_type.span)
             }
-            AstKind::TSInferType(infer) => self.check_infer_type(infer.span),
+            AstKind::TSInferType(infer) => {
+                self.check_infer_type(infer.span);
+                self.record_infer_declaration(infer);
+            }
             AstKind::TSInterfaceDeclaration(declaration) => {
                 self.check_reserved_type_name(2427, &declaration.id);
             }
             AstKind::TSTypeAliasDeclaration(declaration) => {
                 self.check_reserved_type_name(2457, &declaration.id);
+                if let oxc_ast::ast::TSType::TSIntrinsicKeyword(keyword) = &declaration.type_annotation {
+                    let parameter_count =
+                        declaration.type_parameters.as_ref().map_or(0, |parameters| parameters.params.len());
+                    let name = declaration.id.name.as_str();
+                    let valid = (parameter_count == 0 && name == "BuiltinIteratorReturn")
+                        || (parameter_count == 1
+                            && matches!(name, "Uppercase" | "Lowercase" | "Capitalize" | "Uncapitalize" | "NoInfer"));
+                    if !valid {
+                        self.push(2795, keyword.span, &[]);
+                    }
+                }
             }
             AstKind::TSEnumDeclaration(declaration) => {
                 self.check_reserved_type_name(2431, &declaration.id);
@@ -3804,6 +3887,9 @@ impl<'a> Visit<'a> for ContextCollector<'a, '_> {
 
     fn leave_node(&mut self, kind: AstKind<'a>) {
         self.stack.pop();
+        if let AstKind::TSConditionalType(conditional) = &kind {
+            self.check_infer_constraints(conditional.span.start);
+        }
         if is_ambient_marker(&kind) {
             self.ambient_depth -= 1;
         }

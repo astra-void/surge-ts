@@ -423,6 +423,7 @@ pub(crate) fn resolve_type_alias(
         type_arguments,
         &alias.name,
         reference_span.or(alias.name_span),
+        reference_span.or(alias.name_span),
         ctx,
         resolving,
         substitution,

@@ -2693,12 +2693,28 @@
     "message": "'{0}' is not a valid meta-property for keyword '{1}'. Did you mean '{2}'?",
     "source": "typescript",
     "arity": 3,
-    "support": "emitted"
+    "support": "catalog-only"
   },
   {
     "code": "TS18061",
     "category": "Error",
     "message": "'{0}' is not a valid meta-property for keyword 'import'. Did you mean 'meta' or 'defer'?",
+    "source": "typescript",
+    "arity": 1,
+    "support": "catalog-only"
+  },
+  {
+    "code": "TS2795",
+    "category": "Error",
+    "message": "The 'intrinsic' keyword can only be used to declare compiler provided intrinsic types.",
+    "source": "typescript",
+    "arity": 0,
+    "support": "emitted"
+  },
+  {
+    "code": "TS2838",
+    "category": "Error",
+    "message": "All declarations of '{0}' must have identical constraints.",
     "source": "typescript",
     "arity": 1,
     "support": "emitted"

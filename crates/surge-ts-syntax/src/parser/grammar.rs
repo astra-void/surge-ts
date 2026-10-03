@@ -922,6 +922,20 @@ impl GrammarCollector {
         }
     }
 
+    /// The `[ … ]` around a computed key, which is the name tsc reports at.
+    fn bracketed_name_span(&self, key: Span) -> Span {
+        let before = &self.source_text[..key.start as usize];
+        let after = &self.source_text[key.end as usize..];
+        match (before.rfind('['), after.find(']')) {
+            (Some(open), Some(close)) => Span::new(open as u32, key.end + close as u32 + 1),
+            _ => key,
+        }
+    }
+
+    fn is_bracketed_name(&self, span: Span) -> bool {
+        self.source_text.as_bytes().get(span.start as usize) == Some(&b'[')
+    }
+
     /// tsc's `reportImplementationExpectedError`: the declaration right after
     /// a bodyless one decides the message.
     fn report_implementation_expected(&mut self, siblings: &[OverloadSibling], index: usize) {
@@ -929,7 +943,11 @@ impl GrammarCollector {
         if let Some(next) = siblings.get(index + 1)
             && next.kind == node.kind
         {
-            if next.name.is_some() && next.name == node.name {
+            // tsc matches a computed name only against another computed name.
+            if next.name.is_some()
+                && next.name == node.name
+                && self.is_bracketed_name(next.name_span) == self.is_bracketed_name(node.name_span)
+            {
                 if node.kind == SiblingKind::Method && node.is_static != next.is_static {
                     let code = if node.is_static { 2387 } else { 2388 };
                     self.push(Kind::Ts(code), next.name_span, None);
@@ -937,7 +955,12 @@ impl GrammarCollector {
                 return;
             }
             if next.has_body {
-                self.push(Kind::Ts(2389), next.name_span, node.name.as_deref());
+                let display = if self.is_bracketed_name(node.name_span) {
+                    Some(self.source_text[node.name_span.start as usize..node.name_span.end as usize].to_string())
+                } else {
+                    node.name.clone()
+                };
+                self.push(Kind::Ts(2389), next.name_span, display.as_deref());
                 return;
             }
         }
@@ -1124,11 +1147,28 @@ impl GrammarCollector {
                 let ClassElement::MethodDefinition(method) = element else {
                     return OverloadSibling::other();
                 };
-                if method.kind != MethodDefinitionKind::Method || method.computed {
+                if method.kind != MethodDefinitionKind::Method {
+                    return OverloadSibling::other();
+                }
+                // `hasBindableName`: a computed name joins the overload set
+                // only when it is a literal (or a well-known symbol).
+                if method.computed
+                    && !matches!(
+                        method.key,
+                        PropertyKey::StringLiteral(_)
+                            | PropertyKey::NumericLiteral(_)
+                            | PropertyKey::StaticMemberExpression(_)
+                    )
+                {
                     return OverloadSibling::other();
                 }
                 let Some(name) = property_key_name(&method.key) else {
                     return OverloadSibling::other();
+                };
+                let name_span = if method.computed {
+                    self.bracketed_name_span(method.key.span())
+                } else {
+                    method.key.span()
                 };
                 if conflicting.iter().any(|(other, is_static)| *other == name && *is_static == method.r#static) {
                     return OverloadSibling::other();
@@ -1136,7 +1176,7 @@ impl GrammarCollector {
                 OverloadSibling {
                     kind: SiblingKind::Method,
                     name: Some(name),
-                    name_span: method.key.span(),
+                    name_span,
                     is_static: method.r#static,
                     has_body: method.value.body.is_some(),
                     ambient: false,
@@ -1279,7 +1319,14 @@ impl GrammarCollector {
             let Some(name) = property_key_name(key) else {
                 continue;
             };
-            add_group_member(&mut groups, &mut group_slots, name, is_static, (key.span(), member));
+            let computed = match element {
+                ClassElement::MethodDefinition(method) => method.computed,
+                ClassElement::PropertyDefinition(property) => property.computed,
+                ClassElement::AccessorProperty(property) => property.computed,
+                _ => false,
+            };
+            let span = if computed { self.bracketed_name_span(key.span()) } else { key.span() };
+            add_group_member(&mut groups, &mut group_slots, name, is_static, (span, member));
         }
 
         for group in &groups {
@@ -1369,16 +1416,9 @@ impl GrammarCollector {
             self.push(Kind::ImplicitAnyMember, key.span(), Some(&name));
         }
 
-        if constructors.len() > 1 {
-            let implementations: Vec<Span> = constructors
-                .iter()
-                .filter(|(_, has_body, _)| *has_body)
-                .map(|(span, _, _)| *span)
-                .collect();
-            if implementations.len() > 1 {
-                for span in implementations {
-                    self.push(Kind::MultipleConstructorImplementations, span, None);
-                }
+        if constructors.iter().filter(|(_, has_body, _)| *has_body).count() > 1 {
+            for (span, _, _) in &constructors {
+                self.push(Kind::MultipleConstructorImplementations, *span, None);
             }
         }
         // `checkFlagAgreementBetweenOverloads` for the constructor symbol,
@@ -1483,15 +1523,16 @@ impl GrammarCollector {
             return;
         }
 
-        let implementations: Vec<Span> = group
+        let implementations = group
             .members
             .iter()
             .filter(|(_, member)| matches!(member, MemberKind::Method { has_body: true }))
-            .map(|(span, _)| *span)
-            .collect();
-        if implementations.len() > 1 {
-            for span in implementations {
-                self.push(Kind::DuplicateImplementation, span, None);
+            .count();
+        // `checkFunctionOrConstructorSymbol` reports at every declaration of
+        // the symbol, overloads included.
+        if implementations > 1 {
+            for (span, _) in &group.members {
+                self.push(Kind::DuplicateImplementation, *span, None);
             }
             return;
         }
@@ -2261,6 +2302,13 @@ fn property_key_name(key: &PropertyKey<'_>) -> Option<String> {
         PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
         PropertyKey::NumericLiteral(literal) => Some(super::number_text::js_number_to_string(literal.value)),
         PropertyKey::PrivateIdentifier(identifier) => Some(format!("#{}", identifier.name)),
+        // A well-known symbol is a unique, statically known name
+        // (`[Symbol.iterator]`), late-bound like a literal one.
+        PropertyKey::StaticMemberExpression(member)
+            if matches!(&member.object, Expression::Identifier(object) if object.name == "Symbol") =>
+        {
+            Some(format!("[Symbol.{}]", member.property.name))
+        }
         _ => None,
     }
 }

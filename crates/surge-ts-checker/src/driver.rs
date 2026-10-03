@@ -2160,11 +2160,25 @@ pub(crate) fn collect_interface(
 /// types, on the later declaration, as for a later merged declaration.
 fn report_conflicting_members_within(members: &[surge_ts_syntax::ParsedInterfaceMember], ctx: &mut CheckerContext) {
     let is_method = |ty: &ParsedType| matches!(ty, ParsedType::Function(_));
+    let mut duplicate_computed: Vec<usize> = Vec::new();
     for (index, member) in members.iter().enumerate() {
-        let Some(previous) = members[..index].iter().find(|previous| previous.name == member.name) else {
+        let Some(previous_index) = members[..index].iter().position(|previous| previous.name == member.name) else {
             continue;
         };
-        if is_method(&previous.ty) || is_method(&member.ty) || previous.ty == member.ty {
+        let previous = &members[previous_index];
+        if is_method(&previous.ty) || is_method(&member.ty) {
+            continue;
+        }
+        // A computed name is late-bound (`lateBindMember`): a second property
+        // of the name is a duplicate whatever its type, on every declaration.
+        if member.name.starts_with('[') {
+            if !duplicate_computed.contains(&previous_index) {
+                duplicate_computed.push(previous_index);
+            }
+            duplicate_computed.push(index);
+            continue;
+        }
+        if previous.ty == member.ty {
             continue;
         }
         // Parsed types carry their spans; the written text decides identity.
@@ -2176,6 +2190,15 @@ fn report_conflicting_members_within(members: &[surge_ts_syntax::ParsedInterface
                 diagnostic = diagnostic.with_span(crate::context::convert_span(span));
             }
             ctx.push(diagnostic);
+        }
+    }
+    for index in duplicate_computed {
+        let member = &members[index];
+        if let Some(span) = member.name_span {
+            ctx.push(
+                Diagnostic::ts2300(&member.name, ctx.file_name.clone())
+                    .with_span(crate::context::convert_span(span)),
+            );
         }
     }
 }

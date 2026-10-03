@@ -1618,6 +1618,7 @@ fn complete_reference_arguments(
         vec![ParsedType::Never; written.len()],
         &name,
         name_span,
+        name_span,
         ctx,
         resolving,
         &TypeParameterSubstitution::new(),

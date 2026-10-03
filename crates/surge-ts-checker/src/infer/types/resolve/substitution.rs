@@ -27,6 +27,7 @@ pub(crate) fn bind_type_arguments(
     type_arguments: Vec<ParsedType>,
     name: &str,
     name_span: Option<TextSpan>,
+    argument_span: Option<TextSpan>,
     ctx: &mut CheckerContext,
     resolving: &mut Vec<DeclarationResolutionKey>,
     parent_substitution: &TypeParameterSubstitution,
@@ -67,9 +68,12 @@ pub(crate) fn bind_type_arguments(
     // stops at its first failure. Re-resolved under an instantiating
     // substitution (a conditional's `infer` bindings included) it is not that
     // node, and tsc reports nothing for it.
+    // Too few arguments is TS2314 and the reference is the error type, whose
+    // constraints tsc never checks.
     let mut constraints_settled = type_parameters
         .iter()
         .all(|parameter| parameter.constraint.is_none())
+        || type_arguments.len() < min_type_argument_count
         || type_arguments
             .iter()
             .any(|argument| names_instantiated_parameter(argument, parent_substitution));
@@ -105,7 +109,7 @@ pub(crate) fn bind_type_arguments(
                         type_parameters,
                         &resolved_ty,
                         argument_had_error,
-                        name_span,
+                        argument_span,
                         ctx,
                         resolving,
                         parent_substitution,
@@ -390,7 +394,7 @@ fn check_type_argument_constraint(
     // constraint written as primitives (`Record<Date, …>`). The written form
     // is asked first: telling an object apart peels the argument.
     if argument_had_error
-        || !(constraint_judgeable(argument)
+        || !(object_constraint_judgeable(argument)
             || constraint_is_written_primitive(&constraint) && is_object_kind(argument))
     {
         return false;
@@ -404,7 +408,23 @@ fn check_type_argument_constraint(
     // came back as an unrelated shape. The assertion idiom this check exists for
     // (`Expect<a extends true>`) never names a sibling. Built-in `Pick` checks
     // its key constraint separately at the written reference.
-    if constraint_names_a_sibling(&constraint, type_parameters) {
+    // A bare earlier sibling (`U extends T`) is exactly the argument already
+    // bound to it, so it is judged like any written type.
+    let own_index = type_parameters.iter().position(|sibling| sibling.name == parameter.name);
+    let bare_earlier_sibling = matches!(
+        &constraint,
+        ParsedType::Named(named) if named.type_arguments.is_empty()
+            && type_parameters
+                .iter()
+                .position(|sibling| sibling.name == named.name)
+                .is_some_and(|index| own_index.is_some_and(|own| index < own))
+    );
+    if !bare_earlier_sibling && constraint_names_a_sibling(&constraint, type_parameters) {
+        return false;
+    }
+    // surge's `any` also stands for a type it could not infer, and against a
+    // sibling's argument that reads as a violation tsc would not see.
+    if bare_earlier_sibling && matches!(argument, Type::Any) {
         return false;
     }
 
@@ -435,12 +455,17 @@ fn check_type_argument_constraint(
     };
     ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
     if resolved_constraint.had_error
-        || !constraint_judgeable(&resolved_constraint.ty)
-        || !constraint_judgeable(argument) && !is_primitive_kind(&resolved_constraint.ty)
+        || !object_constraint_judgeable(&resolved_constraint.ty)
+        || !object_constraint_judgeable(argument) && !is_primitive_kind(&resolved_constraint.ty)
     {
         return false;
     }
 
+    // A primitive relates to an object constraint through its apparent type,
+    // which a global augmentation may extend (`interface Number extends …`).
+    if !constraint_judgeable(&resolved_constraint.ty) && !is_object_kind(argument) {
+        return false;
+    }
     if surge_ts_types::is_assignable_to(argument, &resolved_constraint.ty) {
         return false;
     }
@@ -449,6 +474,20 @@ fn check_type_argument_constraint(
     // `reportRelationError` names a literal source by its base type when the
     // constraint could not hold it: `Uppercase<42>` reports 'number'.
     let argument_name = crate::checks::expr::source_display_name(argument, &resolved_constraint.ty);
+    // relater.go drops the TS2344 head when a missing-property report for
+    // the same pair is beneath it.
+    if let Some(span) = name_span
+        && let Some(diagnostic) = crate::checks::expr::missing_properties_report(
+            argument,
+            &resolved_constraint.ty,
+            &argument_name,
+            &constraint_name,
+            &ctx.file_name.clone(),
+        )
+    {
+        ctx.push_utility_diagnostic_once(diagnostic.with_span(crate::context::convert_span(span)));
+        return true;
+    }
     crate::infer::types::diagnostics::emit_type_argument_constraint(
         &argument_name,
         &constraint_name,
@@ -456,6 +495,37 @@ fn check_type_argument_constraint(
         ctx,
     );
     true
+}
+
+/// [`constraint_judgeable`] widened to plain object types whose every member
+/// is itself judgeable (`interface Derived { foo: string; bar: string }`), for
+/// the type-argument check alone.
+fn object_constraint_judgeable(ty: &Type) -> bool {
+    fn walk(ty: &Type, depth: usize) -> bool {
+        if constraint_judgeable(ty) {
+            return true;
+        }
+        if depth > 4 {
+            return false;
+        }
+        match ty {
+            Type::Object(object) => {
+                !object.is_intersection
+                    && !object.non_primitive
+                    && !object.synthetic_open_index
+                    && object.call_signature().is_none()
+                    && object.construct_signature().is_none()
+                    && object.string_index_type.as_deref().is_none_or(|index| walk(index, depth + 1))
+                    && object.number_index_type.as_deref().is_none_or(|index| walk(index, depth + 1))
+                    && object.properties.values().all(|property| walk(&property.ty, depth + 1))
+            }
+            Type::Reference(_) => walk(&ty.peeled(), depth + 1),
+            Type::Array(element) => walk(element, depth + 1),
+            Type::Union(union) => union.types().iter().all(|member| walk(member, depth + 1)),
+            _ => false,
+        }
+    }
+    walk(ty, 0)
 }
 
 /// `checkTypeReferenceNode` relates a written reference's arguments to their
@@ -605,6 +675,21 @@ pub(crate) fn constraint_names_a_sibling(
                 .iter()
                 .chain(&object.construct_signature)
                 .any(|signature| signature_names_a_sibling(signature, siblings))
+        }
+        ParsedType::Object(object)
+            if object.call_signature.is_none()
+                && object.construct_signature.is_none()
+                && object.call_signature_overloads.is_empty()
+                && object.construct_signature_overloads.is_empty() =>
+        {
+            object.properties.iter().any(|property| {
+                constraint_names_a_sibling(&property.ty, siblings)
+                    || property.write_ty.as_ref().is_some_and(|ty| constraint_names_a_sibling(ty, siblings))
+            }) || object
+                .string_index_type
+                .iter()
+                .chain(&object.number_index_type)
+                .any(|index| constraint_names_a_sibling(index, siblings))
         }
         _ => true,
     }
