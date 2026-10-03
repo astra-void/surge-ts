@@ -500,6 +500,7 @@ fn resolve_named_type_inner(
                 resolving,
                 substitution,
                 None,
+                None,
             ),
             TypeDeclarationInfo::Interface(interface) => resolve_interface(
                 interface,
@@ -509,6 +510,7 @@ fn resolve_named_type_inner(
                 ctx,
                 resolving,
                 substitution,
+                None,
                 None,
             ),
         };
@@ -555,25 +557,30 @@ fn resolve_named_type_inner(
     // Resolve the type arguments once. The result is reused for the library cache
     // key, the nominal reference identity, AND — via `pre_resolved` below — the
     // authoritative `bind_type_arguments`, so a generic instantiation resolves its
-    // arguments exactly once. Resolving them a second time in the authoritative
-    // pass is exponential on deeply nested generics. Probe diagnostics are
-    // discarded (`truncate_diagnostics` also releases the once-guard keys) so the
-    // authoritative pass re-reports an unresolved argument rather than suppressing
-    // it as a duplicate.
-    let resolved_arguments: Option<Vec<Type>> = {
+    // arguments exactly once. Repeating an errored argument during binding is
+    // exponential on nested generics too. Keep those results and their error
+    // flags local to this binding; only clean arguments participate in shared
+    // lookup and nominal identity. Errored arguments retain their diagnostics.
+    let (resolved_arguments, degraded_arguments, argument_errors) = {
         let diagnostics_before = ctx.diagnostics().len();
         let mut arguments = Vec::with_capacity(named_type.type_arguments.len());
-        let mut all_clean = true;
-        for argument in &named_type.type_arguments {
+        let mut errors = Vec::new();
+        for (index, argument) in named_type.type_arguments.iter().enumerate() {
             let resolved = resolve_parsed_type(argument.clone(), ctx, resolving, substitution);
             if resolved.had_error {
-                all_clean = false;
-                break;
+                if errors.is_empty() {
+                    errors.resize(named_type.type_arguments.len(), false);
+                }
+                errors[index] = true;
             }
             arguments.push(resolved.ty);
         }
-        ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
-        all_clean.then_some(arguments)
+        if errors.is_empty() {
+            ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
+            (Some(arguments), None, errors)
+        } else {
+            (None, Some(arguments), errors)
+        }
     };
     if library_scoped && let Some(arguments) = resolved_arguments.as_deref() {
         check_library_reference_constraints(
@@ -993,6 +1000,9 @@ fn resolve_named_type_inner(
     let diagnostics_before_body = ctx.diagnostics().len();
     let utility_keys_before_body = ctx.utility_diagnostic_keys.len();
     let degradation_epoch_before_body = crate::program::expansion_degradation_epoch();
+    let bound_arguments = reference_arguments.as_deref().or(degraded_arguments.as_deref());
+    let pre_resolved_errors =
+        (!argument_errors.is_empty()).then_some(argument_errors.as_slice());
 
     use crate::infer::types::interface::LAST_EXPANSION_HERITAGE_UNKNOWN_CYCLE;
     ctx.instantiation_depth += 1;
@@ -1006,7 +1016,8 @@ fn resolve_named_type_inner(
             ctx,
             resolving,
             substitution,
-            reference_arguments.as_deref(),
+            bound_arguments,
+            pre_resolved_errors,
         ),
         TypeDeclarationInfo::Interface(interface) => resolve_interface(
             interface,
@@ -1016,7 +1027,8 @@ fn resolve_named_type_inner(
             ctx,
             resolving,
             substitution,
-            reference_arguments.as_deref(),
+            bound_arguments,
+            pre_resolved_errors,
         ),
     };
     ctx.instantiation_depth -= 1;
@@ -1526,6 +1538,40 @@ fn check_library_reference_constraints(
     if type_parameters.iter().all(|parameter| parameter.constraint.is_none()) {
         return;
     }
+    // Validate the written key before lazy alias expansion can lose its diagnostic site.
+    if name.as_ref() == "Pick"
+        && (crate::default_lib::is_physical_default_lib_file_name(file_name)
+            || crate::default_lib::is_generated_default_lib_file_name(file_name)
+            || file_name.as_ref() == "<built-in>")
+        && !ctx.is_library_scoped_file(&ctx.file_name)
+        && !named_type.type_arguments.iter().any(|argument| {
+            super::substitution::names_instantiated_parameter(argument, substitution)
+        })
+        && let [source, key] = arguments
+    {
+        let keys = surge_ts_types::type_variable::literal_keys_of(source).map(|keys| {
+            match source.peeled() {
+                Type::Object(object) if object.string_index_type.is_some() =>
+                    surge_ts_types::union_type(vec![keys, Type::String, Type::Number]),
+                Type::Object(object) if object.number_index_type.is_some() =>
+                    surge_ts_types::union_type(vec![keys, Type::Number]),
+                _ => keys,
+            }
+        });
+        if let Some(keys) = keys
+            && !keys.is_unmodelled()
+            && crate::infer::types::judgeable_through_type_variable(key)
+            && !surge_ts_types::is_assignable_to(key, &keys)
+        {
+            crate::infer::types::diagnostics::emit_type_argument_constraint(
+                &key.name(),
+                &format!("keyof {}", source.name()),
+                named_type.type_argument_spans.get(1).copied().or(named_type.span),
+                ctx,
+            );
+        }
+        return;
+    }
     let declaration_scope = resolution_scope.clone().or_else(|| {
         ctx.module_scope_for_file(file_name)
             .filter(|scope| !scope.is_empty())
@@ -1585,6 +1631,7 @@ fn complete_interface_default_arguments(
         resolving,
         substitution,
         Some(&written),
+        None,
         Some((&declaration_scope, &interface.file_name)),
     );
     ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
@@ -1673,6 +1720,7 @@ fn with_enum_base(
     let diagnostics_before = ctx.diagnostics().len();
     let base = resolve_named_type_inner(
         std::sync::Arc::new(ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: prefix.to_string(),
             span: None,
             type_arguments: Vec::new(),

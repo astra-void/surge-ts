@@ -331,6 +331,7 @@ pub(crate) fn enum_member_value_type(
     ctx.lookup_type_declaration(&member_name)?;
     let member = crate::infer::map_parsed_type(
         surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: member_name,
             span: None,
             type_arguments: Vec::new(),
@@ -1054,6 +1055,7 @@ fn lib_array_iterator(yields: &Type, ctx: &mut CheckerContext) -> Option<Type> {
     substitution.insert(SLOT.to_string(), yields.clone());
     let named = |name: &str, type_arguments| {
         surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: name.to_string(),
             span: None,
             type_arguments,
@@ -1412,6 +1414,30 @@ fn type_variable_member(
         "isPrototypeOf",
         "propertyIsEnumerable",
     ];
+    if let Some(surge_ts_types::type_variable::DeferredType::Mapped { keys, object, modifiers, .. }) =
+        surge_ts_types::type_variable::mapped_type(variable)
+        && let Type::TypeParameter(keys) = keys
+        && matches!(surge_ts_types::type_variable::deferred_type(&keys),
+            Some(surge_ts_types::type_variable::DeferredType::Keyof(_)))
+    {
+        let apparent = surge_ts_types::type_variable::base_constraint_or_type(&object);
+        if let Some(member) = apparent.get_property_access_type(property_name) {
+            return InferredExpression::Known(if modifiers.optional > 0 && surge_ts_types::strict_null_checks() {
+                surge_ts_types::union_type(vec![member, Type::Undefined])
+            } else { member });
+        }
+    }
+    if matches!(surge_ts_types::type_variable::deferred_type(parameter),
+        Some(surge_ts_types::type_variable::DeferredType::Mapped { .. }
+            | surge_ts_types::type_variable::DeferredType::MappedConstant { .. }))
+        && !OBJECT_MEMBERS.contains(&property_name)
+    {
+        return InferredExpression::MissingProperty {
+            property_name: property_name.to_string(),
+            object_type: variable.clone(),
+            span: property_span,
+        };
+    }
     let Some(constraint) = surge_ts_types::type_variable::active_constraint(parameter) else {
         return InferredExpression::Unknown;
     };

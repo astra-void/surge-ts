@@ -671,6 +671,7 @@ fn infer_expression_unsettled(
                 Some(_) => InferredExpression::Known(crate::infer::map_parsed_type(
                     surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(
                         surge_ts_syntax::ParsedNamedType {
+                            type_argument_spans: Vec::new(),
                             name: "TemplateStringsArray".to_string(),
                             span: None,
                             type_arguments: Vec::new(),
@@ -685,6 +686,7 @@ fn infer_expression_unsettled(
             Some(_) => InferredExpression::Known(crate::infer::map_parsed_type(
                 surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(
                     surge_ts_syntax::ParsedNamedType {
+                        type_argument_spans: Vec::new(),
                         name: "RegExp".to_string(),
                         span: None,
                         type_arguments: Vec::new(),

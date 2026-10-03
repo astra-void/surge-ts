@@ -137,6 +137,7 @@ fn parse_class_body(
             .filter_map(|implemented| {
                 let (name, span) = super::types::flatten_type_name(&implemented.expression)?;
                 Some(ParsedNamedType {
+                    type_argument_spans: Vec::new(),
                     name,
                     span: Some(span),
                     type_arguments: implemented
@@ -438,6 +439,7 @@ fn parse_class_heritage(class: &Class<'_>) -> Vec<ParsedNamedType> {
     };
     let Some((name, span)) = super::types::flatten_heritage_expression(super_class) else {
         return vec![ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: crate::EXPRESSION_HERITAGE_BASE.to_string(),
             span: Some(text_span_from_oxc_span(super_class.span())),
             type_arguments: Vec::new(),
@@ -452,6 +454,7 @@ fn parse_class_heritage(class: &Class<'_>) -> Vec<ParsedNamedType> {
         .unwrap_or_default();
 
     vec![ParsedNamedType {
+        type_argument_spans: Vec::new(),
         name,
         span: Some(span),
         type_arguments,

@@ -2347,6 +2347,12 @@ pub(crate) fn check_alias_mapped_type_constraints(
     }
     let mut mapped_types = Vec::new();
     collect(body, &Vec::new(), &mut mapped_types);
+    let indexed_templates: Vec<_> = mapped_types.iter().filter_map(|(mapped, implied)| {
+        let ParsedType::IndexedAccess(access) = mapped.value_type.as_ref() else { return None; };
+        let ParsedType::Named(index) = access.index_type.as_ref() else { return None; };
+        if index.name != mapped.key_name || !implied.is_empty() { return None; }
+        Some((mapped.constraint.as_ref().clone(), access.object_type.as_ref().clone(), index.name.clone(), access.span))
+    }).collect();
     let constrained: Vec<(TextSpan, &ParsedType, Implied<'_>)> = mapped_types
         .into_iter()
         .filter_map(|(mapped, implied)| {
@@ -2362,6 +2368,22 @@ pub(crate) fn check_alias_mapped_type_constraints(
         return;
     }
     let _variables = enter_body_type_variables(type_parameters, ctx);
+    with_type_parameter_scope(type_parameters, ctx, |ctx| {
+        for (constraint, object, key_name, span) in indexed_templates {
+            let checkpoint = ctx.diagnostics().len();
+            let constraint = crate::infer::map_parsed_type(constraint, ctx);
+            let keys = crate::infer::map_parsed_type(ParsedType::KeyOf(std::sync::Arc::new(object.clone())), ctx);
+            ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
+            if crate::infer::types::judgeable_through_type_variable(&constraint)
+                && (!keys.is_unknown() || keys.is_type_variable())
+                && !surge_ts_types::is_assignable_to(&constraint, &keys)
+            {
+                let object_name = crate::driver::parsed_type_display(&object).unwrap_or_default();
+                let diagnostic = Diagnostic::ts2536(key_name, object_name, ctx.file_name.clone());
+                ctx.push_utility_diagnostic_once(crate::spans::diagnostic_with_syntax_span(diagnostic, span));
+            }
+        }
+    });
     let diagnostics_before = ctx.diagnostics().len();
     let key_constraint = surge_ts_types::union_type(vec![Type::String, Type::Number, Type::Symbol]);
     let mut violations = Vec::new();

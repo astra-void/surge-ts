@@ -31,6 +31,7 @@ pub(crate) fn bind_type_arguments(
     resolving: &mut Vec<DeclarationResolutionKey>,
     parent_substitution: &TypeParameterSubstitution,
     pre_resolved: Option<&[Type]>,
+    pre_resolved_errors: Option<&[bool]>,
     declaration_scope: Option<(
         &Option<std::sync::Arc<crate::symbols::TypeDeclarationScope>>,
         &str,
@@ -80,16 +81,20 @@ pub(crate) fn bind_type_arguments(
             // resolution is exponential on deeply nested generics (each level
             // re-resolves its arguments), so reusing the probe result is what keeps
             // a nominal-reference instantiation linear.
-            let mut argument_had_error = false;
-            let resolved_ty = if let Some(pre) = pre_resolved.and_then(|pre| pre.get(index)) {
-                pre.clone()
+            let (resolved_ty, argument_had_error) = if let Some(pre) = pre_resolved.and_then(|pre| pre.get(index)) {
+                (
+                    pre.clone(),
+                    pre_resolved_errors
+                        .and_then(|errors| errors.get(index))
+                        .copied()
+                        .unwrap_or(false),
+                )
             } else {
                 let resolved_argument =
                     resolve_parsed_type(argument.clone(), ctx, resolving, parent_substitution);
-                argument_had_error = resolved_argument.had_error;
-                bound_had_error |= argument_had_error;
-                resolved_argument.ty
+                (resolved_argument.ty, resolved_argument.had_error)
             };
+            bound_had_error |= argument_had_error;
 
             if parsed_type_is_placeholder_reference(argument, parent_substitution) {
                 substitution.insert_placeholder(parameter.name.clone(), resolved_ty);
@@ -397,8 +402,8 @@ fn check_type_argument_constraint(
     // `PgSelectWithout<T, TDynamic, K extends keyof T & string>` reported its own
     // method-name union as violating `keyof T` in five files, because `T`'s keys
     // came back as an unrelated shape. The assertion idiom this check exists for
-    // (`Expect<a extends true>`) never names a sibling, and `Pick`/`Omit` keep
-    // their own dedicated check in `utility.rs`.
+    // (`Expect<a extends true>`) never names a sibling. Built-in `Pick` checks
+    // its key constraint separately at the written reference.
     if constraint_names_a_sibling(&constraint, type_parameters) {
         return false;
     }
@@ -507,7 +512,7 @@ pub(crate) fn check_written_type_argument_constraints(
 /// Whether a written type argument names a parameter the substitution binds to
 /// a type rather than to itself: the reference is being re-resolved as part of
 /// an instantiation.
-fn names_instantiated_parameter(argument: &ParsedType, substitution: &TypeParameterSubstitution) -> bool {
+pub(super) fn names_instantiated_parameter(argument: &ParsedType, substitution: &TypeParameterSubstitution) -> bool {
     substitution.iter().next().is_some()
         && super::indexed_access::mentions_type_parameter(argument, &|name: &str| {
             substitution.get(name).is_some() && !substitution.is_placeholder(name)

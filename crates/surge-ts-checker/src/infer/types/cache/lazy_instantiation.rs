@@ -288,6 +288,7 @@ impl ResolveReference for LazyInstantiation {
                 &mut resolving,
                 &self.substitution,
                 Some(&self.resolved_arguments),
+                None,
             ),
             TypeDeclarationInfo::Interface(interface) => resolve_interface(
                 interface,
@@ -298,6 +299,7 @@ impl ResolveReference for LazyInstantiation {
                 &mut resolving,
                 &self.substitution,
                 Some(&self.resolved_arguments),
+                None,
             ),
         };
 

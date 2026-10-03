@@ -483,6 +483,7 @@ pub(crate) fn generator_type_of(
     }
     let named = |name: String, type_arguments| {
         surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name,
             span: None,
             type_arguments,

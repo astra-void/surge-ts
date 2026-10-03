@@ -169,7 +169,7 @@ pub(crate) fn instantiate_function_type<'a>(
                     .iter()
                     .any(|(outer, _)| outer == name.as_ref())
             })
-            .all(|(_, candidate)| candidate.is_degraded());
+            .all(|(_, candidate)| candidate.is_degraded() && !candidate.is_type_variable());
     if inferred_nothing {
         record_generic_call_inference_failed();
         if is_declaration_backed_lazy_signature(function_type) || !outer_type_arguments.is_empty() {
@@ -1206,6 +1206,7 @@ fn reference_provably_records_nothing(
                     && signatures_record_nothing
                     && body.extends.iter().all(|base| {
                         let base = ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+                            type_argument_spans: Vec::new(),
                             name: base.name.clone(),
                             span: base.span,
                             type_arguments: base
@@ -1483,7 +1484,9 @@ fn enforce_inferred_constraints(
         };
         // An object candidate can still be judged by the members it lacks.
         let candidate_settled = constraint_operand_is_settled(&candidate);
-        if !candidate_settled && !matches!(candidate.peeled(), Type::Object(_)) {
+        if !candidate_settled
+            && !matches!(candidate.peeled(), Type::Object(_) | Type::Function(_))
+        {
             continue;
         }
         let resolved = with_declaring_scope(function_signature, ctx, |ctx| {
@@ -1502,7 +1505,10 @@ fn enforce_inferred_constraints(
         // `T extends HasLen`) is judged by the constraint's own shape: the
         // argument check reads that shape anyway, and a primitive seldom meets
         // a named constraint, so peeling it expands nothing a call would not.
-        let settled_constraint = if lacks_required_member(&candidate, &resolved.peeled()) {
+        let settled_constraint = if lacks_required_member(&candidate, &resolved.peeled())
+            || lacks_constraint_call_signature(&candidate, &resolved)
+            || (candidate_settled && surge_ts_types::is_global_function_interface(&resolved))
+        {
             Some(resolved.clone())
         } else if !candidate_settled {
             None
@@ -1532,6 +1538,53 @@ fn enforce_inferred_constraints(
         }
         substitution.set(type_parameter.name.clone(), resolved, false);
     }
+}
+
+pub(super) fn lacks_constraint_call_signature(candidate: &Type, constraint: &Type) -> bool {
+    let target = match constraint.peeled() {
+        Type::Function(signature) => signature,
+        Type::Object(object) => match object.call_signature() {
+            Some(signature) => signature.clone(),
+            None => return false,
+        },
+        _ => return false,
+    };
+    match candidate.peeled() {
+        Type::Object(object) => {
+            object.call_signature().is_none() && !object.synthetic_open_index
+        }
+        Type::Function(source) => {
+            !target.is_variadic()
+                && source.required_parameter_count() > target.parameters().len()
+        }
+        _ => false,
+    }
+}
+
+// Generic class values may still be `any`, but their symbols retain constructor
+// metadata. A callable constraint can reject them without inventing static members.
+pub(super) fn construct_only_argument_type(
+    expression: &ParsedExpression,
+    symbols: &SymbolTable,
+    ctx: &CheckerContext,
+) -> Option<Type> {
+    let ParsedExpression::Identifier { name, .. } = expression else {
+        return None;
+    };
+    let symbol = symbols.get(name)?;
+    if !matches!(symbol.ty, Type::Any)
+        || !matches!(symbol.kind, crate::symbols::SymbolKind::Const)
+        || !matches!(ctx.lookup_type_declaration(name),
+            Some(TypeDeclarationInfo::Interface(info)) if info.is_class_instance)
+    {
+        return None;
+    }
+    let constructor = symbol.function_signature.as_ref()?.construct_signatures.as_ref()?.first()?;
+    Some(Type::Object(
+        alloc_object_type(Default::default(), None)
+            .with_construct_signature(constructor.template.clone())
+            .with_alias_name(format!("typeof {name}")),
+    ))
 }
 
 /// An object candidate without a member the constraint requires fails it
@@ -1581,40 +1634,50 @@ fn candidate_is_primitive(ty: &Type) -> bool {
 /// index and call/construct signatures included — which a property-only walk
 /// misses.
 fn constraint_operand_is_settled(ty: &Type) -> bool {
+    constraint_operand_is_settled_at_depth(ty, 0)
+}
+
+fn constraint_operand_is_settled_at_depth(ty: &Type, depth: usize) -> bool {
+    if depth >= 8 {
+        return false;
+    }
     match ty {
-        Type::Unknown | Type::GenuineUnknown | Type::TypeParameter(_) | Type::Reference(_) => false,
-        Type::Array(element) => constraint_operand_is_settled(element),
-        Type::Tuple(elements) => elements.iter().all(constraint_operand_is_settled),
-        Type::Union(union) => union.types().iter().all(constraint_operand_is_settled),
-        Type::Function(function) => constraint_signature_is_settled(function),
+        Type::Unknown | Type::GenuineUnknown | Type::Reference(_) => false,
+        Type::TypeParameter(parameter) => surge_ts_types::type_variable::active_constraint(parameter)
+            .flatten()
+            .is_some_and(|constraint| constraint_operand_is_settled_at_depth(&constraint, depth + 1)),
+        Type::Array(element) => constraint_operand_is_settled_at_depth(element, depth),
+        Type::Tuple(elements) => elements.iter().all(|element| constraint_operand_is_settled_at_depth(element, depth)),
+        Type::Union(union) => union.types().iter().all(|member| constraint_operand_is_settled_at_depth(member, depth)),
+        Type::Function(function) => constraint_signature_is_settled_at_depth(function, depth),
         Type::Object(object) => {
             object
                 .properties
                 .values()
-                .all(|property| constraint_operand_is_settled(&property.ty))
+                .all(|property| constraint_operand_is_settled_at_depth(&property.ty, depth))
                 && object
                     .string_index_type
                     .as_deref()
-                    .is_none_or(constraint_operand_is_settled)
+                    .is_none_or(|index| constraint_operand_is_settled_at_depth(index, depth))
                 && object
                     .call_signature
                     .as_deref()
-                    .is_none_or(constraint_signature_is_settled)
+                    .is_none_or(|signature| constraint_signature_is_settled_at_depth(signature, depth))
                 && object
                     .construct_signature
                     .as_deref()
-                    .is_none_or(constraint_signature_is_settled)
+                    .is_none_or(|signature| constraint_signature_is_settled_at_depth(signature, depth))
         }
         _ => true,
     }
 }
 
-fn constraint_signature_is_settled(function: &FunctionType) -> bool {
+fn constraint_signature_is_settled_at_depth(function: &FunctionType, depth: usize) -> bool {
     function
         .parameters()
         .iter()
-        .all(constraint_operand_is_settled)
-        && constraint_operand_is_settled(function.return_type())
+        .all(|parameter| constraint_operand_is_settled_at_depth(parameter, depth))
+        && constraint_operand_is_settled_at_depth(function.return_type(), depth)
 }
 
 /// Validate explicit type arguments against `K extends keyof T` constraints when
@@ -1964,15 +2027,25 @@ pub(crate) fn infer_type_argument_substitution(
             }),
         };
         ctx.truncate_diagnostics(diagnostics_before);
-        let Some(argument_type) = inferred_argument.flowing_type() else {
+        let Some(mut argument_type) = inferred_argument.flowing_type() else {
             record_generic_call_inference_unresolved_argument_skip();
             continue;
         };
 
+        if matches!(argument_type, Type::Any)
+            && matches!(parameter_type, ParsedType::Named(named) if named.type_arguments.is_empty()
+                && function_signature.type_parameters.iter().any(|parameter| {
+                    parameter.name == named.name
+                        && matches!(parameter.constraint, Some(ParsedType::Function(_)))
+                }))
+            && let Some(constructor) = construct_only_argument_type(&argument.expression, symbols, ctx)
+        {
+            argument_type = constructor;
+        }
         // A leaked placeholder (`Mock<T>` off a `vi.fn()` whose `T` no scope
         // binds) infers garbage — `TData` as the mock's own call signature —
         // so the argument contributes nothing, as an unresolved one does.
-        if argument_type.is_degraded()
+        if (argument_type.is_degraded() && !argument_type.is_type_variable())
             || crate::checks::expr::carries_leaked_type_parameter(&argument_type, ctx)
         {
             record_generic_call_inference_unresolved_argument_skip();
@@ -2036,7 +2109,7 @@ pub(crate) fn infer_type_argument_substitution(
         with_declaring_scope(function_signature, ctx, |ctx| {
             with_inference_root(parameter_type, || {
                 for candidate in &candidates {
-                    if candidate.is_degraded() {
+                    if candidate.is_degraded() && !candidate.is_type_variable() {
                         continue;
                     }
                     collect_inferred_type_argument(
@@ -2958,7 +3031,7 @@ pub(crate) fn collect_inferred_type_argument(
     // substitution.
     // tsc's error type is an `any` source: `inferFromTypes` still hands it to a
     // naked type parameter, so `query(() => missing.member)` binds `$Output`.
-    if argument_type.is_degraded() {
+    if argument_type.is_degraded() && !argument_type.is_type_variable() {
         return;
     }
 
@@ -3124,6 +3197,23 @@ pub(crate) fn collect_inferred_type_argument(
                     argument_type,
                     substitution,
                     widen_literals,
+                    ctx,
+                    depth,
+                );
+            }
+        }
+        ParsedType::Mapped(mapped)
+            if mapped.name_type.is_none()
+                && matches!(mapped.value_type.as_ref(), ParsedType::IndexedAccess(access)
+                    if matches!(access.index_type.as_ref(), ParsedType::Named(index)
+                        if index.name == mapped.key_name)) =>
+        {
+            if let Some(keys) = surge_ts_types::type_variable::literal_keys_of(argument_type) {
+                collect_inferred_type_argument(
+                    mapped.constraint.as_ref(),
+                    &keys,
+                    substitution,
+                    false,
                     ctx,
                     depth,
                 );
@@ -4202,6 +4292,7 @@ fn infer_through_generic_reference(
                 continue;
             }
             let base = ParsedNamedType {
+                type_argument_spans: Vec::new(),
                 name: base.name.clone(),
                 span: base.span,
                 type_arguments: base_arguments,
@@ -4400,6 +4491,7 @@ fn substitute_parsed_type_parameters(
                 ParsedType::Named(named.clone())
             } else {
                 ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+                    type_argument_spans: Vec::new(),
                     name: named.name.clone(),
                     span: named.span,
                     type_arguments: named

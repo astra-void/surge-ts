@@ -91,6 +91,7 @@ pub(super) fn display_fingerprint_walk(ty: &Type, hasher: &mut impl Hasher, budg
         Type::StringLiteral(value) => value.hash(hasher),
         Type::NumberLiteral(value) => value.value.hash(hasher),
         Type::BooleanLiteral(value) => value.hash(hasher),
+        Type::TypeParameter(parameter) => parameter.name.hash(hasher),
         Type::Array(element) => display_fingerprint_walk(element, hasher, budget),
         Type::Tuple(elements) => {
             for element in elements {

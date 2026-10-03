@@ -500,6 +500,7 @@ pub(crate) fn resolve_parsed_type(
                     {
                         let instance = resolve_named_type(
                             std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+                                type_argument_spans: Vec::new(),
                                 name: type_of.name.clone(),
                                 span: type_of.name_span,
                                 type_arguments: Vec::new(),

@@ -449,6 +449,7 @@ fn index_of(ty: &Type, kind: IndexKind) -> Option<Type> {
 
 fn named(name: &str, span: Option<TextSpan>, type_parameters: &[ParsedTypeParameter]) -> ParsedType {
     ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+        type_argument_spans: Vec::new(),
         name: name.to_string(),
         span,
         type_arguments: type_parameters

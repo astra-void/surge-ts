@@ -180,6 +180,17 @@ pub(crate) fn narrow_union_by_typeof(ty: &Type, tag: &str, keep_matching: bool) 
             Some(narrowed) if narrowed == *member => None,
             _ => Some(member.clone()),
         })
+        .filter(|member| {
+            if !keep_matching || tag != "function" {
+                return true;
+            }
+            let Type::TypeParameter(parameter) = member else {
+                return true;
+            };
+            !surge_ts_types::type_variable::active_constraint(parameter)
+                .flatten()
+                .is_some_and(|constraint| typeof_tag_of(&constraint) == Some("object"))
+        })
         .filter(|member| match typeof_tag_of(member) {
             Some(member_tag) => (member_tag == tag) == keep_matching,
             None => true,

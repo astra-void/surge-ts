@@ -316,6 +316,7 @@ fn infer_member_type(
     };
     let instance = crate::infer::types::map_parsed_type(
         surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: member.class_name.clone(),
             span: None,
             type_arguments: Vec::new(),
@@ -1401,6 +1402,7 @@ pub(crate) fn check_function_declaration(
 pub(crate) fn bind_arguments_object(scopes: &mut ScopeStack, ctx: &mut CheckerContext) {
     let ty = crate::infer::map_parsed_type(
         surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: "IArguments".to_string(),
             span: None,
             type_arguments: Vec::new(),

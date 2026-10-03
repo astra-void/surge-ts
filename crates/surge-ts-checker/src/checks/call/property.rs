@@ -1303,6 +1303,7 @@ pub(crate) fn promise_of(value: &Type, ctx: &mut CheckerContext) -> Type {
     substitution.insert(slot.clone(), value.clone());
     let named = |name: &str, type_arguments| {
         ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: name.to_string(),
             span: None,
             type_arguments,

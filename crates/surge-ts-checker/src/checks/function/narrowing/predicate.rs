@@ -265,6 +265,7 @@ fn generic_class_value_surface(
     let instance = with_type_copy_reason(TypeCopyReason::ScopeOrContext, || {
         crate::infer::types::resolve_parsed_type(
             surge_ts_syntax::ParsedType::Named(Arc::new(surge_ts_syntax::ParsedNamedType {
+                type_argument_spans: Vec::new(),
                 name,
                 span: None,
                 type_arguments,

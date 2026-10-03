@@ -125,20 +125,72 @@ fn report_non_module_import(
 
 /// tsc's `mergeModuleAugmentation`: a `declare module "m"` in a module file
 /// augments `m`, which must resolve — TS2664 at the name — to a module or a
-/// namespace-like `export =` target — TS2671. A declaration file's
-/// augmentations are ambient and never validated.
-fn report_unresolved_module_augmentations(
+/// namespace-like `export =` target — TS2671. Target validity is not checked
+/// for declaration-file augmentations. Body grammar requires an applied target.
+fn check_module_augmentations(
     parsed_file: &ParsedProgramFile,
     program_files: &[ParsedProgramFile],
+    module_export_tables: &[Option<ModuleExportTable>],
+    module_resolution_scopes: &[Option<Arc<TypeDeclarationScope>>],
     ctx: &mut CheckerContext,
 ) {
-    if !parsed_file.is_module || is_declaration_file_name(&parsed_file.file_name) {
+    if !parsed_file.is_module {
         return;
     }
     for statement in &parsed_file.statements {
         let ParsedStatement::DeclareModuleDeclaration(module) = statement else {
             continue;
         };
+        if module.module_specifier != "global" {
+            let applied = ambient_module_export_table(ctx, &module.module_specifier).is_some()
+                || resolved_program_file_index(ctx, &module.module_specifier, program_files)
+                    .and_then(|index| program_files.get(index))
+                    .is_some_and(|target| !export_assignment_targets_non_module_entity(target));
+            let mut declarations = TypeDeclarationTable::new();
+            let mut symbols = SymbolTable::new();
+            let mut layers = Vec::new();
+            let mut type_only_aliases = Vec::new();
+            let mut namespace_imports = Vec::new();
+            for statement in &module.statements {
+                if let ParsedStatement::ImportDeclaration(import) = statement {
+                    if applied && !matches!(import.kind, ParsedImportKind::EntityAlias { .. }) {
+                        let mut diagnostic = Diagnostic::ts2667(ctx.file_name.clone());
+                        if let Some(span) = import.span {
+                            diagnostic = diagnostic.with_span(convert_span(TextSpan {
+                                start: span.start,
+                                end: span.start + "import".len(),
+                            }));
+                        }
+                        ctx.push(diagnostic);
+                    }
+                    let recorded = parsed_file.statements.iter().any(|statement| {
+                        matches!(statement, ParsedStatement::ImportDeclaration(outer)
+                            if outer.module_specifier == import.module_specifier)
+                    }) || resolved_module_in_mode(
+                        ctx,
+                        &ctx.file_name,
+                        &import.module_specifier,
+                        import_resolution_mode(import),
+                    ).is_some();
+                    resolve_import_declaration(
+                        import,
+                        if recorded { program_files } else { &[] },
+                        if recorded { module_export_tables } else { &[] },
+                        if recorded { module_resolution_scopes } else { &[] },
+                        &|_| false,
+                        &mut declarations,
+                        &mut symbols,
+                        &mut layers,
+                        &mut type_only_aliases,
+                        &mut namespace_imports,
+                        ctx,
+                    );
+                }
+            }
+        }
+        if is_declaration_file_name(&parsed_file.file_name) {
+            continue;
+        }
         let specifier = module.module_specifier.as_str();
         if specifier == "global" || ambient_module_export_table(ctx, specifier).is_some() {
             continue;
@@ -500,7 +552,13 @@ pub(crate) fn resolve_module_imports(
         ctx,
     );
 
-    report_unresolved_module_augmentations(parsed_file, program_files, ctx);
+    check_module_augmentations(
+        parsed_file,
+        program_files,
+        module_export_tables,
+        module_resolution_scopes,
+        ctx,
+    );
 
     ModuleImportBindings {
         type_declarations: Arc::new(type_declarations),

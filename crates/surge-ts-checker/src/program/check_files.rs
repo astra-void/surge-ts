@@ -1039,6 +1039,7 @@ fn index_signature_key_reference_is_invalid(
         Some(crate::symbols::TypeDeclarationInfo::Interface(_))
     );
     let reference = surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+        type_argument_spans: Vec::new(),
         name: name.to_string(),
         span: Some(surge_ts_syntax::TextSpan { start, end }),
         type_arguments: Vec::new(),
@@ -1573,6 +1574,7 @@ fn check_import_attributes(clauses: &[surge_ts_syntax::ParsedImportAttributes], 
     }
     let import_attributes = crate::infer::map_parsed_type(
         surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: "ImportAttributes".to_string(),
             span: None,
             type_arguments: Vec::new(),

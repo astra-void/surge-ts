@@ -4,7 +4,9 @@ use super::*;
 
 use std::time::Instant;
 
-use surge_ts_syntax::{ParsedArrayElement, ParsedExpression, ParsedObjectProperty};
+use surge_ts_syntax::{
+    ParsedArrayElement, ParsedArrowFunctionBody, ParsedExpression, ParsedObjectProperty,
+};
 use surge_ts_types::{
     ObjectProperty, PropertyMap, Type, TypeCopyReason, union_type, with_type_copy_reason,
 };
@@ -15,7 +17,7 @@ use crate::metrics::alloc_object_type;
 use crate::program::{
     record_object_literal_property_check, record_program_timing, record_property_lookup,
 };
-use crate::symbols::SymbolTable;
+use crate::symbols::{SymbolInfo, SymbolKind, SymbolTable};
 
 use crate::infer::InferredExpression;
 
@@ -261,6 +263,8 @@ fn infer_object_literal_members(
 ) -> Type {
     let computed_index_signatures = computed_key_index_signatures(properties, symbols, ctx);
     let properties = &*resolve_computed_property_names(properties, symbols, ctx);
+    let closure_symbols = object_member_closure_symbols(properties, symbols);
+    let member_symbols = closure_symbols.as_ref().unwrap_or(symbols);
     let object_literal_start = Instant::now();
     // tsc's `getSpreadType` distributes over a spread union with more than one
     // non-empty object member, so the literal is one object per alternative.
@@ -386,7 +390,12 @@ fn infer_object_literal_members(
         }
 
         let readonly = is_get_only_accessor(property, properties);
-        let property_type = infer_object_property_type(property, member_this, symbols, ctx);
+        let property_symbols = if matches!(property.value, ParsedExpression::ArrowFunction(_)) {
+            member_symbols
+        } else {
+            symbols
+        };
+        let property_type = infer_object_property_type(property, member_this, property_symbols, ctx);
         for merged_properties in &mut alternatives {
             merged_properties.insert(
                 property.name.as_str().into(),
@@ -427,6 +436,84 @@ fn infer_object_literal_members(
         timings.object_literal_checking += object_literal_start.elapsed()
     });
     result
+}
+
+pub(crate) fn object_member_closure_symbols(
+    properties: &[ParsedObjectProperty],
+    symbols: &SymbolTable,
+) -> Option<SymbolTable> {
+    let mut written = Vec::new();
+    for property in properties {
+        let ParsedExpression::ArrowFunction(arrow) = &property.value else {
+            continue;
+        };
+        if let ParsedArrowFunctionBody::Block(body) = &arrow.body {
+            let parameters: Vec<_> = arrow
+                .parameters
+                .iter()
+                .flat_map(|parameter| parameter.binding_name.bound_names())
+                .map(|bound| bound.name)
+                .collect();
+            written.extend(
+                crate::checks::function::deep_assigned_names(&[body])
+                    .into_iter()
+                    .filter(|name| {
+                        !parameters.contains(name) && !object_member_body_binds(body, name)
+                    }),
+            );
+        }
+    }
+    let mut widened = None;
+    for name in written {
+        let (Some(symbol), Some(declared)) = (symbols.get(&name), symbols.declared_type(&name)) else {
+            continue;
+        };
+        if !matches!(symbol.kind, SymbolKind::Let | SymbolKind::Var) || symbol.ty == *declared {
+            continue;
+        }
+        let table = widened
+            .get_or_insert_with(|| symbols.clone_with_reason(TypeCopyReason::ExpressionInference));
+        table.insert(
+            name,
+            SymbolInfo {
+                ty: declared.clone(),
+                kind: symbol.kind,
+                function_signature: symbol.function_signature.clone(),
+            },
+        );
+    }
+    widened
+}
+
+fn object_member_body_binds(body: &[surge_ts_syntax::ParsedFunctionBodyStatement], name: &str) -> bool {
+    use surge_ts_syntax::ParsedFunctionBodyStatement as Statement;
+    body.iter().any(|statement| match statement {
+        Statement::VariableDeclaration(variable) => variable.name == name,
+        Statement::Function(function) => function.name == name,
+        Statement::Class(class) => class.name == name,
+        Statement::Block(body) => object_member_body_binds(body, name),
+        Statement::If(statement) => {
+            object_member_body_binds(&statement.then_body, name)
+                || object_member_body_binds(&statement.else_body, name)
+        }
+        Statement::While(statement) => object_member_body_binds(&statement.body, name),
+        Statement::ForOf(statement) => {
+            statement.binding_name.bound_names().iter().any(|bound| bound.name == name)
+                || object_member_body_binds(&statement.body, name)
+        }
+        Statement::Switch(statement) => statement.cases.iter()
+            .any(|case| object_member_body_binds(&case.consequent, name)),
+        Statement::Try(statement) => {
+            object_member_body_binds(&statement.block, name)
+                || object_member_body_binds(&statement.finalizer, name)
+                || statement.handler.as_ref().is_some_and(|handler| {
+                    handler.binding_name.as_ref().is_some_and(|binding| {
+                        binding.bound_names().iter().any(|bound| bound.name == name)
+                    }) || object_member_body_binds(&handler.body, name)
+                })
+        }
+        _ => false,
+    })
 }
 
 /// `checkCrossProductUnion` stops tsc at 100,000 spread alternatives; surge

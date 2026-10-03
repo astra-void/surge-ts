@@ -58,6 +58,7 @@ pub(crate) fn class_instance_members(class: &ParsedClassDeclaration) -> Vec<Decl
 
 fn named_type(name: &str, span: Option<TextSpan>) -> ParsedType {
     ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+        type_argument_spans: Vec::new(),
         name: name.to_string(),
         span,
         type_arguments: Vec::new(),
@@ -611,6 +612,7 @@ fn properties_identical(left: &surge_ts_types::ObjectProperty, right: &surge_ts_
 
 pub(crate) fn named_type_with(name: &str, span: Option<TextSpan>, type_arguments: Vec<ParsedType>) -> ParsedType {
     ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+        type_argument_spans: Vec::new(),
         name: name.to_string(),
         span,
         type_arguments,

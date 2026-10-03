@@ -2734,6 +2734,9 @@ fn evaluate_object_literal_with_expected_type(
         crate::infer::expression::computed_key_index_signatures(properties, symbols, ctx);
     let properties =
         &*crate::infer::expression::resolve_computed_property_names(properties, symbols, ctx);
+    let closure_symbols =
+        crate::infer::expression::object_member_closure_symbols(properties, symbols);
+    let member_symbols = closure_symbols.as_ref().unwrap_or(symbols);
     let object_start = Instant::now();
     let mut inferred_property_types = BTreeMap::new();
     // The empty object type `{}` (no properties, no string index) accepts any
@@ -2788,6 +2791,11 @@ fn evaluate_object_literal_with_expected_type(
     let mut elaborated_property_failure = false;
 
     for (property_index, property) in properties.iter().enumerate() {
+        let property_symbols = if matches!(property.value, ParsedExpression::ArrowFunction(_)) {
+            member_symbols
+        } else {
+            symbols
+        };
         if property.is_spread {
             if property.unnamed_key_value.is_none() && !explicit_properties.is_empty() {
                 let spread = crate::infer::infer_expression(&property.value, symbols, ctx);
@@ -2923,14 +2931,14 @@ fn evaluate_object_literal_with_expected_type(
             } else {
                 ExpectedTypeDiagnostic::TypeNotAssignable
             },
-            symbols,
+            property_symbols,
             ctx,
         );
         if property.is_shorthand {
             ctx.shorthand_property_depth -= 1;
         }
         if let ParsedExpression::ArrowFunction(getter) = &property.value {
-            crate::infer::expression::check_paired_setter(property, getter, symbols, ctx);
+            crate::infer::expression::check_paired_setter(property, getter, member_symbols, ctx);
         }
         let inferred_property = match inferred_property {
             InferredExpression::Known(Type::Function(function_type)) if property.is_accessor => {

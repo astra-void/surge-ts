@@ -350,6 +350,7 @@ pub(crate) fn resolve_interface(
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
     pre_resolved_arguments: Option<&[Type]>,
+    pre_resolved_errors: Option<&[bool]>,
 ) -> ResolvedType {
     crate::program::record_interface_resolution_attempt();
     let declaration_key = super::cache::interface_resolution_key(interface);
@@ -451,6 +452,7 @@ pub(crate) fn resolve_interface(
         resolving,
         substitution,
         pre_resolved_arguments,
+        pre_resolved_errors,
         Some((&declaration_effective_scope, &interface.file_name)),
     );
     if default_prefix.is_some() {

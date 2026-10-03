@@ -130,6 +130,7 @@ fn resolve_named_constructor_instance_type(
         crate::infer::types::resolve_parsed_type(
             surge_ts_syntax::ParsedType::Named(std::sync::Arc::new(
                 surge_ts_syntax::ParsedNamedType {
+                    type_argument_spans: Vec::new(),
                     name: ctor_name.to_string(),
                     span: None,
                     type_arguments: vec![surge_ts_syntax::ParsedType::Any; arity],

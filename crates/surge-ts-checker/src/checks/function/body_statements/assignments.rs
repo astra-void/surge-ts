@@ -6,7 +6,7 @@ use surge_ts_syntax::{
 use surge_ts_types::{Type, TypeCopyReason, is_assignable_to, union_type, with_type_copy_reason};
 
 use super::super::visible_symbols;
-use crate::checks::assign::check_assignment_with_symbols;
+use crate::checks::assign::check_assignment_with_symbols_inferred;
 use crate::checks::expr::evaluate_expression;
 use crate::context::CheckerContext;
 use crate::context::convert_span;
@@ -65,10 +65,16 @@ pub(crate) fn check_function_assignment(
         let value_span = assignment.value_span;
         // The value is checked in its target's context (tsc's
         // `getContextualTypeForAssignmentExpression`), which types a callback's
-        // parameters; what it narrows the target to is read again without
-        // that context, and reports nothing the checked value did not.
-        let checked =
-            check_assignment_with_symbols(assignment, &visible_symbols, shadowed_locally, ctx);
+        // parameters. Object literals keep that contextual shape for flow;
+        // re-inference would discard constructor arguments inferred from it.
+        let diagnostics_before = ctx.diagnostics().len();
+        let (checked, contextual_value) = check_assignment_with_symbols_inferred(
+            assignment,
+            &visible_symbols,
+            shadowed_locally,
+            ctx,
+        );
+        let assignment_valid = checked && ctx.diagnostics().len() == diagnostics_before;
         let checkpoint = ctx.diagnostics().len();
         let inferred_value = if checked {
             evaluate_expression(&value, value_span, &visible_symbols, ctx)
@@ -79,6 +85,14 @@ pub(crate) fn check_function_assignment(
         if checked {
             ctx.truncate_diagnostics_releasing_utility_keys(checkpoint);
         }
+        let inferred_value = match (&value, contextual_value) {
+            (ParsedExpression::ObjectLiteral { .. }, InferredExpression::Known(contextual))
+                if assignment_valid && !contextual.is_degraded() =>
+            {
+                InferredExpression::Known(contextual)
+            }
+            _ => inferred_value,
+        };
         if compound {
             widen_compound_assigned_symbol_type(&target_name, scopes);
         } else if !super::evolving_arrays::assign_evolving_array(
@@ -138,6 +152,7 @@ fn declared_object_type_by_name(object_type: &Type, ctx: &mut CheckerContext) ->
     ctx.lookup_type_declaration(name)?;
     let declared = crate::infer::map_parsed_type(
         ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: name.to_string(),
             span: None,
             type_arguments: Vec::new(),

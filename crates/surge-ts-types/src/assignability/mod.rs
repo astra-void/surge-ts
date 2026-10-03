@@ -415,13 +415,19 @@ pub fn is_assignable_to(from: &Type, to: &Type) -> bool {
         return related;
     }
 
-    // Two signatures differing only in their predicate share a payload, which
-    // is all `==` compares.
+    // Predicates and written generic constraints are handle-local; sharing an
+    // erased payload does not make two signatures equivalent.
     let same_predicates = match (from, to) {
         (Type::Function(source), Type::Function(target)) => source.type_predicate() == target.type_predicate(),
         _ => true,
     };
-    if (from == to && same_predicates)
+    let same_generic_shapes = match (from, to) {
+        (Type::Function(source), Type::Function(target)) => {
+            written_shape_address(source) == written_shape_address(target)
+        }
+        _ => true,
+    };
+    if (from == to && same_predicates && same_generic_shapes)
         || matches!(from, Type::Any)
         || matches!(from, Type::Never)
         || matches!(to, Type::Any)
@@ -2353,6 +2359,11 @@ fn assignability_arms(from: &Type, to: &Type) -> bool {
         return is_assignable_to(&resolved, to);
     }
     if let Type::Reference(reference) = to {
+        if reference.is_readonly_array()
+            && let Type::Union(from_union) = from
+        {
+            return union_source_related(from_union, to);
+        }
         // Any function (or callable/constructable object) is assignable to the
         // global `Function` interface. Its structural shape carries members a bare
         // function type does not expose (`prototype`, `arguments`, `caller`), so
@@ -2777,12 +2788,7 @@ fn expanded_signature(function: &FunctionType) -> (std::borrow::Cow<'_, [Type]>,
         let mut expanded = parameters[..leading].to_vec();
         expanded.extend(elements.iter().cloned());
         let required = function.required_parameter_count().min(leading)
-            + written_tuple_min_length(rest).unwrap_or_else(|| {
-                elements
-                    .iter()
-                    .take_while(|element| !type_includes_undefined(element))
-                    .count()
-            });
+            + written_tuple_min_length(rest).unwrap_or_else(|| crate::tuple_min_length(&elements));
         return (std::borrow::Cow::Owned(expanded), required, false);
     }
     (
@@ -3604,6 +3610,36 @@ fn substitute_type_parameters(
                 .map(|element| substitute_type_parameters(element, names, opaque, changed))
                 .collect(),
         ),
+        Type::Reference(reference) => {
+            let mut arguments_changed = false;
+            let arguments: Vec<Type> = reference.arguments.iter().map(|argument| {
+                substitute_type_parameters(argument, names, opaque, &mut arguments_changed)
+            }).collect();
+            if !arguments_changed {
+                return ty.clone();
+            }
+            *changed = true;
+            let resolver = SignatureReferenceSubstitution {
+                original: reference.clone(),
+                names: names.to_vec().into(),
+                replacements: names.iter().map(|name| opaque(name)).collect::<Vec<_>>().into(),
+            };
+            let mut substituted = crate::TypeReference::new(
+                reference.id.clone(),
+                reference.display.clone(),
+                arguments,
+                Arc::new(resolver),
+            );
+            substituted.render_structurally = reference.render_structurally;
+            substituted.numeric_enum = reference.numeric_enum;
+            substituted.enum_owner = reference.enum_owner.clone();
+            substituted.enum_base = reference.enum_base.clone();
+            substituted.enum_members = reference.enum_members.clone();
+            substituted.alias_display = reference.alias_display.clone();
+            substituted.non_augmenting_subtype = reference.non_augmenting_subtype;
+            substituted.declared_variances = reference.declared_variances;
+            Type::Reference(substituted)
+        }
         Type::Union(union) => crate::union_type(
             union
                 .types()
@@ -3678,6 +3714,45 @@ fn substitute_type_parameters(
             Type::Object(substituted)
         }
         other => other.clone(),
+    }
+}
+
+struct SignatureReferenceSubstitution {
+    original: crate::TypeReference,
+    names: Arc<[String]>,
+    replacements: Arc<[Type]>,
+}
+
+impl crate::ResolveReference for SignatureReferenceSubstitution {
+    fn resolve(&self) -> Type {
+        let resolved = self.original.resolve_arc();
+        let structural = match resolved.as_ref() {
+            Type::Object(object) => {
+                let mut object = object.clone();
+                object.alias_id = None;
+                Type::Object(object)
+            }
+            other => other.clone(),
+        };
+        let replacement = |name: &str| {
+            self.names.iter().position(|own| own == name)
+                .map(|index| self.replacements[index].clone())
+                .unwrap_or_else(|| Type::type_parameter(name))
+        };
+        substitute_type_parameters(&structural, &self.names, &replacement, &mut false)
+    }
+
+    fn retains_resolution_context(&self) -> bool {
+        true
+    }
+
+    fn captured_census(&self) -> crate::ResolverCaptureCensus {
+        self.original.captured_census()
+    }
+
+    fn supports_program_canonicalization(&self) -> bool {
+        // These bindings belong to one signature comparison, not the program.
+        false
     }
 }
 

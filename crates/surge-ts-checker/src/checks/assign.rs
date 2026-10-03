@@ -71,8 +71,17 @@ pub(crate) fn check_assignment_with_symbols(
     shadowed_locally: bool,
     ctx: &mut CheckerContext,
 ) -> bool {
+    check_assignment_with_symbols_inferred(assignment, symbols, shadowed_locally, ctx).0
+}
+
+pub(crate) fn check_assignment_with_symbols_inferred(
+    assignment: ParsedAssignment,
+    symbols: &SymbolTable,
+    shadowed_locally: bool,
+    ctx: &mut CheckerContext,
+) -> (bool, crate::infer::InferredExpression) {
     let Some(target_span) = assignment.target_span else {
-        return false;
+        return (false, crate::infer::InferredExpression::Unknown);
     };
 
     // The target resolves exactly as a read of the name does, module-scope
@@ -101,7 +110,7 @@ pub(crate) fn check_assignment_with_symbols(
                 let diagnostic = Diagnostic::ts2539("undefined", ctx.file_name.clone())
                     .with_span(convert_span(target_span));
                 ctx.push(diagnostic);
-                return false;
+                return (false, crate::infer::InferredExpression::Unknown);
             }
             // tsc rejects a write by the symbol's module meaning before it
             // asks whether a variable is a constant, and the fallback binds a
@@ -110,7 +119,7 @@ pub(crate) fn check_assignment_with_symbols(
                 let diagnostic = Diagnostic::ts2631(&assignment.target_name, ctx.file_name.clone())
                     .with_span(convert_span(target_span));
                 ctx.push(diagnostic);
-                return false;
+                return (false, crate::infer::InferredExpression::Unknown);
             }
             match ctx
                 .module_value_fallback
@@ -126,7 +135,7 @@ pub(crate) fn check_assignment_with_symbols(
                         symbols,
                         ctx,
                     );
-                    return false;
+                    return (false, crate::infer::InferredExpression::Unknown);
                 }
             }
         }
@@ -136,14 +145,14 @@ pub(crate) fn check_assignment_with_symbols(
         let diagnostic = Diagnostic::ts2632(&assignment.target_name, ctx.file_name.clone())
             .with_span(convert_span(target_span));
         ctx.push(diagnostic);
-        return false;
+        return (false, crate::infer::InferredExpression::Unknown);
     }
 
     if let Some(diagnostic) =
         unwritable_binding_diagnostic(&assignment.target_name, &target, ctx)
     {
         ctx.push(diagnostic.with_span(convert_span(target_span)));
-        return false;
+        return (false, crate::infer::InferredExpression::Unknown);
     }
 
     // An assignment is checked against the *declared* type, not the type flow
@@ -177,11 +186,11 @@ pub(crate) fn check_assignment_with_symbols(
         crate::semantic::record_span_type(span, Some(value_type), ctx);
     }
 
-    match inferred_value {
+    match &inferred_value {
         crate::infer::InferredExpression::Known(inferred_value_type) => {
             let assignability_start = Instant::now();
             record_assignability_check();
-            if inferred_value_type != surge_ts_types::Type::Unknown
+            if *inferred_value_type != surge_ts_types::Type::Unknown
                 && ((!type_contains_unknown(&target_type)
                     && !crate::checks::call::as_source(|| {
                         type_contains_unknown(&inferred_value_type)
@@ -190,7 +199,7 @@ pub(crate) fn check_assignment_with_symbols(
                     || definite_primitive_member_mismatch(&inferred_value_type, &target_type)
                     || definite_type_variable_mismatch(&inferred_value_type, &target_type))
                 && !with_dts_expansion_reason(DtsExpansionReason::Assignability, || {
-                    is_assignable_to(&inferred_value_type, &target_type)
+                    is_assignable_to(inferred_value_type, &target_type)
                 })
             {
                 let reported_target = crate::checks::expr::reported_relation_target(
@@ -235,7 +244,7 @@ pub(crate) fn check_assignment_with_symbols(
         crate::infer::InferredExpression::MissingProperty { .. } => {}
         crate::infer::InferredExpression::Unknown => {}
     }
-    true
+    (true, inferred_value)
 }
 
 /// Whether calling or constructing `source` yields something assignable to

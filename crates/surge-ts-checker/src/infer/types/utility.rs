@@ -2,11 +2,10 @@
 
 use super::*;
 
-use surge_ts_diagnostics::Diagnostic;
 use surge_ts_syntax::{ParsedType, TextSpan};
 use surge_ts_types::{ObjectProperty, PropertyMap, Type};
 
-use crate::context::{CheckerContext, DeclarationResolutionKey, convert_span};
+use crate::context::{CheckerContext, DeclarationResolutionKey};
 use crate::default_lib::{is_generated_default_lib_file_name, is_physical_default_lib_file_name};
 use crate::metrics::alloc_object_type;
 use crate::symbols::{TypeAliasInfo, TypeDeclarationHandle};
@@ -259,6 +258,7 @@ pub(crate) fn resolve_type_alias(
     resolving: &mut Vec<DeclarationResolutionKey>,
     substitution: &TypeParameterSubstitution,
     pre_resolved_arguments: Option<&[Type]>,
+    pre_resolved_errors: Option<&[bool]>,
 ) -> ResolvedType {
     let declaration_key = super::cache::alias_resolution_key(alias);
     // Under the instantiation-aware gate a generic back-edge is a cycle only
@@ -427,6 +427,7 @@ pub(crate) fn resolve_type_alias(
         resolving,
         substitution,
         pre_resolved_arguments,
+        pre_resolved_errors,
         Some((&effective_scope, &alias.file_name)),
     );
     if default_prefix.is_some() {
@@ -881,8 +882,8 @@ pub(crate) fn resolve_record_utility_type(
 
 pub(crate) fn resolve_pick_utility_type(
     substitution: &TypeParameterSubstitution,
-    name_span: Option<TextSpan>,
-    ctx: &mut CheckerContext,
+    _name_span: Option<TextSpan>,
+    _ctx: &mut CheckerContext,
 ) -> ResolvedType {
     let Some(source_type) = substitution.get("T").cloned() else {
         return ResolvedType {
@@ -942,14 +943,6 @@ pub(crate) fn resolve_pick_utility_type(
             .get(key.as_str())
             .filter(|property| crate::infer::types::resolve::is_public_key(&key, property))
         else {
-            let key_type_name = key_type.name();
-            let constraint_name = format!("keyof {}", Type::Object(object_type.clone()).name());
-            let mut diagnostic =
-                Diagnostic::ts2344(&key_type_name, &constraint_name, ctx.file_name.clone());
-            if let Some(span) = name_span {
-                diagnostic = diagnostic.with_span(convert_span(span));
-            }
-            ctx.push_utility_diagnostic_once(diagnostic);
             return ResolvedType {
                 ty: Type::Unknown,
                 had_error: true,

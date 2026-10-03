@@ -173,7 +173,8 @@ pub(crate) fn infer_conditional_expression(
             InferredExpression::Known(Type::Any)
         }
         (InferredExpression::Known(true_ty), InferredExpression::Known(false_ty))
-            if !true_ty.is_unknown() && !false_ty.is_unknown() =>
+            if (!true_ty.is_unknown() || true_ty.is_type_variable())
+                && (!false_ty.is_unknown() || false_ty.is_type_variable()) =>
         {
             if true_ty == false_ty {
                 InferredExpression::Known(true_ty)
@@ -296,4 +297,3 @@ pub(crate) fn truthy_part(ty: &Type) -> Type {
         _ => ty.clone(),
     }
 }
-

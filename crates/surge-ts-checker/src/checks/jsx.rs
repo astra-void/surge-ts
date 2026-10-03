@@ -454,6 +454,7 @@ fn jsx_namespace_member(member: &str, ctx: &mut CheckerContext) -> JsxMember {
         }
         JsxMember::Found(map_parsed_type(
             ParsedType::Named(Arc::new(ParsedNamedType {
+                type_argument_spans: Vec::new(),
                 name: name.clone(),
                 span: None,
                 type_arguments: Vec::new(),
@@ -1467,6 +1468,7 @@ fn intrinsic_class_attributes(instance: &Type, ctx: &mut CheckerContext) -> Opti
 
 fn named_type(name: &str, type_arguments: Vec<ParsedType>) -> ParsedType {
     ParsedType::Named(Arc::new(ParsedNamedType {
+        type_argument_spans: Vec::new(),
         name: name.to_string(),
         span: None,
         type_arguments,

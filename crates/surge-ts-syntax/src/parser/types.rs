@@ -173,6 +173,7 @@ pub(crate) fn parse_type(type_annotation: &TSType<'_>) -> Option<ParsedType> {
                 None => Vec::new(),
             };
             Some(ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+                type_argument_spans: Vec::new(),
                 name: crate::import_type_name(&import_type.source.value, &members),
                 span: Some(text_span_from_oxc_span(import_type.span)),
                 type_arguments,
@@ -451,6 +452,13 @@ fn parse_type_reference(type_reference: &TSTypeReference<'_>) -> Option<ParsedTy
     };
 
     Some(ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+        type_argument_spans: type_reference
+            .type_arguments
+            .as_ref()
+            .map(|arguments| {
+                arguments.params.iter().map(|argument| text_span_from_oxc_span(argument.span())).collect()
+            })
+            .unwrap_or_default(),
         name,
         span: Some(span),
         type_arguments,

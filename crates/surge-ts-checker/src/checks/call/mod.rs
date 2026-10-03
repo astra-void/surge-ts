@@ -1438,6 +1438,7 @@ fn check_new_like_unrecorded(
                 type_arguments.to_vec()
             };
             let named = ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+                type_argument_spans: Vec::new(),
                 name: name.clone(),
                 span: None,
                 type_arguments,
@@ -1807,6 +1808,7 @@ pub(crate) fn generic_class_instance_type(
                 // unbound. A type the syntax cannot spell keeps the name route.
                 synthesized.push(reify_type_argument(inferred_type).unwrap_or_else(|| {
                     ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+                        type_argument_spans: Vec::new(),
                         name: parameter.name.clone(),
                         span: None,
                         type_arguments: Vec::new(),
@@ -1836,6 +1838,7 @@ pub(crate) fn generic_class_instance_type(
         type_arguments.to_vec()
     };
     let named = ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+        type_argument_spans: Vec::new(),
         name: name.clone(),
         span: None,
         type_arguments: arguments,
@@ -3598,6 +3601,16 @@ pub(crate) fn check_function_type_call(
             symbols,
             ctx,
         );
+        let inferred_argument = match inferred_argument {
+            InferredExpression::Known(Type::Any)
+                if matches!(parameter_type.peeled(), Type::Function(_)) =>
+            {
+                instantiate::construct_only_argument_type(&argument.expression, symbols, ctx)
+                    .map(InferredExpression::Known)
+                    .unwrap_or(InferredExpression::Known(Type::Any))
+            }
+            other => other,
+        };
         ctx.suppressed_argument_mismatch_span = outer_suppressed;
         if !mismatch_reported
             && ctx.diagnostics[diagnostics_before..]
@@ -3704,7 +3717,11 @@ pub(crate) fn check_function_type_call(
                                 &argument_type,
                                 &parameter_type,
                             ))
-                        || type_variable_decides(&argument_type, &parameter_type))
+                        || type_variable_decides(&argument_type, &parameter_type)
+                        || instantiate::lacks_constraint_call_signature(
+                            &argument_type,
+                            &parameter_type,
+                        ))
                     && !is_open_instantiation(&argument_type)
                     && !is_assignable_to(&argument_type, &parameter_type)
                 {

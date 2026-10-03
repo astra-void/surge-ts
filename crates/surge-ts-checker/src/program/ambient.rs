@@ -838,7 +838,6 @@ type AmbientBlockImports =
 fn ambient_blocks_have_imports(parsed_files: &[ParsedProgramFile]) -> bool {
     parsed_files
         .iter()
-        .filter(|parsed_file| !parsed_file.is_module)
         .flat_map(|parsed_file| &parsed_file.statements)
         .any(|statement| {
             matches!(
@@ -852,7 +851,7 @@ fn ambient_blocks_have_imports(parsed_files: &[ParsedProgramFile]) -> bool {
         })
 }
 
-/// Binds the imports written inside each script file's `declare module`
+/// Binds the imports written inside each file's `declare module`
 /// blocks against the ambient tables registered so far. Resolution
 /// diagnostics are dropped: an unresolvable block import stays silent, as it
 /// always has.
@@ -862,9 +861,6 @@ fn bind_ambient_block_imports(
 ) -> AmbientBlockImports {
     let mut bindings = AmbientBlockImports::default();
     for (file_index, parsed_file) in parsed_files.iter().enumerate() {
-        if parsed_file.is_module {
-            continue;
-        }
         for (statement_index, statement) in parsed_file.statements.iter().enumerate() {
             let ParsedStatement::DeclareModuleDeclaration(module) = statement else {
                 continue;

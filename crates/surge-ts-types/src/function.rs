@@ -535,7 +535,7 @@ impl FunctionType {
         }
         // The memo lives on the shared payload, so a handle-local rendering must
         // not be written into it.
-        if self.parameter_names.is_some() || self.type_parameter_head.is_some() {
+        if self.parameter_names.is_some() || self.type_parameter_head.is_some() || self.generic_shape().is_some() {
             return self.render_name();
         }
         if crate::tsc_display::active() {
@@ -559,20 +559,21 @@ impl FunctionType {
 
     fn render_with_return_separator(&self, separator: &str) -> String {
         let names = self.parameter_names();
+        let shape = self.generic_shape();
+        let parameter_types = shape.map_or(self.parameters(), |shape| shape.parameters.as_slice());
+        let return_type = shape.map_or(self.return_type(), |shape| &shape.return_type);
         // A variadic signature's named last parameter of an array type is its
         // rest parameter, which tsc prints as one (`...items: T[]`).
-        let rest = self
-            .parameters()
+        let rest = parameter_types
             .len()
             .checked_sub(1)
             .filter(|last| {
                 crate::tsc_display::active()
                     && self.is_variadic()
                     && names.is_some_and(|names| names[*last].is_some())
-                    && crate::tsc_display::is_rest_parameter_type(&self.parameters()[*last])
+                    && crate::tsc_display::is_rest_parameter_type(&parameter_types[*last])
             });
-        let mut parameters = self
-            .parameters()
+        let mut parameters = parameter_types
             .iter()
             .enumerate()
             .map(|(index, parameter)| {
@@ -592,12 +593,20 @@ impl FunctionType {
 
         let head = match self.type_parameter_head.as_deref() {
             Some(head) => format!("<{head}>"),
-            None => String::new(),
+            None => shape.map_or_else(String::new, |shape| {
+                let parameters = shape.type_parameters.iter().map(|(name, constraint)| {
+                    match constraint {
+                        Some(constraint) => format!("{name} extends {}", constraint.name()),
+                        None => name.to_string(),
+                    }
+                }).collect::<Vec<_>>();
+                format!("<{}>", parameters.join(", "))
+            }),
         };
         format!(
             "{head}({}){separator}{}",
             parameters.join(", "),
-            self.return_type().name()
+            return_type.name()
         )
     }
 }

@@ -151,7 +151,9 @@ pub(crate) fn evaluate_conditional_expression(
         return InferredExpression::Unknown;
     };
 
-    if true_type.is_unmodelled() || false_type.is_unmodelled() {
+    if (true_type.is_unmodelled() && !true_type.is_type_variable())
+        || (false_type.is_unmodelled() && !false_type.is_type_variable())
+    {
         return InferredExpression::Unknown;
     }
 

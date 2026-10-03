@@ -15,7 +15,9 @@ use std::sync::Arc;
 use crate::{ParsedObjectType, ParsedObjectTypeProperty, ParsedType};
 
 pub fn is_json_file_name(file_name: &str) -> bool {
-    file_name.len() >= 5 && file_name[file_name.len() - 5..].eq_ignore_ascii_case(".json")
+    file_name
+        .get(file_name.len().saturating_sub(5)..)
+        .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".json"))
 }
 
 /// The type of the value in `source_text`, or `None` when it is not valid JSON.

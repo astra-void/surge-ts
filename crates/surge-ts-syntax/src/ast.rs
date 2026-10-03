@@ -906,6 +906,7 @@ pub struct ParsedObjectBindingElement {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedNamedType {
+    pub type_argument_spans: Vec<TextSpan>,
     pub name: String,
     pub span: Option<TextSpan>,
     pub type_arguments: Vec<ParsedType>,
@@ -2701,6 +2702,7 @@ impl ParsedTypeParameter {
 impl ParsedNamedType {
     pub fn estimated_heap_bytes(&self) -> u64 {
         let mut bytes = (std::mem::size_of::<ParsedNamedType>() + self.name.capacity()) as u64;
+        bytes += (self.type_argument_spans.capacity() * std::mem::size_of::<TextSpan>()) as u64;
         for argument in &self.type_arguments {
             bytes += argument.estimated_heap_bytes();
         }

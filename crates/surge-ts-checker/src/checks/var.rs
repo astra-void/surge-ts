@@ -527,7 +527,8 @@ pub(crate) fn check_variable_declaration_against_symbols(
     let variable_name = variable.name.clone();
     let variable_name_span = variable.name_span;
     let annotated = variable.declared_type.is_some();
-    let redeclaration_candidate = !variable.is_declare && (annotated || variable.initializer.is_some());
+    let has_initializer = variable.initializer.is_some();
+    let redeclaration_candidate = !variable.is_declare;
     let auto_array = is_auto_array_candidate(&variable, ctx);
 
     // A generic annotation is kept for call-site instantiation; a type-predicate
@@ -756,7 +757,8 @@ pub(crate) fn check_variable_declaration_against_symbols(
             if declared_type.is_none() && matches!(inferred_initializer_type, Type::ErrorType) {
                 Some(crate::infer::unresolved_name_error_type().unwrap_or(Type::Unknown))
             } else if declared_type.is_none()
-                && !inferred_initializer_type.is_unknown()
+                && (!inferred_initializer_type.is_unknown()
+                    || inferred_initializer_type.is_type_variable())
                 && let Some(initializer) = variable.initializer.as_ref()
             {
                 let widened_call;
@@ -921,14 +923,22 @@ pub(crate) fn check_variable_declaration_against_symbols(
     if matches!(symbol.kind, SymbolKind::Var)
         && symbols.get_own(&variable_name).is_none_or(|existing| !matches!(existing.kind, SymbolKind::Var))
     {
-        if !annotated && matches!(symbol.ty, Type::Any) {
+        if !annotated && has_initializer && matches!(symbol.ty, Type::Any) {
             ctx.inferred_any_vars.insert(variable_name.clone());
         } else {
             ctx.inferred_any_vars.remove(&variable_name);
         }
     }
     if redeclaration_candidate {
-        report_redeclared_var_type(&variable_name, variable_name_span, &symbol, annotated, symbols, ctx);
+        report_redeclared_var_type(
+            &variable_name,
+            variable_name_span,
+            &symbol,
+            annotated,
+            has_initializer,
+            symbols,
+            ctx,
+        );
         // A `var` has one type, its first declaration's: a later declaration
         // is checked against it (TS2403) and never replaces it.
         if matches!(symbol.kind, SymbolKind::Var)
@@ -962,18 +972,21 @@ pub(crate) fn check_variable_declaration_against_symbols(
 /// `any` is not compared: its inference still answers `any` where tsc has a
 /// type.
 ///
-/// An ambient `declare var` is skipped for the reason the duplicate `let`/`const`
-/// check skips it: it is pre-registered before this runs, so its own
-/// registration would read as the earlier declaration.
+/// A declaration without an initializer has type `any` and must be compared.
+/// Ambient declarations are pre-registered, so their own registration would
+/// read as an earlier declaration.
 fn report_redeclared_var_type(
     variable_name: &str,
     variable_name_span: Option<surge_ts_syntax::TextSpan>,
     symbol: &SymbolInfoHandle,
     annotated: bool,
+    has_initializer: bool,
     symbols: &SymbolTable,
     ctx: &mut CheckerContext,
 ) {
-    if !matches!(symbol.kind, SymbolKind::Var) || (!annotated && matches!(symbol.ty, Type::Any)) {
+    if !matches!(symbol.kind, SymbolKind::Var)
+        || (!annotated && has_initializer && matches!(symbol.ty, Type::Any))
+    {
         return;
     }
     // The binding may carry a flow-narrowed type; the symbol's own is the

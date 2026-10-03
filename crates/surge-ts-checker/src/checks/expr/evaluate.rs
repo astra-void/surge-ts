@@ -1785,6 +1785,7 @@ fn evaluate_import_call(
     {
         let import_call_options = crate::infer::map_parsed_type(
             ParsedType::Named(std::sync::Arc::new(surge_ts_syntax::ParsedNamedType {
+                type_argument_spans: Vec::new(),
                 name: "ImportCallOptions".to_string(),
                 span: None,
                 type_arguments: Vec::new(),

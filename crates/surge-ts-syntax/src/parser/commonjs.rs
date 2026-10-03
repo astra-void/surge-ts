@@ -589,6 +589,7 @@ fn define_property_export(call: &CallExpression<'_>, statement_span: oxc_span::S
     let descriptor_expression = ParsedExpression::SatisfiesExpression {
         expression: Box::new(descriptor_expression),
         target_type: ParsedType::Named(std::sync::Arc::new(crate::ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: "PropertyDescriptor".to_string(),
             span: None,
             type_arguments: Vec::new(),

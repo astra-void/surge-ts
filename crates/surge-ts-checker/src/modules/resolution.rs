@@ -195,6 +195,9 @@ pub(crate) fn resolve_relative_module_in_mode(
     if !is_relative_specifier(specifier) {
         return None;
     }
+    if program_files.is_empty() {
+        return None;
+    }
     let esm = relative_resolution_is_esm(importer_file_name, resolution_mode);
     if esm && is_extensionless_relative_specifier(specifier) {
         return None;
@@ -266,7 +269,7 @@ pub(crate) fn resolve_relative_module_uncached(
         }
         return Some(ModuleResolution {
             resolved_file_index: *resolved_file_index,
-            resolved_file_name: program_files[*resolved_file_index].file_name.clone(),
+            resolved_file_name: program_files.get(*resolved_file_index)?.file_name.clone(),
         });
     }
 
@@ -278,7 +281,7 @@ pub(crate) fn resolve_relative_module_uncached(
         if let Some(resolved_file_index) = file_index_by_identity.get(candidate.as_str()) {
             return Some(ModuleResolution {
                 resolved_file_index: *resolved_file_index,
-                resolved_file_name: program_files[*resolved_file_index].file_name.clone(),
+                resolved_file_name: program_files.get(*resolved_file_index)?.file_name.clone(),
             });
         }
     }
@@ -352,7 +355,7 @@ fn first_program_file(
             *file_index_by_identity.get(canonical_file_identity(&candidate).as_str())?;
         Some(ModuleResolution {
             resolved_file_index,
-            resolved_file_name: program_files[resolved_file_index].file_name.clone(),
+            resolved_file_name: program_files.get(resolved_file_index)?.file_name.clone(),
         })
     })
 }

@@ -1622,6 +1622,7 @@ fn complete_reference_arguments(
         resolving,
         &TypeParameterSubstitution::new(),
         Some(&written),
+        None,
         Some((&declaration_scope, &file_name)),
     );
     ctx.truncate_diagnostics_releasing_utility_keys(diagnostics_before);
@@ -2910,6 +2911,7 @@ pub(crate) fn substitute_parsed_type_parameters_deep(
                 return ParsedType::Named(named.clone());
             }
             ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+                type_argument_spans: Vec::new(),
                 name: named.name.clone(),
                 span: named.span,
                 type_arguments: named

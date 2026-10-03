@@ -416,6 +416,7 @@ fn syntactic_method_return_type(
             return None;
         }
         Some(ParsedType::Named(Arc::new(ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: name.clone(),
             span: None,
             type_arguments: type_arguments.clone(),
@@ -492,6 +493,7 @@ fn syntactic_method_return_type(
     };
     Some(if method.is_async {
         ParsedType::Named(Arc::new(ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: "Promise".to_string(),
             span: None,
             type_arguments: vec![returned],
@@ -1152,6 +1154,7 @@ fn class_instance_type(class: &ParsedClassDeclaration, ctx: &mut CheckerContext)
             .iter()
             .map(|parameter| {
                 ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+                    type_argument_spans: Vec::new(),
                     name: parameter.name.clone(),
                     span: None,
                     type_arguments: Vec::new(),
@@ -1163,6 +1166,7 @@ fn class_instance_type(class: &ParsedClassDeclaration, ctx: &mut CheckerContext)
     };
     map_parsed_type(
         ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: class.name.clone(),
             span: class.name_span,
             type_arguments,
@@ -1178,6 +1182,7 @@ fn class_construct_signature(
     ctx: &mut CheckerContext,
 ) -> FunctionType {
     let named_instance = ParsedType::Named(std::sync::Arc::new(ParsedNamedType {
+        type_argument_spans: Vec::new(),
         name: class.name.clone(),
         span: class.name_span,
         type_arguments: Vec::new(),

@@ -237,6 +237,7 @@ impl<'a> Query<'a> {
         query_ctx.type_declaration_scope = None;
         query_ctx.lookup_type_declaration(name)?;
         let named = ParsedType::Named(Arc::new(ParsedNamedType {
+            type_argument_spans: Vec::new(),
             name: name.to_string(),
             span: None,
             type_arguments: Vec::new(),

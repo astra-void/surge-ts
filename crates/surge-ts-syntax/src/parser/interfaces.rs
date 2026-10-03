@@ -123,6 +123,7 @@ fn parse_interface_heritage(heritage: &TSInterfaceHeritage<'_>) -> Option<crate:
         .unwrap_or_default();
 
     Some(crate::ParsedNamedType {
+        type_argument_spans: Vec::new(),
         name,
         span: Some(span),
         type_arguments,
