@@ -1362,6 +1362,58 @@ struct ParameterListResolver<'p> {
     initializer_symbols: Option<SymbolTable>,
 }
 
+/// tsc's `padObjectLiteralType`: a parameter whose object binding pattern
+/// defaults a property its object-literal initializer lacks takes that
+/// property too, optional and typed by the default — `({ x, y = 0 } = { x: 0 })`
+/// accepts `{ x: number; y?: number }`.
+fn pad_object_literal_type(
+    parameter: &ParsedFunctionParameter,
+    initializer: &surge_ts_syntax::ParsedExpression,
+    ty: Type,
+    symbols: &SymbolTable,
+    ctx: &mut CheckerContext,
+) -> Type {
+    let (ParsedBindingName::ObjectPattern(pattern), surge_ts_syntax::ParsedExpression::ObjectLiteral { .. }, Type::Object(object)) =
+        (&parameter.binding_name, initializer, &ty)
+    else {
+        return ty;
+    };
+    let missing: Vec<&surge_ts_syntax::ParsedObjectBindingElement> = pattern
+        .elements
+        .iter()
+        .filter(|element| element.has_default && object.get_property(&element.property_name).is_none())
+        .collect();
+    if missing.is_empty() {
+        return ty;
+    }
+    let mut properties = (*object.properties).clone();
+    for element in missing {
+        let default_type = element
+            .default_value
+            .as_deref()
+            .and_then(|default| {
+                let diagnostics_before = ctx.diagnostics().len();
+                let inferred = crate::infer::infer_expression(default, symbols, ctx);
+                ctx.truncate_diagnostics(diagnostics_before);
+                match inferred {
+                    InferredExpression::Known(ty) if !ty.is_unmodelled() => {
+                        Some(widen_implicit_variable_initializer_type(SymbolKind::Let, default, &ty, false))
+                    }
+                    _ => None,
+                }
+            })
+            .unwrap_or(Type::Any);
+        properties.insert(
+            element.property_name.as_str().into(),
+            surge_ts_types::ObjectProperty::optional(default_type),
+        );
+    }
+    Type::Object(crate::metrics::alloc_object_type(
+        properties,
+        object.string_index_type.as_deref().cloned(),
+    ))
+}
+
 impl<'p> ParameterListResolver<'p> {
     fn new(parameters: &'p [ParsedFunctionParameter]) -> Self {
         let bound_names = parameters
@@ -1423,8 +1475,7 @@ impl<'p> ParameterListResolver<'p> {
             self.resolve_reads(&reads.deferred, false, substitution, ctx);
             let symbols = self.initializer_scope(ctx);
             let inferred = evaluate_expression(initializer, parameter.initializer_span, &symbols, ctx);
-            self.initializer_symbols = Some(symbols);
-            match inferred {
+            let ty = match inferred {
                 // Only a variable initialized with `null` or `undefined` is
                 // auto-typed; a parameter keeps the initializer's type, which
                 // widens to `any` only without strictNullChecks.
@@ -1434,12 +1485,15 @@ impl<'p> ParameterListResolver<'p> {
                     ty
                 }
                 InferredExpression::Known(ty) => {
-                    widen_implicit_variable_initializer_type(SymbolKind::Let, initializer, &ty, false)
+                    let widened = widen_implicit_variable_initializer_type(SymbolKind::Let, initializer, &ty, false);
+                    pad_object_literal_type(parameter, initializer, widened, &symbols, ctx)
                 }
                 InferredExpression::UnresolvedIdentifier { .. }
                 | InferredExpression::MissingProperty { .. }
                 | InferredExpression::Unknown => Type::Unknown,
-            }
+            };
+            self.initializer_symbols = Some(symbols);
+            ty
         } else if let Some(implied) = (!parameter.rest)
             .then(|| binding_pattern_implied_type(&parameter.binding_name))
             .flatten()
