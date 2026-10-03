@@ -344,6 +344,9 @@ pub(super) fn evaluate_index_access(
             ) {
                 return InferredExpression::Unknown;
             }
+            if let Some(read) = narrowed_variable_element_read(&receiver_type, index, &index_type, symbols, ctx) {
+                return InferredExpression::Known(read);
+            }
 
             // A literal index names a concrete property that must exist on the
             // receiver; a missing one is a real TS2339. A *non-literal* computed
@@ -688,11 +691,52 @@ pub(crate) fn object_element_read(
     let Type::Object(object_type) = &peeled else {
         return None;
     };
-    literal_key_member_read(object_type, &key, ctx).or_else(|| {
-        object_type
-            .applicable_index_type(index_is_numeric)
-            .map(|index_value| crate::infer::unchecked_index_read(index_value.clone(), ctx))
-    })
+    literal_key_member_read(object_type, &key, ctx)
+        .or_else(|| {
+            object_type
+                .applicable_index_type(index_is_numeric)
+                .map(|index_value| crate::infer::unchecked_index_read(index_value.clone(), ctx))
+        })
+        .or_else(|| narrowed_variable_element_read(&peeled, index, index_type, symbols, ctx))
+}
+
+/// `getPropertyTypeForIndexType` over a narrowed `T & X`. An element access
+/// expression defers only on a generic key or a variadic tuple
+/// (`shouldDeferIndexedAccessType`), so tsc reads the key off the
+/// intersection's apparent type, whose members and index signatures are its
+/// operands'. As for a member read, the operand a guard narrowed to answers
+/// before the variable's constraint.
+fn narrowed_variable_element_read(
+    receiver_type: &Type,
+    index: &ParsedExpression,
+    index_type: &Type,
+    symbols: &SymbolTable,
+    ctx: &CheckerContext,
+) -> Option<Type> {
+    if !surge_ts_types::type_variable::is_narrowed_type_variable(receiver_type) {
+        return None;
+    }
+    let Type::Object(object) = receiver_type else {
+        return None;
+    };
+    let operands = object.intersection_operands.as_deref()?;
+    let index_is_numeric = is_assignable_to(index_type, &Type::Number)
+        || indexes_as_number(index, symbols)
+        || literal_index_key(index_type).is_some_and(|key| surge_ts_types::is_numeric_key(&key));
+    operands
+        .iter()
+        .filter(|operand| !matches!(operand, Type::TypeParameter(_)))
+        .find_map(|operand| match operand.peeled() {
+            Type::Array(element) => {
+                index_is_numeric.then(|| crate::infer::unchecked_index_read(*element, ctx))
+            }
+            peeled => object_element_read(&peeled, index, index_type, symbols, ctx),
+        })
+        .or_else(|| {
+            operands
+                .iter()
+                .find_map(|operand| constraint_element_read(operand, index, index_type, symbols, ctx))
+        })
 }
 
 /// A literal key's member, which under `noUncheckedIndexedAccess` includes
