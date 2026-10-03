@@ -67,7 +67,7 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
             // cannot newly disable an inference that used to succeed.
             Some(declared_type) if typed_annotations => {
                 let mapped = map_parsed_type(declared_type.clone(), ctx);
-                if mapped.is_unknown() {
+                if mapped.is_unmodelled() {
                     Type::Any
                 } else {
                     mapped
@@ -79,7 +79,7 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
     let declared_return_type = arrow_function.return_type.as_ref().and_then(|ty| {
         if typed_annotations {
             let mapped = map_parsed_type(ty.clone(), ctx);
-            (!mapped.is_unknown()).then_some(mapped)
+            (!mapped.is_unmodelled()).then_some(mapped)
         } else {
             primitive_declared_return_type(ty)
         }
@@ -159,7 +159,7 @@ pub(crate) fn infer_arrow_function_with_contextual_parameters(
     // An async function returns a promise of what its body completes with.
     let return_type = if arrow_function.is_async
         && arrow_function.return_type.is_none()
-        && !return_type.is_unknown()
+        && !return_type.is_unmodelled()
     {
         crate::checks::call::promise_of(&return_type, ctx)
     } else {
@@ -608,7 +608,7 @@ fn infer_block_body_return_type(
             ParsedFunctionBodyStatement::Return(statement) => {
                 let expression = statement.expression.as_ref()?;
                 let ty = infer_expression(expression, &locals, ctx).flowing_type()?;
-                if ty.is_unknown() && !matches!(ty, Type::ErrorType) {
+                if ty.is_unmodelled() && !matches!(ty, Type::ErrorType) {
                     return None;
                 }
                 returned.push(widen_fresh_literal_return(expression, ty));

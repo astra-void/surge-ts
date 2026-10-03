@@ -2628,7 +2628,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     if let Some(body_type) = inferred_body.flowing_type() {
                         if matches!(body_type, Type::ErrorType) {
                             return_type = Type::ErrorType;
-                        } else if !body_type.is_unknown() {
+                        } else if !body_type.is_unmodelled() {
                             // An argument after a call's first failing one is
                             // related to nothing, its body included.
                             let withheld_argument = not_elaborated
@@ -2893,7 +2893,7 @@ pub(crate) fn check_arrow_function_expression_anchored(
                     if !returned.is_empty()
                         && returned
                             .iter()
-                            .all(|ty| !ty.is_unknown() || matches!(ty, Type::ErrorType))
+                            .all(|ty| !ty.is_unmodelled() || matches!(ty, Type::ErrorType))
                     {
                         // With no contextual return type, a returned literal
                         // widens (`() => { return 1; }` is `() => number`).
